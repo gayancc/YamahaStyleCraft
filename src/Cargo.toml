@@ -1,0 +1,4 @@
+[workspace]
+members = ["crates/genos-core", "src-tauri"]
+default-members = ["crates/genos-core"]
+resolver = "2"

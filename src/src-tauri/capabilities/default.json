@@ -1,0 +1,12 @@
+{
+  "identifier": "main",
+  "description": "Studio window file dialogs and close confirmation",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-destroy",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-confirm"
+  ]
+}

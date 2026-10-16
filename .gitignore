@@ -1,0 +1,29 @@
+# Publish only the application workspace and repository rules.
+/*
+!/.gitignore
+!/src/
+
+# Documentation, research and local verification evidence stay local.
+/docs/
+*.md
+*.mdx
+*.rst
+*.txt
+*.pdf
+*.docx
+
+# Dependencies, generated files and build products.
+node_modules/
+target/
+dist/
+test-results/
+playwright-report/
+.unlazy/
+*.tsbuildinfo
+src/src-tauri/gen/
+reports/
+releases/
+third-party/
+.env
+.env.*
+!.env.example

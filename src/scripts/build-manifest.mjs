@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
+const root=path.resolve('.');
+const artifactFiles=['target/release/genos-style-studio.exe','target/release/bundle/nsis/GenosStyleStudio_0.1.0_x64-setup.exe'];
+const artifacts=artifactFiles.map(file=>{const bytes=fs.readFileSync(file);return {path:path.join(root,file),bytes:bytes.length,sha256:hash(bytes)};});
+const json=file=>JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''));
+const report={date:'2026-10-16',status:'Development milestone; full feature coverage and Yamaha hardware gates remain unmet',artifacts,locks:['Cargo.lock','package-lock.json'].map(file=>({file,sha256:hash(fs.readFileSync(file))})),rustTests:22,frontendTests:9,propertyCasesPerTest:512,propertyTests:3,corpus:{files:84,pairedNotes:100633,noOp:'byte exact; verified against retained EV-0191 hashes/counts'},installer:json('../docs/development/reports/installer-test-final.json'),softwareMidi:json('../docs/development/reports/software-midi-result.json'),render:json('../docs/development/reports/render-benchmark.json'),npmAudit:json('../docs/development/reports/npm-audit-final.json').metadata.vulnerabilities,limitations:['Full F001–F035 implementation is not complete.','No genuine Yamaha keyboard or SFF1 conversion qualification.','Unsigned development binaries; clean-machine/upgrade testing still pending.']};
+fs.writeFileSync('../docs/development/reports/build-manifest.json',JSON.stringify(report,null,2));
+const release=path.resolve('../docs/development/releases/0.1.0-dev');fs.mkdirSync(release,{recursive:true});
+for(const file of artifactFiles)fs.copyFileSync(file,path.join(release,path.basename(file)));
+fs.cpSync('../docs/development/third-party',path.join(release,'third-party'),{recursive:true});fs.copyFileSync('../docs/development/reports/build-manifest.json',path.join(release,'build-manifest.json'));
+fs.writeFileSync(path.join(release,'README.txt'),'GenosStyleStudio 0.1.0 development build\n\nRun genos-style-studio.exe directly, or use the x64 setup installer. Keep the third-party folder with a redistributed portable executable. WebView2 is required. Source Styles are protected: use a NEW destination for project save/export.\n\nWorking: real Style opening/edit/export/reopen, piano roll, undo/redo, tested CASM fields, numeric voice/controller edits, projects/autosave and native source playback.\n\nIncomplete: full CASM/source/section workflows, recording, SFF1 conversion, device-specific features and Yamaha hardware qualification. See DEV-00-SESSION-STATE.md and the full feature matrix in the workspace.\n');
+console.log(`DEVELOPMENT ARTIFACTS RECORDED: ${artifacts.length} hashed binaries; ${release}`);
