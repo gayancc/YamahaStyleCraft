@@ -19,6 +19,32 @@ fn session() -> Session {
 }
 
 #[test]
+fn set_tempo_meter_updates_view_and_undoes() {
+    let mut s = session();
+    let before = s.view();
+    s.execute(
+        0,
+        Command::SetTempoMeter {
+            tempo_bpm: 100.0,
+            numerator: 4,
+            denominator: 4,
+        },
+    )
+    .unwrap();
+    let after = s.view();
+    assert!((after.tempo - 100.0).abs() < 0.05);
+    assert_eq!((after.numerator, after.denominator), (4, 4));
+    assert_eq!(after.notes.len(), before.notes.len());
+    s.undo().unwrap();
+    let undone = s.view();
+    assert!((undone.tempo - before.tempo).abs() < 0.05);
+    assert_eq!(
+        (undone.numerator, undone.denominator),
+        (before.numerator, before.denominator)
+    );
+}
+
+#[test]
 fn corpus_noop_bytes_and_note_counts() {
     let start = Instant::now();
     let census: serde_json::Value = serde_json::from_slice(
@@ -502,10 +528,9 @@ fn voice_bank_edits_match_retained_semantic_deltas_without_touching_notes_or_cas
         let original = s.document.clone();
         let event = original.style.tracks[0]
             .iter()
-            .filter(|e| {
+            .rfind(|e| {
                 e.tick == 5760 && e.data[0] == status && parameter.is_none_or(|p| e.data[1] == p)
             })
-            .next_back()
             .unwrap();
         let index = if parameter.is_some() { 2 } else { 1 };
         assert_eq!(event.data[index], before);

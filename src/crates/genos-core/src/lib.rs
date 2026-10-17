@@ -1,8 +1,25 @@
+pub mod blank;
+pub mod capture;
+pub mod casm;
+pub mod chord_preview;
 pub mod document;
 pub mod edit;
+pub mod effect_catalog;
+pub mod exchange;
+pub mod expansion_guitar;
+pub mod export_csv;
+pub mod export_json;
+pub mod genos_system_effect;
+pub mod guitar_preview;
 pub mod midi;
+pub mod native_drums;
+pub mod pitch_shift_preview;
+pub mod prefs;
 pub mod project;
+pub mod recent;
 pub mod smf;
+pub mod style_effects;
+pub mod voice_catalog;
 
 use thiserror::Error;
 #[derive(Debug, Error)]

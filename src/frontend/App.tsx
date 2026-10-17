@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { open, save, confirm } from "@tauri-apps/plugin-dialog";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   FolderOpen,
+  FilePlus2,
   Save,
   Download,
   Undo2,
@@ -18,6 +19,7 @@ import {
   Pencil,
   ZoomIn,
   ZoomOut,
+  FileDown,
   Scissors,
   RefreshCw,
   X,
@@ -25,17 +27,34 @@ import {
   ChevronLeft,
   AudioLines,
   Repeat2,
+  CircleHelp,
+  CircleDot,
+  OctagonAlert,
+  Bell,
+  FileJson,
+  ListTree,
 } from "lucide-react";
 import { useStudio } from "./store";
 import type {
+  CaptureSnapshot,
   Devices,
   MidiEvent,
+  MonitorEvent,
   Port,
+  Prefs,
+  RecentEntryView,
   Route,
   TransportStatus,
   View,
 } from "./contracts";
 import { PianoRoll, pitchName } from "./PianoRoll";
+import { SourceTracks } from "./SourceTracks";
+import { MidiExchange } from "./MidiExchange";
+import { VoiceBrowser, VoiceName } from "./VoiceBrowser";
+import { DrumKits } from "./DrumKits";
+import { EffectBrowser } from "./EffectBrowser";
+import { InitialEffects, type EffectSelection } from "./InitialEffects";
+import { ChordPreview } from "./ChordPreview";
 
 const roles = [
   "Rhythm 1",
@@ -178,6 +197,38 @@ export function App() {
     [solo, setSolo] = useState<number[]>([]);
   const [recovery, setRecovery] = useState(false),
     [diagnostics, setDiagnostics] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [exchangeOpen, setExchangeOpen] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [drumsOpen, setDrumsOpen] = useState(false);
+  const [effectsOpen, setEffectsOpen] = useState(false);
+  const [initialEffects, setInitialEffects] = useState<EffectSelection | null>(
+    null,
+  );
+  useEffect(() => {
+    setInitialEffects((previous) =>
+      previous && (previous.view !== view || previous.output !== output)
+        ? null
+        : previous,
+    );
+  }, [view, output]);
+  const [chordPreviewOpen, setChordPreviewOpen] = useState(false);
+  const [sourcesRoute, setSourcesRoute] = useState<Route | null>(null);
+  const [composer, setComposer] = useState({
+    name: "My Yamaha Style",
+    tempoBpm: 120,
+    numerator: 4,
+    denominator: 4,
+    referencePath: "",
+  });
+  const [recent, setRecent] = useState<RecentEntryView[]>([]);
+  const [monitorName, setMonitorName] = useState<string>("");
+  const [monitorEvents, setMonitorEvents] = useState<MonitorEvent[]>([]);
+  const [monitoring, setMonitoring] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const [captureSnap, setCaptureSnap] = useState<CaptureSnapshot | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [limitsOpen, setLimitsOpen] = useState(false);
   const section = view?.sections.find((s) => s.id === sectionId);
   const sectionNotes =
     view?.notes.filter(
@@ -206,12 +257,39 @@ export function App() {
       )?.destination ?? ch;
     return roles[dest - 9] ?? `Source ${ch}`;
   };
-  const allowReplace = async () =>
-    !view?.dirty ||
-    (await confirm("Discard unsaved edits and open another file?", {
-      title: "Unsaved Style",
-      kind: "warning",
-    }));
+  const hasRetainedCapture = !!(
+    capturing ||
+    captureSnap?.eventCount ||
+    captureSnap?.markers.length
+  );
+  const allowReplace = async () => {
+    if (view?.dirty) {
+      return await confirm("Discard unsaved edits and open another file?", {
+        title: "Unsaved Style",
+        kind: "warning",
+      });
+    }
+    if (hasRetainedCapture) {
+      return await confirm("Discard the retained MIDI capture take?", {
+        title: "Retained capture",
+        kind: "warning",
+      });
+    }
+    return true;
+  };
+  const refreshRecent = async () => {
+    if (!isTauri()) return;
+    try {
+      setRecent(await invoke<RecentEntryView[]>("list_recent"));
+    } catch {
+      /* soft-fail empty home */
+    }
+  };
+  const openPath = async (path: string) => {
+    if (!(await allowReplace())) return;
+    await state.load(path);
+    await refreshRecent();
+  };
   const openFile = async () => {
     try {
       if (!(await allowReplace())) return;
@@ -224,9 +302,203 @@ export function App() {
           },
         ],
       });
-      if (typeof path === "string") await state.load(path);
+      if (typeof path === "string") {
+        await state.load(path);
+        await refreshRecent();
+      }
     } catch (e) {
       useStudio.setState({ error: String(e) });
+    }
+  };
+  const removeRecent = async (id: string) => {
+    try {
+      setRecent(await invoke<RecentEntryView[]>("remove_recent", { id }));
+    } catch (e) {
+      useStudio.setState({ error: String(e) });
+    }
+  };
+  const applyTempoMeter = async (
+    tempoBpm: number,
+    numerator: number,
+    denominator: number,
+  ) => {
+    await state.edit({
+      type: "setTempoMeter",
+      tempoBpm,
+      numerator,
+      denominator,
+    });
+  };
+  const exportCsv = async () => {
+    if (!view) return;
+    if (!section) {
+      useStudio.setState({
+        error: "Select a Style section before exporting CSV",
+      });
+      return;
+    }
+    try {
+      const path = await save({
+        defaultPath: `${view.name}-${section.label}.csv`,
+        filters: [{ name: "CSV notes", extensions: ["csv"] }],
+      });
+      if (!path) return;
+      await invoke("export_section_csv", { path, section: section.id });
+      useStudio.setState({ message: "Section notes exported as CSV" });
+    } catch (e) {
+      useStudio.setState({ error: String(e) });
+    }
+  };
+  const exportJson = async () => {
+    if (!view) return;
+    if (!section) {
+      useStudio.setState({
+        error: "Select a Style section before exporting JSON",
+      });
+      return;
+    }
+    try {
+      const path = await save({
+        defaultPath: `${view.name}-${section.label}.json`,
+        filters: [{ name: "JSON snapshot", extensions: ["json"] }],
+      });
+      if (!path) return;
+      await invoke("export_section_json", { path, section: section.id });
+      useStudio.setState({
+        message: "Section snapshot exported as JSON (not SFM profile)",
+      });
+    } catch (e) {
+      useStudio.setState({ error: String(e) });
+    }
+  };
+  const panic = async () => {
+    if (!output) {
+      setDeviceOpen(true);
+      await scan();
+      return;
+    }
+    try {
+      await invoke("stop");
+      setTransport((t) => ({ ...t, playing: false }));
+      await invoke("panic_release", {
+        index: output.index,
+        name: output.name,
+        channels: null,
+      });
+      useStudio.setState({ message: "MIDI panic / release sent" });
+    } catch (e) {
+      useStudio.setState({ error: String(e) });
+    }
+  };
+  const audition = async () => {
+    if (!output) {
+      setDeviceOpen(true);
+      await scan();
+      return;
+    }
+    try {
+      await invoke("test_note", {
+        index: output.index,
+        name: output.name,
+        channel: 1,
+        pitch: 60,
+        velocity: 80,
+        holdMs: 250,
+      });
+      useStudio.setState({ message: `Test note → ${output.name}` });
+    } catch (e) {
+      useStudio.setState({ error: String(e) });
+    }
+  };
+  const applyCapture = async () => {
+    if (!view || !section) return;
+    try {
+      useStudio.setState({ busy: true, error: null });
+      const next = await invoke<View>("apply_capture_to_section", {
+        section: section.id,
+        revision: view.revision,
+      });
+      useStudio.setState({
+        view: next,
+        message: "Capture notes applied to section (not Style analyze-build)",
+      });
+    } catch (e) {
+      useStudio.setState({ error: String(e) });
+    } finally {
+      useStudio.setState({ busy: false });
+    }
+  };
+  const openComposer = async () => {
+    if (!(await allowReplace())) return;
+    setComposer({
+      name: "My Yamaha Style",
+      tempoBpm: 120,
+      numerator: 4,
+      denominator: 4,
+      referencePath: "",
+    });
+    setComposerOpen(true);
+  };
+  const pickReference = async () => {
+    try {
+      const path = await open({
+        multiple: false,
+        title: "Select Yamaha Style scaffold (SFF2)",
+        filters: [
+          {
+            name: "Yamaha Style",
+            extensions: ["sty", "prs", "sst", "pst", "fps"],
+          },
+        ],
+      });
+      if (typeof path === "string") {
+        setComposer((c) => ({ ...c, referencePath: path }));
+      }
+    } catch (e) {
+      useStudio.setState({ error: String(e) });
+    }
+  };
+  const createBlank = async () => {
+    if (!composer.referencePath) {
+      useStudio.setState({
+        error:
+          "Choose a reference Style scaffold before creating a blank project",
+      });
+      return;
+    }
+    if (
+      !Number.isFinite(composer.tempoBpm) ||
+      composer.tempoBpm < 20 ||
+      composer.tempoBpm > 400
+    ) {
+      useStudio.setState({ error: "Tempo must be between 20 and 400 BPM" });
+      return;
+    }
+    if (
+      !Number.isSafeInteger(composer.numerator) ||
+      composer.numerator < 1 ||
+      composer.numerator > 16
+    ) {
+      useStudio.setState({
+        error: "Meter numerator must be an integer from 1 to 16",
+      });
+      return;
+    }
+    if (![1, 2, 4, 8, 16].includes(composer.denominator)) {
+      useStudio.setState({
+        error: "Meter denominator must be 1, 2, 4, 8, or 16",
+      });
+      return;
+    }
+    await state.createBlank(composer.referencePath, {
+      name: composer.name.trim() || "My Yamaha Style",
+      tempoBpm: composer.tempoBpm,
+      numerator: composer.numerator,
+      denominator: composer.denominator,
+    });
+    if (!useStudio.getState().error) {
+      setComposerOpen(false);
+      await refreshRecent();
     }
   };
   const saveFile = async (projectFile: boolean) => {
@@ -263,6 +535,34 @@ export function App() {
       useStudio.setState({ error: String(e) });
     }
   };
+  const persistPrefs = async (next: Partial<Prefs> & { tool?: string }) => {
+    if (!isTauri()) return;
+    try {
+      const current = await invoke<Prefs>("load_prefs");
+      // MIDI output is owned by React state so a slow load_prefs cannot resurrect
+      // a port the user just cleared.
+      const midiOutputName =
+        "midiOutputName" in next
+          ? (next.midiOutputName ?? null)
+          : (output?.name ?? null);
+      const midiOutputIndex =
+        "midiOutputIndex" in next
+          ? (next.midiOutputIndex ?? null)
+          : (output?.index ?? null);
+      await invoke("save_prefs", {
+        prefs: {
+          ...current,
+          midiOutputName,
+          midiOutputIndex,
+          snap: next.snap ?? state.snap,
+          zoom: next.zoom ?? state.zoom,
+          tool: next.tool ?? state.tool,
+        },
+      });
+    } catch {
+      /* prefs are best-effort */
+    }
+  };
   const stop = async () => {
     try {
       await invoke("stop");
@@ -291,6 +591,10 @@ export function App() {
         index: output.index,
         name: output.name,
         looping: loop,
+        effectsToken:
+          initialEffects?.view === view && initialEffects.output === output
+            ? initialEffects.token
+            : null,
       });
       setTransport({ playing: true, elapsedMs: 0, error: null });
     } catch (e) {
@@ -300,7 +604,8 @@ export function App() {
   useEffect(() => {
     if (!isTauri()) return;
     let canceled = false;
-    const timer = setInterval(() => {
+    const poll = () => {
+      if (document.visibilityState === "hidden") return;
       void invoke<TransportStatus>("transport_status")
         .then((s) => {
           if (!canceled) {
@@ -311,10 +616,13 @@ export function App() {
         .catch((e) => {
           if (!canceled) useStudio.setState({ error: String(e) });
         });
-    }, 200);
+    };
+    const timer = setInterval(poll, 200);
+    document.addEventListener("visibilitychange", poll);
     return () => {
       canceled = true;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", poll);
     };
   }, []);
   useEffect(() => {
@@ -322,19 +630,81 @@ export function App() {
     void invoke<boolean>("recovery_status")
       .then(setRecovery)
       .catch((e) => useStudio.setState({ error: String(e) }));
+    void refreshRecent();
+    void invoke<Prefs>("load_prefs")
+      .then((p) => {
+        useStudio.setState({
+          snap: p.snap,
+          zoom: p.zoom,
+          tool: p.tool === "draw" ? "draw" : "select",
+        });
+        if (p.midiOutputName != null && p.midiOutputIndex != null) {
+          setOutput({ name: p.midiOutputName, index: p.midiOutputIndex });
+        }
+      })
+      .catch(() => undefined);
   }, []);
+  useEffect(() => {
+    if (!monitoring || !isTauri()) return;
+    const timer = setInterval(() => {
+      void invoke<[string | null, MonitorEvent[]]>("monitor_snapshot")
+        .then(([name, events]) => {
+          setMonitorName(name ?? "");
+          setMonitorEvents(events.slice(-40).reverse());
+        })
+        .catch(() => undefined);
+    }, 400);
+    return () => clearInterval(timer);
+  }, [monitoring]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    void invoke<CaptureSnapshot>("capture_snapshot")
+      .then((snap) => {
+        setCaptureSnap(snap);
+        setCapturing(snap.recording);
+        if (snap.portName) setMonitorName(snap.portName);
+      })
+      .catch(() => undefined);
+  }, [deviceOpen]);
+  useEffect(() => {
+    if (!capturing || !isTauri()) return;
+    const timer = setInterval(() => {
+      void invoke<CaptureSnapshot>("capture_snapshot")
+        .then((snap) => {
+          setCaptureSnap(snap);
+          setCapturing(snap.recording);
+          if (snap.portName) setMonitorName(snap.portName);
+        })
+        .catch(() => undefined);
+    }, 400);
+    return () => clearInterval(timer);
+  }, [capturing]);
+  const captureGuard = useRef({ capturing: false, retained: false });
+  captureGuard.current = {
+    capturing,
+    retained: !!(captureSnap?.eventCount || captureSnap?.markers.length),
+  };
   useEffect(() => {
     if (!isTauri()) return;
     const listener = getCurrentWindow().onCloseRequested(async (e) => {
-      if (useStudio.getState().view?.dirty) {
+      const dirty = useStudio.getState().view?.dirty;
+      const retained =
+        captureGuard.current.capturing || captureGuard.current.retained;
+      if (dirty || retained) {
         e.preventDefault();
         if (
-          await confirm("Close and discard unsaved changes?", {
-            title: "Unsaved Style",
-            kind: "warning",
-          })
+          await confirm(
+            dirty
+              ? "Close and discard unsaved changes?"
+              : "Close and discard the retained MIDI capture take?",
+            {
+              title: dirty ? "Unsaved Style" : "Retained capture",
+              kind: "warning",
+            },
+          )
         ) {
           await invoke("stop");
+          await invoke("stop_capture").catch(() => undefined);
           await getCurrentWindow().destroy();
         }
       }
@@ -343,44 +713,80 @@ export function App() {
       void listener.then((f) => f());
     };
   }, []);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (deviceOpen || diagnostics || recovery) {
-        if (e.key === "Escape" && !recovery) {
-          e.preventDefault();
-          setDeviceOpen(false);
-          setDiagnostics(false);
-        }
-        return;
-      }
-      const input = (e.target as HTMLElement).closest("input,textarea,select");
-      const ctrl = e.ctrlKey || e.metaKey;
-      if (ctrl && e.key.toLowerCase() === "o") {
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyHandlerRef.current = (e: KeyboardEvent) => {
+    if (
+      deviceOpen ||
+      diagnostics ||
+      recovery ||
+      composerOpen ||
+      helpOpen ||
+      exchangeOpen ||
+      voiceOpen ||
+      drumsOpen ||
+      effectsOpen ||
+      chordPreviewOpen ||
+      sourcesRoute
+    ) {
+      if (e.key === "Escape" && !recovery) {
+        if (
+          (composerOpen ||
+            exchangeOpen ||
+            voiceOpen ||
+            drumsOpen ||
+            effectsOpen ||
+            chordPreviewOpen) &&
+          busy
+        )
+          return;
         e.preventDefault();
-        void openFile();
-      }
-      if (ctrl && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        void saveFile(!e.shiftKey);
-      }
-      if (!input && ctrl && e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        void state.history(e.shiftKey);
-      }
-      if (!input && e.code === "Space") {
-        e.preventDefault();
-        void play();
-      }
-      if (e.key === "Escape") {
         setDeviceOpen(false);
-        void stop();
+        setDiagnostics(false);
+        setComposerOpen(false);
+        setHelpOpen(false);
+        setExchangeOpen(false);
+        setVoiceOpen(false);
+        setDrumsOpen(false);
+        setEffectsOpen(false);
+        setChordPreviewOpen(false);
+        setSourcesRoute(null);
       }
-    };
+      return;
+    }
+    const input = (e.target as HTMLElement).closest("input,textarea,select");
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && e.key.toLowerCase() === "o") {
+      e.preventDefault();
+      void openFile();
+    }
+    if (ctrl && e.key.toLowerCase() === "n") {
+      e.preventDefault();
+      void openComposer();
+    }
+    if (ctrl && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      void saveFile(!e.shiftKey);
+    }
+    if (!input && ctrl && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      void state.history(e.shiftKey);
+    }
+    if (!input && e.code === "Space") {
+      e.preventDefault();
+      void play();
+    }
+    if (e.key === "Escape") {
+      setDeviceOpen(false);
+      void stop();
+    }
+  };
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => keyHandlerRef.current(e);
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  });
+  }, []);
   useEffect(() => {
-    if (!deviceOpen && !diagnostics && !recovery) return;
+    if (!deviceOpen && !diagnostics && !recovery && !composerOpen) return;
     const previous = document.activeElement as HTMLElement | null;
     const modal = document.querySelector<HTMLElement>('[aria-modal="true"]');
     const controls = () =>
@@ -408,7 +814,7 @@ export function App() {
       window.removeEventListener("keydown", trap, true);
       previous?.focus();
     };
-  }, [deviceOpen, diagnostics, recovery]);
+  }, [deviceOpen, diagnostics, recovery, composerOpen]);
   const cc = (ch: number, controller: number, value: number) =>
     setDiscrete(ch, [0xb0 | (ch - 1), controller, value]);
   const setDiscrete = (ch: number, data: number[]) => {
@@ -479,6 +885,15 @@ export function App() {
           )}
         </div>
         <IconButton
+          label="Feature inventory / limits"
+          onClick={() => setLimitsOpen(true)}
+        >
+          <ListTree size={17} />
+        </IconButton>
+        <IconButton label="Help" onClick={() => setHelpOpen(true)}>
+          <CircleHelp size={17} />
+        </IconButton>
+        <IconButton
           label="MIDI device settings"
           onClick={() => {
             setDeviceOpen(true);
@@ -493,6 +908,9 @@ export function App() {
           <button onClick={() => void openFile()} disabled={busy}>
             <FolderOpen size={16} /> Open
           </button>
+          <button onClick={() => void openComposer()} disabled={busy}>
+            <FilePlus2 size={16} /> New
+          </button>
           <IconButton
             label="Save project (Ctrl+S)"
             onClick={() => void saveFile(true)}
@@ -506,6 +924,20 @@ export function App() {
             disabled={!view || busy}
           >
             <Download size={16} />
+          </IconButton>
+          <IconButton
+            label="Export section notes CSV"
+            onClick={() => void exportCsv()}
+            disabled={!view || busy}
+          >
+            <FileDown size={16} />
+          </IconButton>
+          <IconButton
+            label="Export section JSON snapshot"
+            onClick={() => void exportJson()}
+            disabled={!view || busy}
+          >
+            <FileJson size={16} />
           </IconButton>
           <span className="divider" />
           <IconButton
@@ -540,6 +972,20 @@ export function App() {
             <Play size={18} fill="currentColor" />
           </IconButton>
           <IconButton
+            label="Test note (audition)"
+            onClick={() => void audition()}
+            disabled={busy}
+          >
+            <Bell size={15} />
+          </IconButton>
+          <IconButton
+            label="MIDI panic / all notes off"
+            onClick={() => void panic()}
+            disabled={busy}
+          >
+            <OctagonAlert size={15} />
+          </IconButton>
+          <IconButton
             label="Loop section"
             onClick={() => setLoop(!loop)}
             active={loop}
@@ -559,12 +1005,76 @@ export function App() {
               {(transport.elapsedMs % 1000).toString().padStart(3, "0")}
             </span>
           </div>
-          <div className="tempo">
-            <strong>{view?.tempo.toFixed(2) ?? "—"}</strong>
+          <label className="tempo" title="Edit tempo">
+            <input
+              aria-label="Tempo BPM"
+              type="number"
+              min={20}
+              max={400}
+              step={0.01}
+              disabled={!view || editingDisabled}
+              key={view ? `t-${view.revision}-${view.tempo}` : "t"}
+              defaultValue={view ? Number(view.tempo.toFixed(2)) : undefined}
+              onBlur={(e) => {
+                if (!view) return;
+                const n = Number(e.target.value);
+                if (
+                  Number.isFinite(n) &&
+                  n >= 20 &&
+                  n <= 400 &&
+                  Math.abs(n - view.tempo) > 0.001
+                ) {
+                  void applyTempoMeter(n, view.numerator, view.denominator);
+                } else {
+                  e.target.value = String(Number(view.tempo.toFixed(2)));
+                }
+              }}
+            />
             <span>BPM</span>
-          </div>
-          <div className="meter">
-            {view ? `${view.numerator}/${view.denominator}` : "—"}
+          </label>
+          <div className="meter meter-edit">
+            <input
+              aria-label="Meter numerator"
+              type="number"
+              min={1}
+              max={16}
+              disabled={!view || editingDisabled}
+              key={view ? `n-${view.revision}-${view.numerator}` : "n"}
+              defaultValue={view?.numerator}
+              onBlur={(e) => {
+                if (!view) return;
+                const n = Number(e.target.value);
+                if (
+                  Number.isSafeInteger(n) &&
+                  n >= 1 &&
+                  n <= 16 &&
+                  n !== view.numerator
+                ) {
+                  void applyTempoMeter(view.tempo, n, view.denominator);
+                } else {
+                  e.target.value = String(view.numerator);
+                }
+              }}
+            />
+            <span>/</span>
+            <select
+              aria-label="Meter denominator"
+              disabled={!view || editingDisabled}
+              value={view?.denominator ?? 4}
+              onChange={(e) => {
+                if (!view) return;
+                const d = Number(e.target.value);
+                if (d !== view.denominator) {
+                  void applyTempoMeter(view.tempo, view.numerator, d);
+                }
+              }}
+            >
+              {[1, 2, 4, 8, 16].map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
         <button
@@ -596,20 +1106,60 @@ export function App() {
           <p className="eyebrow">YOUR NEXT ARRANGEMENT</p>
           <h1>Give every part its place.</h1>
           <p>
-            Open a Yamaha Style to edit its notes, source channels and CASM
-            routes.
+            Open a Yamaha Style, or compose a blank project from a reference
+            scaffold with cleared notes.
           </p>
-          <button
-            className="primary"
-            onClick={() => void openFile()}
-            disabled={busy}
-          >
-            <FolderOpen size={17} />
-            {busy ? "Reading Style…" : "Open Yamaha Style"}
-          </button>
+          <div className="empty-actions">
+            <button
+              className="primary"
+              onClick={() => void openFile()}
+              disabled={busy}
+            >
+              <FolderOpen size={17} />
+              {busy ? "Reading Style..." : "Open Yamaha Style"}
+            </button>
+            <button
+              className="secondary"
+              onClick={() => void openComposer()}
+              disabled={busy}
+            >
+              <FilePlus2 size={17} />
+              New blank Style
+            </button>
+          </div>
           <span className="empty-hint">
             STY · PRS · SST · PST · FPS · MIDI · GSS
           </span>
+          {recent.length > 0 && (
+            <section className="recent-panel" aria-label="Recent files">
+              <h2 className="eyebrow">Recent</h2>
+              <ul className="recent-list">
+                {recent.map((r) => (
+                  <li key={r.entry.id}>
+                    <button
+                      type="button"
+                      className={r.available ? "" : "missing"}
+                      disabled={busy || !r.available}
+                      title={r.entry.path}
+                      onClick={() => void openPath(r.entry.path)}
+                    >
+                      <strong>{r.entry.name}</strong>
+                      <small>
+                        {r.entry.kind === "project" ? "Project" : "Style"}
+                        {r.available ? "" : " · unavailable"}
+                      </small>
+                    </button>
+                    <IconButton
+                      label={`Remove ${r.entry.name} from recent`}
+                      onClick={() => void removeRecent(r.entry.id)}
+                    >
+                      <X size={14} />
+                    </IconButton>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <div className="empty-details">
             <span>Source timing preserved</span>
             <span>Native MIDI playback</span>
@@ -656,38 +1206,43 @@ export function App() {
                 <small>{sources.length}</small>
               </div>
               <div className="track-list">
-                {sources.map((ch) => (
-                  <button
-                    key={ch}
-                    className={`track ${ch === channel ? "selected" : ""}`}
-                    onClick={() => state.setChannel(ch)}
-                  >
-                    <span
-                      className="track-stripe"
-                      style={{ background: colors[(ch - 9 + 16) % 8] }}
-                    />
-                    <span className="channel-number">
-                      {String(ch).padStart(2, "0")}
-                    </span>
-                    <span className="track-content">
-                      <strong>{role(ch)}</strong>
-                      <small>
-                        {sectionNotes.filter((n) => n.channel === ch).length}{" "}
-                        notes
-                        {view.routes.find(
-                          (r) =>
-                            r.source === ch &&
-                            r.sections.includes(section?.label ?? ""),
-                        )?.destination !== undefined
-                          ? ` · → ch ${view.routes.find((r) => r.source === ch && r.sections.includes(section?.label ?? ""))!.destination}`
-                          : ""}
-                      </small>
-                    </span>
-                    <span className="track-indicator">
-                      {muted.includes(ch) ? "M" : solo.includes(ch) ? "S" : ""}
-                    </span>
-                  </button>
-                ))}
+                {sources.map((ch) => {
+                  const route = view.routes.find(
+                    (r) =>
+                      r.source === ch &&
+                      r.sections.includes(section?.label ?? ""),
+                  );
+                  return (
+                    <button
+                      key={ch}
+                      className={`track ${ch === channel ? "selected" : ""}`}
+                      onClick={() => state.setChannel(ch)}
+                    >
+                      <span
+                        className="track-stripe"
+                        style={{ background: colors[(ch - 9 + 16) % 8] }}
+                      />
+                      <span className="channel-number">
+                        {String(ch).padStart(2, "0")}
+                      </span>
+                      <span className="track-content">
+                        <strong>{role(ch)}</strong>
+                        <small>
+                          {sectionNotes.filter((n) => n.channel === ch).length}{" "}
+                          notes
+                          {route ? ` · → ch ${route.destination}` : ""}
+                        </small>
+                      </span>
+                      <span className="track-indicator">
+                        {muted.includes(ch)
+                          ? "M"
+                          : solo.includes(ch)
+                            ? "S"
+                            : ""}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
               <div className="track-summary">
                 <span>
@@ -724,14 +1279,20 @@ export function App() {
                     <div className="tool-group">
                       <IconButton
                         label="Select notes"
-                        onClick={() => useStudio.setState({ tool: "select" })}
+                        onClick={() => {
+                          useStudio.setState({ tool: "select" });
+                          void persistPrefs({ tool: "select" });
+                        }}
                         active={tool === "select"}
                       >
                         <MousePointer2 size={15} />
                       </IconButton>
                       <IconButton
                         label="Draw notes"
-                        onClick={() => useStudio.setState({ tool: "draw" })}
+                        onClick={() => {
+                          useStudio.setState({ tool: "draw" });
+                          void persistPrefs({ tool: "draw" });
+                        }}
                         active={tool === "draw"}
                       >
                         <Pencil size={15} />
@@ -742,9 +1303,11 @@ export function App() {
                       <select
                         aria-label="Snap division"
                         value={snap}
-                        onChange={(e) =>
-                          useStudio.setState({ snap: +e.target.value })
-                        }
+                        onChange={(e) => {
+                          const next = +e.target.value;
+                          useStudio.setState({ snap: next });
+                          void persistPrefs({ snap: next });
+                        }}
                       >
                         {[4, 8, 16, 32, 64].map((n) => (
                           <option key={n} value={n}>
@@ -770,11 +1333,11 @@ export function App() {
                     <span className="spacer" />
                     <IconButton
                       label="Zoom out"
-                      onClick={() =>
-                        useStudio.setState({
-                          zoom: Math.max(0.125, zoom / 1.5),
-                        })
-                      }
+                      onClick={() => {
+                        const next = Math.max(0.125, zoom / 1.5);
+                        useStudio.setState({ zoom: next });
+                        void persistPrefs({ zoom: next });
+                      }}
                     >
                       <ZoomOut size={15} />
                     </IconButton>
@@ -783,9 +1346,11 @@ export function App() {
                     </span>
                     <IconButton
                       label="Zoom in"
-                      onClick={() =>
-                        useStudio.setState({ zoom: Math.min(8, zoom * 1.5) })
-                      }
+                      onClick={() => {
+                        const next = Math.min(8, zoom * 1.5);
+                        useStudio.setState({ zoom: next });
+                        void persistPrefs({ zoom: next });
+                      }}
                     >
                       <ZoomIn size={15} />
                     </IconButton>
@@ -1003,8 +1568,50 @@ export function App() {
                     )}
                     <div className="inspector-divider" />
                     <h3>Voice bank</h3>
+                    {section && (
+                      <VoiceName
+                        section={section}
+                        channel={channel}
+                        onOpen={() => setVoiceOpen(true)}
+                      />
+                    )}
+                    {section && (channel === 9 || channel === 10) && (
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => setDrumsOpen(true)}
+                      >
+                        Drum kits (Ch 9–10)
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setEffectsOpen(true)}
+                    >
+                      Effect types
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setExchangeOpen(true)}
+                      disabled={!section}
+                    >
+                      MIDI exchange
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setChordPreviewOpen(true)}
+                      disabled={!section}
+                    >
+                      Chord preview
+                    </button>
                     <p className="muted">
-                      Numeric MIDI address at section start.
+                      Numeric MIDI address at section start. Drum kits use the
+                      imported Data List DrumKit category — not SysEx Drum
+                      Setup. Reverb/chorus Apply sends verified system-effect
+                      SysEx.
                     </p>
                     <NumberField
                       label="Bank MSB · CC 0"
@@ -1017,7 +1624,7 @@ export function App() {
                       onCommit={(n) => cc(channel, 32, n)}
                     />
                     <NumberField
-                      label="Program · 1–128"
+                      label="Program · 1-128"
                       value={valueAt(channel, 0xc0, undefined, 0) + 1}
                       min={1}
                       max={128}
@@ -1033,6 +1640,7 @@ export function App() {
                         r.source === channel &&
                         r.sections.includes(section?.label ?? ""),
                     )}
+                    onEditSources={setSourcesRoute}
                   />
                 ) : (
                   <EventInspector
@@ -1067,11 +1675,14 @@ export function App() {
         <span className={`connection-dot ${busy ? "" : "connected"}`} />
         <span>
           {busy
-            ? "Processing…"
+            ? "Processing..."
             : transport.playing
               ? "Playing source notes"
               : state.message}
         </span>
+        {initialEffects?.view === view &&
+          initialEffects?.output === output &&
+          initialEffects && <span>· Initial Genos effects armed</span>}
         <span className="spacer" />
         {view && (
           <>
@@ -1163,15 +1774,15 @@ export function App() {
               {view.notes.length.toLocaleString()} paired notes
             </p>
             {view.chunks.map((c, i) => (
-              <div className="device-row" key={i}>
+              <div className="device-row" key={`${c.tag}-${i}`}>
                 <code>{c.tag}</code>
                 <small>{c.bytes.toLocaleString()} bytes</small>
               </div>
             ))}
             <h3>Diagnostics</h3>
             {view.warnings.length ? (
-              view.warnings.map((w, i) => (
-                <p key={i} className="muted">
+              view.warnings.map((w) => (
+                <p key={w} className="muted">
                   {w}
                 </p>
               ))
@@ -1188,10 +1799,184 @@ export function App() {
           </section>
         </div>
       )}
+      {voiceOpen && section && (
+        <VoiceBrowser
+          key={`${section.id}-${channel}`}
+          section={section}
+          channel={channel}
+          onClose={() => setVoiceOpen(false)}
+        />
+      )}
+      {drumsOpen && section && (
+        <DrumKits
+          key={`drums-${section.id}-${channel}`}
+          section={section}
+          channel={channel}
+          output={output}
+          onClose={() => setDrumsOpen(false)}
+        />
+      )}
+      {effectsOpen && (
+        <EffectBrowser output={output} onClose={() => setEffectsOpen(false)} />
+      )}
+      {chordPreviewOpen && section && (
+        <ChordPreview
+          key={`chord-${section.id}-${channel}`}
+          section={section}
+          channel={channel}
+          onClose={() => setChordPreviewOpen(false)}
+        />
+      )}
+      {exchangeOpen && section && (
+        <MidiExchange
+          key={`${section.id}-${channel}`}
+          section={section}
+          channel={channel}
+          onClose={() => setExchangeOpen(false)}
+        />
+      )}
+      {sourcesRoute && section && (
+        <SourceTracks
+          route={sourcesRoute}
+          section={section}
+          onClose={() => setSourcesRoute(null)}
+        />
+      )}
+      {composerOpen && (
+        <div className="modal-backdrop" onClick={() => setComposerOpen(false)}>
+          <section
+            className="modal composer-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="composer-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-title">
+              <h2 id="composer-title">Style Composer</h2>
+              <IconButton
+                label="Close Style Composer"
+                disabled={busy}
+                onClick={() => setComposerOpen(false)}
+              >
+                <X size={18} />
+              </IconButton>
+            </div>
+            <p>
+              Create a blank SFF2 project from a reference Style scaffold. Notes
+              are cleared; section layout, CASM and controllers stay with the
+              reference so export remains possible (EV-0142 / EV-0171).
+            </p>
+            <label className="field">
+              <span>Project name</span>
+              <input
+                aria-label="Project name"
+                value={composer.name}
+                onChange={(e) =>
+                  setComposer((c) => ({ ...c, name: e.target.value }))
+                }
+              />
+            </label>
+            <div className="composer-grid">
+              <label className="field">
+                <span>Tempo · BPM</span>
+                <input
+                  aria-label="Tempo BPM"
+                  type="number"
+                  min={20}
+                  max={400}
+                  value={composer.tempoBpm}
+                  onChange={(e) =>
+                    setComposer((c) => ({
+                      ...c,
+                      tempoBpm: Number(e.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Meter</span>
+                <div className="meter-inputs">
+                  <input
+                    aria-label="Meter numerator"
+                    type="number"
+                    min={1}
+                    max={16}
+                    value={composer.numerator}
+                    onChange={(e) =>
+                      setComposer((c) => ({
+                        ...c,
+                        numerator: Number(e.target.value),
+                      }))
+                    }
+                  />
+                  <span>/</span>
+                  <select
+                    aria-label="Meter denominator"
+                    value={composer.denominator}
+                    onChange={(e) =>
+                      setComposer((c) => ({
+                        ...c,
+                        denominator: Number(e.target.value),
+                      }))
+                    }
+                  >
+                    {[1, 2, 4, 8, 16].map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </label>
+              <label className="field">
+                <span>Format</span>
+                <select aria-label="Style format" value="SFF2" disabled>
+                  <option value="SFF2">SFF2</option>
+                </select>
+              </label>
+            </div>
+            <label className="field">
+              <span>Reference Style scaffold</span>
+              <div className="reference-row">
+                <input
+                  aria-label="Reference Style path"
+                  readOnly
+                  value={composer.referencePath}
+                  placeholder="Required · choose a Style file"
+                />
+                <button type="button" onClick={() => void pickReference()}>
+                  Choose…
+                </button>
+              </div>
+            </label>
+            <p className="muted">
+              Default blank layout without a scaffold cannot export STY. SFF1
+              blank authoring remains blocked pending verified conversion.
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setComposerOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary"
+                type="button"
+                disabled={busy || !composer.referencePath}
+                onClick={() => void createBlank()}
+              >
+                {busy ? "Creating…" : "Create blank Style"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {deviceOpen && (
         <div className="modal-backdrop" onClick={() => setDeviceOpen(false)}>
           <section
-            className="modal"
+            className="modal midi-connections"
             role="dialog"
             aria-modal="true"
             aria-labelledby="device-title"
@@ -1220,6 +2005,11 @@ export function App() {
                     (p) => `${p.index}:${p.name}` === e.target.value,
                   );
                   setOutput(port ?? null);
+                  setInitialEffects(null);
+                  void persistPrefs({
+                    midiOutputName: port?.name ?? null,
+                    midiOutputIndex: port?.index ?? null,
+                  });
                 }}
               >
                 <option value="">No output selected</option>
@@ -1233,29 +2023,365 @@ export function App() {
                 ))}
               </select>
             </label>
-            <h3>Available MIDI inputs</h3>
-            {devices.inputs.length ? (
-              devices.inputs.map((p) => (
-                <div className="device-row" key={p.index}>
-                  <Music2 size={15} />
-                  {p.name}
-                  <small>Available</small>
-                </div>
-              ))
-            ) : (
-              <p className="muted">No input ports found.</p>
-            )}
+            <InitialEffects
+              view={view}
+              output={output}
+              selection={initialEffects}
+              onChange={setInitialEffects}
+              disabled={busy || transport.playing || capturing}
+            />
+            <h3>MIDI input monitor</h3>
+            <p className="muted local-control-tip">
+              Host listen needs Genos MIDI Local Control / MIDI Out → USB so key
+              presses appear on an input such as Digital Workstation-1. Match
+              Genos transmit settings (Local Control / MIDI Out) so notes reach
+              USB. Monitor is display-only (F026 capture is separate). Zero
+              events usually means Local Out is off, not a broken port list.
+            </p>
+            <label className="field">
+              <span>Input port</span>
+              <select
+                aria-label="MIDI input"
+                value={monitorName}
+                onChange={(e) => setMonitorName(e.target.value)}
+              >
+                <option value="">No input selected</option>
+                {devices.inputs.map((p) => (
+                  <option key={`${p.index}:${p.name}`} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="monitor-actions">
+              <button
+                type="button"
+                disabled={!monitorName || monitoring}
+                onClick={() => {
+                  void invoke("start_monitor", { name: monitorName })
+                    .then(() => {
+                      setMonitoring(true);
+                      setMonitorEvents([]);
+                    })
+                    .catch((e) => useStudio.setState({ error: String(e) }));
+                }}
+              >
+                Start monitor
+              </button>
+              <button
+                type="button"
+                disabled={!monitoring}
+                onClick={() => {
+                  void invoke("stop_monitor")
+                    .then(() => setMonitoring(false))
+                    .catch((e) => useStudio.setState({ error: String(e) }));
+                }}
+              >
+                Stop
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void invoke("clear_monitor")
+                    .then(() => setMonitorEvents([]))
+                    .catch(() => undefined);
+                }}
+              >
+                Clear
+              </button>
+            </div>
+            <div className="monitor-log" aria-live="polite">
+              {monitorEvents.length ? (
+                monitorEvents.map((ev, i) => (
+                  <div key={`${ev.stampMs}-${i}`}>
+                    <code>{ev.stampMs}ms</code> {ev.summary}
+                  </div>
+                ))
+              ) : (
+                <p className="muted">
+                  {monitoring
+                    ? "Listening... play keys on Genos with MIDI Out enabled."
+                    : "Select an input and start the monitor (display only)."}
+                </p>
+              )}
+            </div>
+            <h3>MIDI capture</h3>
             <p className="muted">
-              Playback uses the source channels. Yamaha chord preview, recording
-              and device-specific effects are awaiting verification.
+              Raw input capture with markers. Exports a Type-0 MIDI file only -
+              does not build Styles or CASM (F027 remains gated).
+            </p>
+            <div className="monitor-actions">
+              <button
+                type="button"
+                disabled={!monitorName || capturing}
+                onClick={() => {
+                  void invoke("start_capture", { name: monitorName })
+                    .then(() => {
+                      setCapturing(true);
+                      setMonitoring(false);
+                      setCaptureSnap(null);
+                    })
+                    .catch((e) => useStudio.setState({ error: String(e) }));
+                }}
+              >
+                <CircleDot size={14} /> Start capture
+              </button>
+              <button
+                type="button"
+                disabled={!capturing}
+                onClick={() => {
+                  void invoke("stop_capture")
+                    .then(() => {
+                      setCapturing(false);
+                      return invoke<CaptureSnapshot>("capture_snapshot");
+                    })
+                    .then(setCaptureSnap)
+                    .catch((e) => useStudio.setState({ error: String(e) }));
+                }}
+              >
+                Stop capture
+              </button>
+              <button
+                type="button"
+                disabled={!capturing}
+                onClick={() => {
+                  const label = window.prompt("Marker label", "Mark") ?? "";
+                  if (!label.trim()) return;
+                  void invoke("capture_marker", { label: label.trim() })
+                    .then(() => invoke<CaptureSnapshot>("capture_snapshot"))
+                    .then(setCaptureSnap)
+                    .catch((e) => useStudio.setState({ error: String(e) }));
+                }}
+              >
+                Add marker
+              </button>
+              <button
+                type="button"
+                disabled={
+                  capturing ||
+                  !(captureSnap?.eventCount || captureSnap?.markers.length)
+                }
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      const path = await save({
+                        defaultPath: "capture.mid",
+                        filters: [{ name: "MIDI", extensions: ["mid"] }],
+                      });
+                      if (!path) return;
+                      await invoke("export_capture_midi", { path });
+                      useStudio.setState({
+                        message: "Capture exported as MIDI (not a Style)",
+                      });
+                    } catch (e) {
+                      useStudio.setState({ error: String(e) });
+                    }
+                  })();
+                }}
+              >
+                Export MIDI…
+              </button>
+              <button
+                type="button"
+                disabled={
+                  capturing ||
+                  !view ||
+                  !section ||
+                  busy ||
+                  !captureSnap?.eventCount
+                }
+                onClick={() => void applyCapture()}
+              >
+                Apply notes to section
+              </button>
+              <button
+                type="button"
+                disabled={capturing}
+                onClick={() => {
+                  void invoke("clear_capture")
+                    .then(() =>
+                      setCaptureSnap({
+                        recording: capturing,
+                        portName: monitorName || null,
+                        events: [],
+                        markers: [],
+                        eventCount: 0,
+                        droppedEvents: 0,
+                      }),
+                    )
+                    .catch(() => undefined);
+                }}
+              >
+                Clear capture
+              </button>
+            </div>
+            <div className="monitor-log" aria-live="polite">
+              {captureSnap?.eventCount || captureSnap?.markers.length ? (
+                <>
+                  <div>
+                    <code>{captureSnap.eventCount}</code> events
+                    {captureSnap.markers.length
+                      ? ` · ${captureSnap.markers.length} markers`
+                      : ""}
+                    {capturing ? " · recording" : ""}
+                  </div>
+                  {captureSnap.markers.slice(-8).map((m, i) => (
+                    <div key={`m-${m.stampMs}-${i}`}>
+                      <code>{m.stampMs}ms</code> ◆ {m.label}
+                    </div>
+                  ))}
+                  {captureSnap.events
+                    .slice(-20)
+                    .reverse()
+                    .map((ev, i) => (
+                      <div key={`c-${ev.stampMs}-${i}`}>
+                        <code>{ev.stampMs}ms</code> {ev.summary}
+                      </div>
+                    ))}
+                </>
+              ) : (
+                <p className="muted">
+                  {capturing
+                    ? "Capturing... play the keyboard; add markers as needed."
+                    : "Start capture on an exact input port when ready."}
+                </p>
+              )}
+            </div>
+            <p className="muted">
+              Playback uses source channels. Monitor and capture share the input
+              port (one at a time). CASM chord preview and device-specific
+              effects remain separately gated.
             </p>
             <div className="modal-actions">
               <button onClick={() => void scan()}>
                 <RefreshCw size={15} />
                 Refresh devices
               </button>
-              <button className="primary" onClick={() => setDeviceOpen(false)}>
+              <button
+                className="primary"
+                onClick={() => {
+                  void persistPrefs({});
+                  setDeviceOpen(false);
+                }}
+              >
                 Done
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+      {helpOpen && (
+        <div className="modal-backdrop" onClick={() => setHelpOpen(false)}>
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="help-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-title">
+              <h2 id="help-title">Help</h2>
+              <IconButton label="Close Help" onClick={() => setHelpOpen(false)}>
+                <X size={18} />
+              </IconButton>
+            </div>
+            <p>
+              GenosStyleStudio edits Yamaha Styles with source timing preserved.
+              It is an independent editor - not Style File Maker.
+            </p>
+            <h3>Shortcuts</h3>
+            <ul className="help-list">
+              <li>
+                <kbd>Ctrl</kbd>+<kbd>O</kbd> Open · <kbd>Ctrl</kbd>+<kbd>N</kbd>{" "}
+                New blank · <kbd>Ctrl</kbd>+<kbd>S</kbd> Save project
+              </li>
+              <li>
+                <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd> Undo / Redo · Space
+                Play/Stop when a section is open
+              </li>
+            </ul>
+            <h3>Known limits</h3>
+            <ul className="help-list">
+              <li>
+                Capture exports raw MIDI only - no automatic Style/CASM build.
+              </li>
+              <li>
+                Chord conversion is a manual visual study. CASM-bound chord
+                playback and SFF1 conversion remain unavailable. Voice and
+                effect catalogs require the supported Genos v2.00 Data List.
+                Live system effect changes are not saved in a Style.
+              </li>
+              <li>
+                Hardware timing and Yamaha acceptance remain open release gates.
+              </li>
+            </ul>
+            <div className="modal-actions">
+              <button className="primary" onClick={() => setHelpOpen(false)}>
+                Close
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+      {limitsOpen && (
+        <div className="modal-backdrop" onClick={() => setLimitsOpen(false)}>
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="limits-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-title">
+              <h2 id="limits-title">Feature inventory</h2>
+              <IconButton
+                label="Close feature inventory"
+                onClick={() => setLimitsOpen(false)}
+              >
+                <X size={18} />
+              </IconButton>
+            </div>
+            <p>
+              Baseline status for the 35 known REA surfaces. Blocked items stay
+              gated - GenosStyleStudio does not invent Yamaha algorithms.
+            </p>
+            <ul className="help-list inventory-list">
+              <li>
+                <strong>Implemented (tested scope):</strong> F001-F015, F017
+                named/numeric voice, F018 Genos v2.00 Data List import, F019
+                DrumKit picker + supported Genos initial-header scalar editing,
+                bounded ch9/10 audition, F020 mixer CC7/10/11/91/93, F021 Effect
+                Type List + reverb/chorus live apply and initial-header file
+                editing + opt-in initial type/Return playback, F022-F023, F024
+                manual chord conversion study, F025 play/audition, F026
+                capture+apply notes, F028 CSV/JSON, F029 notes-only MIDI
+                exchange, F031 Help/inventory, F032 panic/release, F033
+                prefs/recovery, F007/F016 source+Ctb2 CASM.
+              </li>
+              <li>
+                <strong>Gated - no invent:</strong> F019 sound remaps / advanced
+                fields / Genos2 / expansion / native setup MIDI preview and
+                hardware acceptance, F021 variation apply + Parameter List /
+                detailed/later effect replay, F024 CASM-bound playback /
+                hardware retarget / expansion qualification, F027
+                Style/analyze-build from capture (no Style builder oracle), F029
+                DAW session round-trip, F030 SFF1 conversion (EV-0171 scaffold /
+                conversion blocked).
+              </li>
+              <li>
+                <strong>Excluded:</strong> F034 proprietary licensing.
+              </li>
+              <li>
+                <strong>Hardware F035:</strong> Fresh 78 paired input notes,
+                audible notes/Stop, source passage and dry/wet reverb contrast
+                (direct and saved-file startup) confirmed on the connected
+                Genos. Keyboard Style loading, CASM playback, drum scalars,
+                clock and latency qualification remain open.
+              </li>
+            </ul>
+            <div className="modal-actions">
+              <button className="primary" onClick={() => setLimitsOpen(false)}>
+                Close
               </button>
             </div>
           </section>
@@ -1265,7 +2391,13 @@ export function App() {
   );
 }
 
-function CasmInspector({ routes }: { routes: Route[] }) {
+function CasmInspector({
+  routes,
+  onEditSources,
+}: {
+  routes: Route[];
+  onEditSources: (route: Route) => void;
+}) {
   const edit = useStudio((s) => s.edit);
   if (!routes.length)
     return (
@@ -1371,6 +2503,14 @@ function CasmInspector({ routes }: { routes: Route[] }) {
             Low/high rules, chord masks, NTT Bass and extension bytes are
             preserved. Only tested fields are editable.
           </p>
+          <button
+            type="button"
+            className="secondary"
+            aria-label="Edit source tracks"
+            onClick={() => onEditSources(r)}
+          >
+            Source tracks…
+          </button>
           <details>
             <summary>Raw route bytes</summary>
             <code className="hex">

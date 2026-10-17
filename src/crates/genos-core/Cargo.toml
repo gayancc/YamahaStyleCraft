@@ -12,6 +12,7 @@ midly = { version = "0.5.3", default-features = false, features = ["std"] }
 midir = "0.11"
 tempfile = "3"
 sha2 = "0.10"
+pdf-extract = "=0.12.1"
 
 [dev-dependencies]
 proptest = "1"

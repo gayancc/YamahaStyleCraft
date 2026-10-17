@@ -24,6 +24,19 @@ pub struct NoteInput {
     deny_unknown_fields
 )]
 pub enum Command {
+    SetStyleEffects {
+        changes: Vec<crate::style_effects::Change>,
+    },
+    SetDrumScalars {
+        channel: u8,
+        address: crate::voice_catalog::Address,
+        changes: Vec<crate::native_drums::Change>,
+    },
+    SetVoice {
+        section: u64,
+        channel: u8,
+        address: crate::voice_catalog::Address,
+    },
     AddNotes {
         section: u64,
         notes: Vec<NoteInput>,
@@ -53,6 +66,15 @@ pub enum Command {
         field: String,
         value: u8,
     },
+    SourceTracks {
+        section: u64,
+        actions: Vec<crate::casm::SourceAction>,
+    },
+    ReplacePhrase {
+        section: u64,
+        channel: u8,
+        notes: Vec<crate::exchange::PhraseNote>,
+    },
     SetEvent {
         id: u64,
         tick: u64,
@@ -66,6 +88,11 @@ pub enum Command {
     },
     DeleteEvent {
         id: u64,
+    },
+    SetTempoMeter {
+        tempo_bpm: f64,
+        numerator: u8,
+        denominator: u16,
     },
 }
 pub struct Session {
@@ -176,6 +203,65 @@ impl Session {
                 Ok(())
             };
         match cmd {
+            Command::SetStyleEffects { changes } => {
+                crate::style_effects::apply(&mut style, changes)?;
+                for (track, events) in style.tracks.iter().enumerate() {
+                    if events != &self.document.style.tracks[track] {
+                        touched.insert(track);
+                    }
+                }
+            }
+            Command::SetDrumScalars {
+                channel,
+                address,
+                changes,
+            } => {
+                crate::native_drums::apply(&mut style, channel, address, changes)?;
+                for (track, events) in style.tracks.iter().enumerate() {
+                    if events != &self.document.style.tracks[track] {
+                        touched.insert(track);
+                    }
+                }
+            }
+            Command::SetVoice {
+                section,
+                channel,
+                address,
+            } => {
+                crate::voice_catalog::set_voice(&mut style, section, channel, address)?;
+                for (track, events) in style.tracks.iter().enumerate() {
+                    if events != &self.document.style.tracks[track] {
+                        touched.insert(track);
+                    }
+                }
+            }
+            Command::ReplacePhrase {
+                section,
+                channel,
+                notes,
+            } => {
+                let changes = crate::exchange::replace(&mut style, section, channel, notes)?;
+                for id in changes.removed {
+                    expected_pairs.remove(&id);
+                }
+                expected_pairs.extend(changes.added);
+                for (track, events) in style.tracks.iter().enumerate() {
+                    if events != &self.document.style.tracks[track] {
+                        touched.insert(track);
+                    }
+                }
+            }
+            Command::SourceTracks { section, actions } => {
+                let cloned_pairs = crate::casm::apply(&mut style, section, actions)?;
+                for (track, events) in style.tracks.iter().enumerate() {
+                    if events != &self.document.style.tracks[track] {
+                        touched.insert(track);
+                    }
+                }
+                // Check exact copied edge identities instead of accepting any
+                // new pairs that the candidate parser happens to discover.
+                expected_pairs.extend(cloned_pairs);
+            }
             Command::AddNotes { section, notes } => {
                 if notes.is_empty() || notes.len() > 50_000 {
                     return Err(reject("invalid note batch size"));
@@ -389,6 +475,27 @@ impl Session {
                 validate_channel(&e.data)?;
                 es.retain(|e| e.id != id);
                 touched.insert(t);
+            }
+            Command::SetTempoMeter {
+                tempo_bpm,
+                numerator,
+                denominator,
+            } => {
+                if !tempo_bpm.is_finite() || !(20.0..=400.0).contains(&tempo_bpm) {
+                    return Err(reject("tempo must be a finite BPM between 20 and 400"));
+                }
+                if !(1..=16).contains(&numerator) {
+                    return Err(reject("numerator must be 1..16"));
+                }
+                if !matches!(denominator, 1 | 2 | 4 | 8 | 16) {
+                    return Err(reject("denominator must be 1, 2, 4, 8, or 16"));
+                }
+                crate::blank::apply_tempo_meter(&mut style, tempo_bpm, numerator, denominator)?;
+                for (track, events) in style.tracks.iter().enumerate() {
+                    if events != &self.document.style.tracks[track] {
+                        touched.insert(track);
+                    }
+                }
             }
         }
         if style.tracks == self.document.style.tracks && style.chunks == self.document.style.chunks

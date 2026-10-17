@@ -18,6 +18,16 @@ pub struct Event {
     pub data: Vec<u8>,
 }
 impl Event {
+    /// Payload of one complete SMF SysEx event, excluding status and SMF length.
+    /// This does not validate or interpret the manufacturer's packet format.
+    pub fn sysex_payload(&self) -> Option<&[u8]> {
+        if !matches!(self.data.first(), Some(0xf0 | 0xf7)) {
+            return None;
+        }
+        let mut p = 1;
+        let n = vlq(&self.data, &mut p).ok()? as usize;
+        self.data.get(p..p + n).filter(|_| p + n == self.data.len())
+    }
     pub fn channel(&self) -> Option<u8> {
         (self.data[0] < 0xf0).then_some((self.data[0] & 15) + 1)
     }

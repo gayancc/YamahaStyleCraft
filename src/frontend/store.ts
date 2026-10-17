@@ -14,6 +14,15 @@ interface StudioState {
   zoom: number;
   tool: "select" | "draw";
   load: (path: string) => Promise<void>;
+  createBlank: (
+    referencePath: string,
+    options: {
+      name: string;
+      tempoBpm: number;
+      numerator: number;
+      denominator: number;
+    },
+  ) => Promise<void>;
   edit: (command: Command) => Promise<void>;
   history: (redo: boolean) => Promise<void>;
   select: (ids: number[]) => void;
@@ -45,6 +54,31 @@ export const useStudio = create<StudioState>((set, get) => ({
           view.sections[0].id,
         selected: [],
         message: "Source loaded · original data preserved",
+      });
+    } catch (e) {
+      set({ error: String(e) });
+    } finally {
+      set({ busy: false });
+    }
+  },
+  createBlank: async (referencePath, options) => {
+    if (get().busy) return;
+    set({ busy: true, error: null });
+    try {
+      const view = await invoke<View>("create_blank_document", {
+        referencePath,
+        options,
+      });
+      set({
+        view,
+        sectionId:
+          view.sections.find((s) =>
+            s.label.toUpperCase().startsWith("MAIN "),
+          )?.id ?? view.sections[0].id,
+        selected: [],
+        channel: 9,
+        message:
+          "Blank Style from reference · notes cleared · scaffold retained",
       });
     } catch (e) {
       set({ error: String(e) });

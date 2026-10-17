@@ -84,6 +84,34 @@ pub fn musical_marker(s: &str) -> bool {
         || n == "BREAK"
 }
 impl Document {
+    /// Active SMF timing metadata at a tick, including changes in other tracks.
+    pub fn timing_at(&self, tick: u64) -> (f64, u8, u16) {
+        let mut events: Vec<_> = self
+            .style
+            .tracks
+            .iter()
+            .flatten()
+            .filter(|e| e.tick <= tick)
+            .collect();
+        events.sort_by_key(|e| (e.tick, e.order));
+        let mut tempo = 500_000u32;
+        let mut meter = (4, 4);
+        for event in events {
+            if let Some(b) = event.meta(0x51).filter(|b| b.len() == 3) {
+                let value = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+                if value > 0 {
+                    tempo = value;
+                }
+            }
+            if let Some(b) = event
+                .meta(0x58)
+                .filter(|b| b.len() == 4 && b[0] > 0 && b[1] < 8)
+            {
+                meter = (b[0], 1u16 << b[1]);
+            }
+        }
+        (60_000_000.0 / tempo as f64, meter.0, meter.1)
+    }
     pub fn parse(b: &[u8]) -> Result<Self> {
         Self::from_style(Style::parse(b)?)
     }
@@ -243,24 +271,7 @@ impl Document {
         can_redo: bool,
     ) -> View {
         let events: Vec<_> = self.style.tracks.iter().flatten().cloned().collect();
-        let tempo = events
-            .iter()
-            .find_map(|e| {
-                e.meta(0x51)
-                    .filter(|b| b.len() == 3)
-                    .map(|b| ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32)
-            })
-            .filter(|x| *x > 0)
-            .map(|x| 60_000_000.0 / x as f64)
-            .unwrap_or(120.0);
-        let meter = events
-            .iter()
-            .find_map(|e| {
-                e.meta(0x58)
-                    .filter(|b| b.len() == 4 && b[1] < 8 && b[0] > 0)
-                    .map(|b| (b[0], 1u16 << b[1]))
-            })
-            .unwrap_or((4, 4));
+        let (tempo, numerator, denominator) = self.timing_at(0);
         let format = events
             .iter()
             .filter_map(|e| e.meta(6))
@@ -283,8 +294,8 @@ impl Document {
             ppq: self.style.ppq,
             format: format.into(),
             tempo,
-            numerator: meter.0,
-            denominator: meter.1,
+            numerator,
+            denominator,
             sections: self.sections.clone(),
             notes: self.notes.clone(),
             events,
