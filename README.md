@@ -50,8 +50,8 @@ npm run package         # release installer (NSIS)
 
 ```
 GenosStyleStudio/
-├── docs/                 # development gates, research evidence, assets
-│   └── assets/           # README screenshots
+├── assets/               # README screenshots
+├── docs/                 # local development gates and research evidence
 └── src/
     ├── frontend/         # React UI (piano roll, tools, dialogs)
     ├── crates/genos-core # Style/MIDI/CASM engine
@@ -60,7 +60,7 @@ GenosStyleStudio/
 
 ## Screenshot fixture
 
-The piano-roll image above was captured from a real session with `docs/assets/demo-style.STY` open (Main A · Chord 1).
+The piano-roll image above was captured from a real session with a demo Style open (Main A · Chord 1).
 
 ## License & notices
 

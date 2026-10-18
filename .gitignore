@@ -3,6 +3,8 @@
 !/.gitignore
 !/src/
 !/README.md
+!/assets/
+!/assets/**
 
 # Documentation, research and local verification evidence stay local.
 /docs/
