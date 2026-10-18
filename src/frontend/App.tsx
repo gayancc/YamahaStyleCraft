@@ -2411,9 +2411,9 @@ export function App() {
               </li>
               <li>
                 <strong>Partial (expansion packs):</strong> PPI/PQI section map +
-                PACK MIDI extract; PPF AIFF/UVF extract; SME VWST decrypt (needs
-                offline SME seed) and
-                YEM-verified .ppf rewrite remain open.
+                PACK MIDI voice map → voice picker; PPF extract + structural
+                rewrite; VPRS header; SME VWST decrypt (needs offline SME seed)
+                and YEM-import validation remain open.
               </li>
               <li>
                 <strong>Gated - no invent:</strong> F019 sound remaps / advanced

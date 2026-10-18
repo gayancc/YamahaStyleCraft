@@ -425,6 +425,20 @@ fn extract_expansion_resource(
         .map(|p| p.display().to_string())
         .map_err(error)
 }
+
+#[tauri::command]
+fn rewrite_expansion_ppf(source_path: String, dest_path: String) -> Result<String, String> {
+    let src = Path::new(&source_path);
+    let data = std::fs::read(src).map_err(error)?;
+    let pkg = genos_core::expansion::parse_ppf(&data).map_err(error)?;
+    let out = genos_core::expansion::rewrite_ppf(&data, &pkg).map_err(error)?;
+    let dest = Path::new(&dest_path);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(error)?;
+    }
+    std::fs::write(dest, &out).map_err(error)?;
+    Ok(dest.display().to_string())
+}
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn expansion_guitar_candidate_phase1(
@@ -1234,7 +1248,8 @@ fn main() {
             validate_expansion_guitar_profiles,
             expansion_guitar_candidate_phase1,
             analyze_expansion_pack,
-            extract_expansion_resource
+            extract_expansion_resource,
+            rewrite_expansion_ppf
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {

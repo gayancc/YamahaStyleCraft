@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { PackageOpen, FolderOpen, FileSearch, Download, X } from "lucide-react";
+import { useStudio } from "./store";
+import type { CatalogVoice } from "./contracts";
 
 type Capability = { category: string; status: string; detail: string };
 type PackItem = {
@@ -45,14 +47,24 @@ type RecoveryReport = {
       size: number;
     }[];
   };
-  vprs?: { banner?: string; note: string };
+  vprs?: {
+    banner?: string;
+    note: string;
+    header?: { field0: number; field1: number; field2: number; dataBase: number };
+  };
   waveIndex?: { path: string; entries: { waveKey: string; startAddress: number; waveSize: number }[]; note: string };
+  voiceMaps?: {
+    packTitle?: string;
+    itemTitle?: string;
+    addresses: { channel: number; msb: number; lsb: number; program: number }[];
+  }[];
   capabilities: Capability[];
   blockers: string[];
   notes: string[];
 };
 
 export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
+  const setExpansionVoices = useStudio((s) => s.setExpansionVoices);
   const [ppiPath, setPpiPath] = useState<string | null>(null);
   const [n27Path, setN27Path] = useState<string | null>(null);
   const [ppfPath, setPpfPath] = useState<string | null>(null);
@@ -83,6 +95,28 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
         encryptionKeyHex: encryptionKeyHex.trim() || null,
       });
       setReport(next);
+      const voices: CatalogVoice[] = [];
+      const seen = new Set<string>();
+      for (const map of next.voiceMaps ?? []) {
+        for (const a of map.addresses) {
+          const key = `${a.msb}-${a.lsb}-${a.program}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          voices.push({
+            category: "Expansion",
+            subcategory: map.packTitle ?? map.itemTitle ?? "-",
+            name:
+              map.itemTitle ??
+              `Expansion ${a.msb}/${a.lsb}/${a.program + 1}`,
+            msb: a.msb,
+            lsb: a.lsb,
+            program: a.program,
+            voiceType: "ExpansionPack",
+            page: 0,
+          });
+        }
+      }
+      setExpansionVoices(voices);
     } catch (e) {
       setReport(null);
       setError(String(e));
@@ -130,6 +164,30 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
         },
       });
       setExtractMsg(`Extracted ${out}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rewritePpf = async () => {
+    if (!ppfPath || !isTauri()) return;
+    setBusy(true);
+    setExtractMsg(null);
+    try {
+      const base =
+        ppfPath.replace(/^.*[\\/]/, "").replace(/\.ppf$/i, "") || "pack";
+      const destPath = await save({
+        defaultPath: `${base}.rewrite.ppf`,
+        filters: [{ name: "Pack Project", extensions: ["ppf"] }],
+      });
+      if (typeof destPath !== "string") return;
+      const out = await invoke<string>("rewrite_expansion_ppf", {
+        sourcePath: ppfPath,
+        destPath,
+      });
+      setExtractMsg(`Rewrote structural .ppf to ${out}`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -311,7 +369,11 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
               <section>
                 <h3>VPRS</h3>
                 <p>
-                  {report.vprs.banner} — {report.vprs.note}
+                  {report.vprs.banner}
+                  {report.vprs.header
+                    ? ` · data_base=0x${report.vprs.header.dataBase.toString(16)}`
+                    : ""}{" "}
+                  — {report.vprs.note}
                 </p>
               </section>
             )}
@@ -323,6 +385,31 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                   {report.waveIndex.entries.length} entries ·{" "}
                   {report.waveIndex.path}
                 </p>
+              </section>
+            )}
+
+            {report.voiceMaps && report.voiceMaps.length > 0 && (
+              <section>
+                <h3>Expansion voice map</h3>
+                <p>
+                  {report.voiceMaps.reduce((n, m) => n + m.addresses.length, 0)}{" "}
+                  bank/program addresses from PACK MIDI (for voice picker).
+                </p>
+                <ul className="pack-list">
+                  {report.voiceMaps.slice(0, 24).map((m, idx) => (
+                    <li key={`${m.itemTitle}-${idx}`}>
+                      <span>
+                        {m.packTitle ?? "pack"} / {m.itemTitle ?? "item"}:{" "}
+                        {m.addresses
+                          .map(
+                            (a) =>
+                              `ch${a.channel} ${a.msb}/${a.lsb}/${a.program + 1}`,
+                          )
+                          .join(", ")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </section>
             )}
 
@@ -391,6 +478,11 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                   Project · {report.project.title ?? "?"} ·{" "}
                   {report.project.resources.length} resources
                 </h3>
+                <div className="recovery-row" style={{ marginBottom: 8 }}>
+                  <button disabled={busy} onClick={() => void rewritePpf()}>
+                    <Download size={13} /> Rewrite structural .ppf
+                  </button>
+                </div>
                 <ul className="pack-list">
                   {report.project.resources.map((r, idx) => (
                     <li key={`${r.title}-${idx}`}>
@@ -419,7 +511,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                   : report.blockers.some((b) => b.includes("encryptionkey") || b.includes("SME seed") || b.includes("samples") || b.includes("offline"))
                     ? "Blocked for installation-only recovery: VWST still needs the offline SME seed (or a source .ppf)."
                     : report.project
-                      ? "Source .ppf resources can be extracted. Direct YEM-importable rebuild from .ppi alone is not claimed."
+                      ? "Structural .ppf rewrite is available (XPFH+BLOB round-trip). YEM import of rewritten files is not yet verified."
                       : "No .ppf loaded."}
               </p>
             </section>

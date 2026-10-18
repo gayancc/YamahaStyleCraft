@@ -58,7 +58,7 @@ export function VoiceBrowser({
   channel: number;
   onClose: () => void;
 }) {
-  const { view } = useStudio();
+  const { view, expansionVoices } = useStudio();
   const [original] = useState(view!);
   const [catalog, setCatalog] = useState<CatalogSummary | null>(null);
   const [current, setCurrent] = useState<CatalogVoice | null>(null);
@@ -261,6 +261,38 @@ export function VoiceBrowser({
                 : "Import Yamaha’s Genos v2.00 English Data List (11/2019), genos_en_dl_f0.pdf. Up to 32 MiB; other editions are not supported yet."}
             </p>
           </div>
+          {expansionVoices.length > 0 && (
+            <div className="voice-results" aria-label="Expansion pack voices">
+              <p className="muted">
+                {expansionVoices.length} expansion address
+                {expansionVoices.length === 1 ? "" : "es"} from pack recovery
+              </p>
+              {expansionVoices.map((v) => (
+                <button
+                  key={`exp-${v.msb}-${v.lsb}-${v.program}`}
+                  aria-pressed={selected === v}
+                  disabled={pending || stale}
+                  onClick={() => {
+                    setSelected(v);
+                    setError(null);
+                  }}
+                >
+                  <span>
+                    <strong>{v.name}</strong>
+                    <small>
+                      {v.category}
+                      {v.subcategory !== "-"
+                        ? ` / ${v.subcategory}`
+                        : ""} · {v.voiceType}
+                    </small>
+                  </span>
+                  <span className="voice-address">
+                    {v.msb} / {v.lsb} / {v.program + 1}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
           {catalog && (
             <>
               <p className="muted">
@@ -332,7 +364,12 @@ export function VoiceBrowser({
               <strong>{selected.name}</strong>
               <p>
                 MSB {selected.msb} · LSB {selected.lsb} · Program{" "}
-                {selected.program + 1} (Data List page {selected.page})
+                {selected.program + 1}
+                {selected.page > 0
+                  ? ` (Data List page ${selected.page})`
+                  : selected.category === "Expansion"
+                    ? " (expansion pack recovery)"
+                    : ""}
               </p>
               <p>
                 Applies bank/program events at {section.label} start, source{" "}

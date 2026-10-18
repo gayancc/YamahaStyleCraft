@@ -4,6 +4,7 @@ use super::n27::{self, InstrumentInfo};
 use super::ppf::{self, PpfPackage, ResourceKind};
 use super::ppi::{self, PpiPackage};
 use super::secure::{self, SEED_LEN};
+use super::voice_map::{self, PackVoiceMap};
 use super::vprs::{self, VprsInfo};
 use super::wave_index::{self, WaveIndex};
 use crate::Error;
@@ -20,6 +21,7 @@ pub struct RecoveryReport {
     pub project: Option<PpfPackage>,
     pub vprs: Option<VprsInfo>,
     pub wave_index: Option<WaveIndex>,
+    pub voice_maps: Vec<PackVoiceMap>,
     pub capabilities: Vec<Capability>,
     pub blockers: Vec<String>,
     pub notes: Vec<String>,
@@ -75,6 +77,7 @@ pub fn recover_pack_with_options(
     let mut notes = Vec::new();
     let mut blockers = Vec::new();
     let mut capabilities = Vec::new();
+    let mut voice_maps = Vec::new();
 
     let instrument = match n27_path {
         Some(p) => Some(n27::parse_n27_file(p)?),
@@ -105,12 +108,12 @@ pub fn recover_pack_with_options(
     let mut vprs = None;
 
     if let Some(ref inst) = installation {
-        let midi_items = inst
+        let midi_items: Vec<_> = inst
             .packs
             .iter()
-            .flat_map(|p| p.items.iter())
-            .filter(|i| i.fbin_kind == "midi")
-            .count();
+            .flat_map(|p| p.items.iter().map(move |i| (p, i)))
+            .filter(|(_, i)| i.fbin_kind == "midi")
+            .collect();
         capabilities.push(Capability {
             category: "pack-metadata".into(),
             status: "verified-recoverable".into(),
@@ -123,17 +126,58 @@ pub fn recover_pack_with_options(
         capabilities.push(Capability {
             category: "voice-drum-midi-setup".into(),
             status: "verified-recoverable".into(),
-            detail: format!("{midi_items} MIDI FBIN payloads (bank/program setup)"),
+            detail: format!(
+                "{} MIDI FBIN payloads (bank/program setup)",
+                midi_items.len()
+            ),
         });
+
+        let ppi_path_ref = Path::new(&inst.path);
+        let mut address_total = 0usize;
+        for (pack, item) in midi_items.iter().take(64) {
+            match ppi::read_pack_item_bytes(ppi_path_ref, item) {
+                Ok(bytes) => match voice_map::scan_midi_voice_addresses(&bytes) {
+                    Ok(addresses) if !addresses.is_empty() => {
+                        address_total += addresses.len();
+                        voice_maps.push(PackVoiceMap {
+                            pack_title: pack.title.clone(),
+                            item_title: item.title.clone(),
+                            addresses,
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(e) => notes.push(format!(
+                        "MIDI voice scan skipped for {:?}: {e}",
+                        item.title
+                    )),
+                },
+                Err(e) => notes.push(format!("MIDI read failed for {:?}: {e}", item.title)),
+            }
+        }
+        if address_total > 0 {
+            capabilities.push(Capability {
+                category: "expansion-voice-map".into(),
+                status: "verified-recoverable".into(),
+                detail: format!(
+                    "{address_total} bank/program addresses from {} MIDI setup(s) — available for voice picker",
+                    voice_maps.len()
+                ),
+            });
+        }
 
         if let Some(section) = inst.sections.iter().find(|s| s.id == "VPRS") {
             match vprs::summarize_vprs(Path::new(&inst.path), section.offset, section.size) {
                 Ok(info) => {
+                    let header_note = info
+                        .header
+                        .as_ref()
+                        .map(|h| format!("data_base=0x{:x}", h.data_base))
+                        .unwrap_or_else(|| "no header".into());
                     capabilities.push(Capability {
                         category: "voice-parameters".into(),
                         status: "partially-recovered".into(),
                         detail: format!(
-                            "VPRS banner={:?}; field map incomplete (EV-0317)",
+                            "VPRS banner={:?}; {header_note}; per-voice fields incomplete (EV-0317)",
                             info.banner
                         ),
                     });
@@ -242,12 +286,21 @@ pub fn recover_pack_with_options(
             .into(),
     );
 
+    if project.is_some() {
+        capabilities.push(Capability {
+            category: "ppf-rewrite".into(),
+            status: "structural-roundtrip".into(),
+            detail: "write_ppf/rewrite_ppf can rebuild XPFH+BLOB structure from extracted resources; YEM import not yet verified".into(),
+        });
+    }
+
     Ok(RecoveryReport {
         installation,
         instrument,
         project,
         vprs,
         wave_index,
+        voice_maps,
         capabilities,
         blockers,
         notes,

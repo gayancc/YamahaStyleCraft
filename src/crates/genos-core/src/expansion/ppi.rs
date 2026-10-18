@@ -303,13 +303,25 @@ pub fn extract_pack_item(
         .file_name()
         .ok_or_else(|| Error::Format("invalid extract name".into()))?;
     std::fs::create_dir_all(dest_dir)?;
+    let buf = read_pack_item_bytes(path, item)?;
+    let out = dest_dir.join(name);
+    std::fs::write(&out, buf)?;
+    Ok(out)
+}
+
+/// Read a PACK item FBIN payload into memory (bounded by item size).
+pub fn read_pack_item_bytes(path: &Path, item: &PackItem) -> Result<Vec<u8>, Error> {
+    const MAX_ITEM: u32 = 8 * 1024 * 1024;
+    if item.fbin_size > MAX_ITEM {
+        return Err(Error::Format(format!(
+            "pack item exceeds {MAX_ITEM} byte safety limit"
+        )));
+    }
     let mut file = File::open(path)?;
     file.seek(SeekFrom::Start(item.fbin_offset))?;
     let mut buf = vec![0u8; item.fbin_size as usize];
     file.read_exact(&mut buf)?;
-    let out = dest_dir.join(name);
-    std::fs::write(&out, buf)?;
-    Ok(out)
+    Ok(buf)
 }
 
 #[cfg(test)]

@@ -165,6 +165,86 @@ pub fn extract_resource(
     Ok(path)
 }
 
+/// One resource to embed when writing a `.ppf` (EV-0311 layout).
+#[derive(Debug, Clone)]
+pub struct PpfWriteResource {
+    pub title: String,
+    pub extension: String,
+    pub data: Vec<u8>,
+}
+
+fn push_chunk(buf: &mut Vec<u8>, id: &[u8; 4], payload: &[u8]) {
+    buf.extend_from_slice(id);
+    buf.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    buf.extend_from_slice(payload);
+    let pad = (4 - (payload.len() % 4)) % 4;
+    buf.extend(std::iter::repeat_n(0u8, pad));
+}
+
+fn push_text_chunk(buf: &mut Vec<u8>, id: &[u8; 4], text: &str) {
+    // Match observed ETIT/EEXT payloads: raw text, 4-byte pad (no forced NUL).
+    push_chunk(buf, id, text.as_bytes());
+}
+
+/// Build a minimal `.ppf` byte stream: `XPFH` + pack `ETIT` + `BLOB` resources.
+///
+/// This is structural round-trip for ConvUVx-style packs (EV-0311). YEM import
+/// acceptance of rebuilt files is not yet claimed.
+pub fn write_ppf(title: &str, resources: &[PpfWriteResource]) -> Result<Vec<u8>, Error> {
+    if title.is_empty() {
+        return Err(Error::Format("ppf title must not be empty".into()));
+    }
+    if resources.is_empty() {
+        return Err(Error::Format("ppf requires at least one resource".into()));
+    }
+    let mut buf = Vec::new();
+    push_chunk(&mut buf, b"XPFH", &[]);
+    push_text_chunk(&mut buf, b"ETIT", title);
+    for r in resources {
+        if r.title.is_empty() || r.extension.is_empty() {
+            return Err(Error::Format(
+                "ppf resource title and extension are required".into(),
+            ));
+        }
+        if r.data.is_empty() {
+            return Err(Error::Format("ppf resource data must not be empty".into()));
+        }
+        let mut blob = Vec::new();
+        push_text_chunk(&mut blob, b"ETIT", &r.title);
+        push_text_chunk(&mut blob, b"EEXT", &r.extension);
+        push_chunk(&mut blob, b"FBIN", &r.data);
+        push_chunk(&mut buf, b"BLOB", &blob);
+    }
+    Ok(buf)
+}
+
+/// Rebuild a `.ppf` from a previously parsed package (byte-preserving FBIN payloads).
+pub fn rewrite_ppf(data: &[u8], pkg: &PpfPackage) -> Result<Vec<u8>, Error> {
+    let title = pkg
+        .title
+        .as_deref()
+        .ok_or_else(|| Error::Format("parsed ppf missing title".into()))?;
+    let mut resources = Vec::with_capacity(pkg.resources.len());
+    for r in &pkg.resources {
+        let start = r.data_offset as usize;
+        let end = start
+            .checked_add(r.size as usize)
+            .ok_or_else(|| Error::Format("rewrite overflow".into()))?;
+        if end > data.len() {
+            return Err(Error::Format("rewrite out of bounds".into()));
+        }
+        resources.push(PpfWriteResource {
+            title: r
+                .title
+                .clone()
+                .unwrap_or_else(|| "resource".into()),
+            extension: r.extension.clone().unwrap_or_else(|| "bin".into()),
+            data: data[start..end].to_vec(),
+        });
+    }
+    write_ppf(title, &resources)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +261,31 @@ mod tests {
         assert_eq!(pkg.title.as_deref(), Some("univ-tiny"));
         assert!(pkg.resources.iter().any(|r| r.kind == ResourceKind::UvfXml));
         assert!(pkg.resources.iter().any(|r| r.kind == ResourceKind::Aiff));
+    }
+
+    #[test]
+    fn write_ppf_roundtrips_structure() {
+        let resources = vec![
+            PpfWriteResource {
+                title: "voice".into(),
+                extension: "uvf".into(),
+                data: b"<?xml version=\"1.0\"?><uvf/>".to_vec(),
+            },
+            PpfWriteResource {
+                title: "wave0".into(),
+                extension: "APCp".into(),
+                data: b"FORM\0\0\0\x0eAIFFTEST".to_vec(),
+            },
+        ];
+        let bytes = write_ppf("roundtrip", &resources).unwrap();
+        let pkg = parse_ppf(&bytes).unwrap();
+        assert_eq!(pkg.title.as_deref(), Some("roundtrip"));
+        assert_eq!(pkg.resources.len(), 2);
+        assert_eq!(pkg.resources[0].kind, ResourceKind::UvfXml);
+        assert_eq!(pkg.resources[1].kind, ResourceKind::Aiff);
+        let rebuilt = rewrite_ppf(&bytes, &pkg).unwrap();
+        let pkg2 = parse_ppf(&rebuilt).unwrap();
+        assert_eq!(pkg2.resources.len(), 2);
+        assert_eq!(pkg2.resources[0].sha256, pkg.resources[0].sha256);
     }
 }

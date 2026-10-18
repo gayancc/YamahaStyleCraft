@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import type { Command, Note, View } from "./contracts";
+import type { CatalogVoice, Command, Note, View } from "./contracts";
 interface StudioState {
   view: View | null;
   sectionId: number;
@@ -13,6 +13,9 @@ interface StudioState {
   snap: number;
   zoom: number;
   tool: "select" | "draw";
+  /** Bank/program addresses recovered from expansion PACK MIDI setups. */
+  expansionVoices: CatalogVoice[];
+  setExpansionVoices: (voices: CatalogVoice[]) => void;
   load: (path: string) => Promise<void>;
   createBlank: (
     referencePath: string,
@@ -42,6 +45,8 @@ export const useStudio = create<StudioState>((set, get) => ({
   snap: 16,
   zoom: 1,
   tool: "select",
+  expansionVoices: [],
+  setExpansionVoices: (voices) => set({ expansionVoices: voices }),
   load: async (path) => {
     if (get().busy) return;
     set({ busy: true, error: null });
