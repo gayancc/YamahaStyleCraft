@@ -212,8 +212,95 @@ try {
   await page
     .getByRole("button", { name: "Edit source tracks", exact: true })
     .click();
+  await dialog
+    .getByRole("button", { name: "Use part defaults", exact: true })
+    .click();
+  await expect(dialog.getByLabel("Region NTR", { exact: true })).toHaveValue(
+    "1",
+  );
+  await expect(dialog.getByLabel("Region NTT", { exact: true })).toHaveValue(
+    "0",
+  );
+  await expect(
+    dialog.getByLabel("CASM Auto Start", { exact: true }),
+  ).toBeChecked();
+  await page.screenshot({ path: path.join(run, "part-defaults-draft.png") });
+  await dialog
+    .getByRole("button", { name: "Apply source changes", exact: true })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  const defaultsView = await state();
+  const defaults = bound(defaultsView, "Main A", 1).bytes;
+  assert.equal(defaultsView.revision, 1);
+  assert.deepEqual(
+    defaults.slice(11, 22),
+    [15, 255, 255, 255, 255, 255, 255, 0, 2, 0, 127],
+  );
+  for (const offset of [22, 28, 34])
+    assert.deepEqual(defaults.slice(offset, offset + 6), [1, 0, 6, 0, 127, 1]);
+  assert.equal(defaults[46], 85);
+  assert.deepEqual(defaultsView.notes, before.notes);
+  assert.deepEqual(
+    bound(defaultsView, "Main A", 2).bytes,
+    bound(before, "Main A", 2).bytes,
+  );
+  assert.deepEqual(
+    bound(defaultsView, "Main B", 1).bytes,
+    bound(before, "Main B", 1).bytes,
+  );
+  const defaultsPath = path.join(run, "part-defaults.STY");
+  await ipc("save_document", { path: defaultsPath, projectFile: false });
+  await load(defaultsPath);
+  assert.deepEqual(bound(await state(), "Main A", 1).bytes, defaults);
+  await load(source);
+  await ipc("edit_document", {
+    revision: 0,
+    command: {
+      type: "sourceTracks",
+      section: before.sections.find((s) => s.label === "Main A").id,
+      actions: [
+        {
+          type: "edit",
+          source: 1,
+          destination: 9,
+          changes: [{ type: "partDefaults" }],
+          chords: null,
+          exclusive: false,
+        },
+      ],
+    },
+  });
+  await ipc("history", { redo: false });
+  const defaultsUndoPath = path.join(run, "part-defaults-undone.STY");
+  await ipc("save_document", { path: defaultsUndoPath, projectFile: false });
+  assert(fs.readFileSync(defaultsUndoPath).equals(original));
+  fs.writeFileSync(
+    path.join(run, "part-defaults-result.json"),
+    JSON.stringify(
+      {
+        passed: true,
+        destination: 9,
+        bytes: defaults,
+        singleRevision: true,
+        notesAndOtherSourcesPreserved: true,
+        otherSectionsPreserved: true,
+        savedAndReopened: true,
+        exactUndo: true,
+        midiOpened: false,
+      },
+      null,
+      2,
+    ),
+  );
+  await load(source);
+  await page
+    .getByRole("button", { name: "Edit source tracks", exact: true })
+    .click();
   await dialog.getByLabel("Source root", { exact: true }).selectOption("7");
   await dialog.getByLabel("Middle zone low").fill("36");
+  await dialog.getByLabel("Allow chord root C", { exact: true }).check();
+  await dialog.getByLabel("Allow chord root B", { exact: true }).check();
+  await dialog.getByLabel("CASM Auto Start", { exact: true }).uncheck();
   await dialog.getByLabel("Middle zone high").fill("84");
   await dialog.getByRole("button", { name: "Low region", exact: true }).click();
   await dialog.getByLabel("Region NTR", { exact: true }).selectOption("2");
@@ -248,6 +335,9 @@ try {
   const a = bound(edited, "Main A", 1),
     clone = bound(edited, "Main A", 3);
   assert.equal(a.bytes[18], 7);
+  assert.equal(a.bytes[11], 8);
+  assert.equal(a.bytes[12], 1);
+  assert.equal(a.bytes[13] & 4, 0);
   assert.deepEqual(a.bytes.slice(20, 22), [36, 84]);
   assert.deepEqual(a.bytes.slice(22, 28), [2, 129, 0, 10, 100, 0]);
   assert.equal(a.bytes[39], 4);
@@ -263,7 +353,7 @@ try {
     if (a.bytes[i] & bit)
       assert.equal(bound(edited, "Main A", 2).bytes[i] & bit, 0);
   }
-  assert.equal(clone.bytes[13] & 252, 252);
+  assert.equal(clone.bytes[13] & 252, 248);
   assert.equal(clone.bytes[46], 85);
   assert.deepEqual(
     edited.notes.filter((n) => n.channel !== 3),
@@ -1555,3 +1645,8 @@ try {
     }
   }
 }
+
+// Runs after restoring this harness state; never in parallel and never physical MIDI.
+execFileSync(process.execPath, ["scripts/live-preview-native.mjs"], {
+  stdio: "inherit",
+});

@@ -131,6 +131,9 @@ export type Region = "low" | "middle" | "high";
 export type RuleField =
   "ntr" | "ntt" | "bass" | "highKey" | "noteLow" | "noteHigh" | "retrigger";
 export type RouteChange =
+  | { type: "partDefaults" }
+  | { type: "rootEnabled"; root: number; enabled: boolean }
+  | { type: "autoStart"; enabled: boolean }
   | { type: "limits"; region: Region; low: number; high: number }
   | { type: "root" | "chord"; value: number }
   | { type: "zone"; low: number; high: number }

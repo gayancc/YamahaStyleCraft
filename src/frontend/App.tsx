@@ -33,6 +33,7 @@ import {
   Bell,
   FileJson,
   ListTree,
+  PackageOpen,
 } from "lucide-react";
 import { useStudio } from "./store";
 import type {
@@ -54,7 +55,9 @@ import { VoiceBrowser, VoiceName } from "./VoiceBrowser";
 import { DrumKits } from "./DrumKits";
 import { EffectBrowser } from "./EffectBrowser";
 import { InitialEffects, type EffectSelection } from "./InitialEffects";
+import { LivePreview } from "./LivePreview";
 import { ChordPreview } from "./ChordPreview";
+import { ExpansionRecovery } from "./ExpansionRecovery";
 
 const roles = [
   "Rhythm 1",
@@ -212,6 +215,7 @@ export function App() {
         : previous,
     );
   }, [view, output]);
+  const [livePreviewOpen, setLivePreviewOpen] = useState(false);
   const [chordPreviewOpen, setChordPreviewOpen] = useState(false);
   const [sourcesRoute, setSourcesRoute] = useState<Route | null>(null);
   const [composer, setComposer] = useState({
@@ -228,6 +232,7 @@ export function App() {
   const [capturing, setCapturing] = useState(false);
   const [captureSnap, setCaptureSnap] = useState<CaptureSnapshot | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [expansionOpen, setExpansionOpen] = useState(false);
   const [limitsOpen, setLimitsOpen] = useState(false);
   const section = view?.sections.find((s) => s.id === sectionId);
   const sectionNotes =
@@ -721,10 +726,13 @@ export function App() {
       recovery ||
       composerOpen ||
       helpOpen ||
+      limitsOpen ||
+      expansionOpen ||
       exchangeOpen ||
       voiceOpen ||
       drumsOpen ||
       effectsOpen ||
+      livePreviewOpen ||
       chordPreviewOpen ||
       sourcesRoute
     ) {
@@ -744,11 +752,15 @@ export function App() {
         setDiagnostics(false);
         setComposerOpen(false);
         setHelpOpen(false);
+        setLimitsOpen(false);
+        setExpansionOpen(false);
         setExchangeOpen(false);
         setVoiceOpen(false);
         setDrumsOpen(false);
         setEffectsOpen(false);
         setChordPreviewOpen(false);
+        setLivePreviewOpen(false);
+        if (livePreviewOpen) void stop();
         setSourcesRoute(null);
       }
       return;
@@ -786,7 +798,16 @@ export function App() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
   useEffect(() => {
-    if (!deviceOpen && !diagnostics && !recovery && !composerOpen) return;
+    if (
+      !deviceOpen &&
+      !diagnostics &&
+      !recovery &&
+      !composerOpen &&
+      !expansionOpen &&
+      !limitsOpen &&
+      !helpOpen
+    )
+      return;
     const previous = document.activeElement as HTMLElement | null;
     const modal = document.querySelector<HTMLElement>('[aria-modal="true"]');
     const controls = () =>
@@ -885,6 +906,12 @@ export function App() {
           )}
         </div>
         <IconButton
+          label="Expansion Pack Recovery"
+          onClick={() => setExpansionOpen(true)}
+        >
+          <PackageOpen size={17} />
+        </IconButton>
+        <IconButton
           label="Feature inventory / limits"
           onClick={() => setLimitsOpen(true)}
         >
@@ -956,6 +983,13 @@ export function App() {
           </IconButton>
         </div>
         <div className="transport">
+          <button
+            type="button"
+            disabled={!section || capturing || busy || transport.playing}
+            onClick={() => setLivePreviewOpen(true)}
+          >
+            Live Style preview
+          </button>
           <IconButton
             label="Stop / release notes (Escape)"
             onClick={() => void stop()}
@@ -1819,6 +1853,17 @@ export function App() {
       {effectsOpen && (
         <EffectBrowser output={output} onClose={() => setEffectsOpen(false)} />
       )}
+      {livePreviewOpen && section && view && (
+        <LivePreview
+          key={`live-${section.id}`}
+          view={view}
+          section={section}
+          output={output}
+          transport={transport}
+          onTransport={setTransport}
+          onClose={() => setLivePreviewOpen(false)}
+        />
+      )}
       {chordPreviewOpen && section && (
         <ChordPreview
           key={`chord-${section.id}-${channel}`}
@@ -2249,8 +2294,9 @@ export function App() {
             </div>
             <p className="muted">
               Playback uses source channels. Monitor and capture share the input
-              port (one at a time). CASM chord preview and device-specific
-              effects remain separately gated.
+              port (one at a time). Live Style preview applies supported Ctb2
+              routes and a chord progression; its coverage report lists excluded
+              settings.
             </p>
             <div className="modal-actions">
               <button onClick={() => void scan()}>
@@ -2269,6 +2315,9 @@ export function App() {
             </div>
           </section>
         </div>
+      )}
+      {expansionOpen && (
+        <ExpansionRecovery onClose={() => setExpansionOpen(false)} />
       )}
       {helpOpen && (
         <div className="modal-backdrop" onClick={() => setHelpOpen(false)}>
@@ -2306,10 +2355,12 @@ export function App() {
                 Capture exports raw MIDI only - no automatic Style/CASM build.
               </li>
               <li>
-                Chord conversion is a manual visual study. CASM-bound chord
-                playback and SFF1 conversion remain unavailable. Voice and
-                effect catalogs require the supported Genos v2.00 Data List.
-                Live system effect changes are not saved in a Style.
+                Chord preview is a manual visual study. Live Style preview adds
+                supported Ctb2 routing and a chord progression.
+                Yamaha-equivalent chord playback and SFF1 conversion remain
+                unavailable. Voice and effect catalogs require the supported
+                Genos v2.00 Data List. Live system effect changes are not saved
+                in a Style.
               </li>
               <li>
                 Hardware timing and Yamaha acceptance remain open release gates.
@@ -2353,17 +2404,22 @@ export function App() {
                 bounded ch9/10 audition, F020 mixer CC7/10/11/91/93, F021 Effect
                 Type List + reverb/chorus live apply and initial-header file
                 editing + opt-in initial type/Return playback, F022-F023, F024
-                manual chord conversion study, F025 play/audition, F026
-                capture+apply notes, F028 CSV/JSON, F029 notes-only MIDI
-                exchange, F031 Help/inventory, F032 panic/release, F033
-                prefs/recovery, F007/F016 source+Ctb2 CASM.
+                manual study and limited routed progression playback, F025
+                play/audition, F026 capture+apply notes, F028 CSV/JSON, F029
+                notes-only MIDI exchange, F031 Help/inventory, F032
+                panic/release, F033 prefs/recovery, F007/F016 source+Ctb2 CASM.
+              </li>
+              <li>
+                <strong>Partial (expansion packs):</strong> PPI/PQI section map +
+                PACK MIDI extract; PPF AIFF/UVF extract; VWST sample decrypt and
+                YEM-verified .ppf rewrite remain open.
               </li>
               <li>
                 <strong>Gated - no invent:</strong> F019 sound remaps / advanced
-                fields / Genos2 / expansion / native setup MIDI preview and
+                fields / Genos2 / native setup MIDI preview and
                 hardware acceptance, F021 variation apply + Parameter List /
-                detailed/later effect replay, F024 CASM-bound playback /
-                hardware retarget / expansion qualification, F027
+                detailed/later effect replay, F024 full Yamaha-equivalent
+                playback / hardware retarget / expansion qualification, F027
                 Style/analyze-build from capture (no Style builder oracle), F029
                 DAW session round-trip, F030 SFF1 conversion (EV-0171 scaffold /
                 conversion blocked).
@@ -2375,8 +2431,12 @@ export function App() {
                 <strong>Hardware F035:</strong> Fresh 78 paired input notes,
                 audible notes/Stop, source passage and dry/wet reverb contrast
                 (direct and saved-file startup) confirmed on the connected
-                Genos. Keyboard Style loading, CASM playback, drum scalars,
-                clock and latency qualification remain open.
+                Genos. Routed C–Am–F–G playback, edited notes/controllers, CASM
+                source root and initial effect contrast are user-confirmed
+                through the app, including a voice change and bounded
+                RealDrumKit channel10/key42 volume/pan/pitch. USB Style loading
+                was tested separately. Full Yamaha arranger equivalence, clock
+                and latency qualification remain open.
               </li>
             </ul>
             <div className="modal-actions">

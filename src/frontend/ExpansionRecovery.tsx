@@ -1,0 +1,371 @@
+import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { PackageOpen, FolderOpen, FileSearch, Download, X } from "lucide-react";
+
+type Capability = { category: string; status: string; detail: string };
+type PackItem = {
+  title?: string;
+  extension?: string;
+  fbinKind: string;
+  fbinSize: number;
+  status: string;
+};
+type PackEntry = { title?: string; items: PackItem[] };
+type SectionInfo = {
+  id: string;
+  offset: number;
+  size: number;
+  status: string;
+  note: string;
+};
+type RecoveryReport = {
+  installation?: {
+    path: string;
+    fileSize: number;
+    header: { model?: string; charset?: string; packIdHex?: string };
+    sections: SectionInfo[];
+    packs: PackEntry[];
+    diagnostics: string[];
+  };
+  instrument?: {
+    modelName: string;
+    instrumentId: string;
+    compositeId: string;
+    packInstallDataIdentification: number;
+    packInstallDataFormatType: number;
+  };
+  project?: {
+    title?: string;
+    fileSize: number;
+    resources: {
+      title?: string;
+      extension?: string;
+      kind: string;
+      size: number;
+    }[];
+  };
+  capabilities: Capability[];
+  blockers: string[];
+  notes: string[];
+};
+
+export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
+  const [ppiPath, setPpiPath] = useState<string | null>(null);
+  const [n27Path, setN27Path] = useState<string | null>(null);
+  const [ppfPath, setPpfPath] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [report, setReport] = useState<RecoveryReport | null>(null);
+  const [extractMsg, setExtractMsg] = useState<string | null>(null);
+
+  const pick = async (filters: { name: string; extensions: string[] }[]) => {
+    if (!isTauri()) return null;
+    const selected = await open({ multiple: false, filters });
+    return typeof selected === "string" ? selected : null;
+  };
+
+  const analyze = async () => {
+    setBusy(true);
+    setError(null);
+    setExtractMsg(null);
+    try {
+      if (!isTauri()) throw new Error("Expansion recovery requires the desktop app");
+      const next = await invoke<RecoveryReport>("analyze_expansion_pack", {
+        ppiPath,
+        n27Path,
+        ppfPath,
+      });
+      setReport(next);
+    } catch (e) {
+      setReport(null);
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const extractPpi = async (index: number) => {
+    if (!ppiPath || !isTauri()) return;
+    setBusy(true);
+    setExtractMsg(null);
+    try {
+      const dest = await open({ directory: true, multiple: false });
+      if (typeof dest !== "string") return;
+      const out = await invoke<string>("extract_expansion_resource", {
+        request: {
+          sourcePath: ppiPath,
+          destDir: dest,
+          kind: "ppi",
+          resourceIndex: index,
+        },
+      });
+      setExtractMsg(`Extracted ${out}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const extractPpf = async (index: number) => {
+    if (!ppfPath || !isTauri()) return;
+    setBusy(true);
+    setExtractMsg(null);
+    try {
+      const dest = await open({ directory: true, multiple: false });
+      if (typeof dest !== "string") return;
+      const out = await invoke<string>("extract_expansion_resource", {
+        request: {
+          sourcePath: ppfPath,
+          destDir: dest,
+          kind: "ppf",
+          resourceIndex: index,
+        },
+      });
+      setExtractMsg(`Extracted ${out}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="modal expansion-recovery"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="expansion-recovery-title"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            onClose();
+          }
+        }}
+      >
+        <header className="modal-header">
+          <h2 id="expansion-recovery-title">
+            <PackageOpen size={18} /> Expansion Pack Recovery
+          </h2>
+          <button className="icon-button" aria-label="Close" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </header>
+
+        <p className="modal-lead">
+          Analyze Yamaha installation (`.ppi`/`.pqi`) and project (`.ppf`)
+          files. Waveforms inside installation packages may be encrypted;
+          editable `.ppf` reconstruction is offered only when verified data is
+          available.
+        </p>
+
+        <ol className="recovery-steps">
+          <li>
+            <strong>1. Installation package</strong>
+            <div className="recovery-row">
+              <code>{ppiPath ?? "No .ppi/.pqi selected"}</code>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  void pick([
+                    {
+                      name: "Installation",
+                      extensions: ["ppi", "pqi"],
+                    },
+                  ]).then((p) => p && setPpiPath(p))
+                }
+              >
+                <FolderOpen size={14} /> Select
+              </button>
+            </div>
+          </li>
+          <li>
+            <strong>2. Instrument information (optional)</strong>
+            <div className="recovery-row">
+              <code>{n27Path ?? "Optional .n27 — not required to read packages"}</code>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  void pick([
+                    { name: "Instrument Info", extensions: ["n27"] },
+                  ]).then((p) => p && setN27Path(p))
+                }
+              >
+                <FolderOpen size={14} /> Select
+              </button>
+            </div>
+          </li>
+          <li>
+            <strong>3. Pack project (optional)</strong>
+            <div className="recovery-row">
+              <code>
+                {ppfPath ??
+                  "Optional source .ppf (AIFF/UVF extract when present)"}
+              </code>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  void pick([{ name: "Pack Project", extensions: ["ppf"] }]).then(
+                    (p) => p && setPpfPath(p),
+                  )
+                }
+              >
+                <FolderOpen size={14} /> Select
+              </button>
+            </div>
+          </li>
+        </ol>
+
+        <div className="recovery-actions">
+          <button
+            className="primary"
+            disabled={busy || (!ppiPath && !ppfPath)}
+            onClick={() => void analyze()}
+          >
+            <FileSearch size={14} /> Analyze package
+          </button>
+        </div>
+
+        {error && <p className="error-banner">{error}</p>}
+        {extractMsg && <p className="ok-banner">{extractMsg}</p>}
+
+        {report && (
+          <div className="recovery-report">
+            {report.instrument && (
+              <section>
+                <h3>Instrument</h3>
+                <p>
+                  {report.instrument.modelName} · {report.instrument.compositeId}{" "}
+                  · format {report.instrument.packInstallDataFormatType}
+                </p>
+              </section>
+            )}
+
+            <section>
+              <h3>Capabilities</h3>
+              <ul className="capability-list">
+                {report.capabilities.map((c) => (
+                  <li key={c.category}>
+                    <span className={`cap-status ${c.status}`}>{c.status}</span>
+                    <strong>{c.category}</strong>
+                    <small>{c.detail}</small>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            {report.blockers.length > 0 && (
+              <section>
+                <h3>Blockers</h3>
+                <ul>
+                  {report.blockers.map((b) => (
+                    <li key={b}>{b}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {report.notes.map((n) => (
+              <p key={n} className="recovery-note">
+                {n}
+              </p>
+            ))}
+
+            {report.installation && (
+              <section>
+                <h3>
+                  Installation · {report.installation.header.model ?? "?"} ·{" "}
+                  {(report.installation.fileSize / (1024 * 1024)).toFixed(1)} MiB
+                </h3>
+                <div className="section-chips">
+                  {report.installation.sections.map((s) => (
+                    <span key={`${s.id}-${s.offset}`} title={s.note}>
+                      {s.id} ({s.status})
+                    </span>
+                  ))}
+                </div>
+                <div className="pack-list">
+                  {report.installation.packs.map((pack, pIdx) => {
+                    const base = report.installation!.packs
+                      .slice(0, pIdx)
+                      .reduce((n, p) => n + p.items.length, 0);
+                    return (
+                      <details key={`${pack.title}-${pIdx}`}>
+                        <summary>
+                          {pack.title ?? "(untitled pack)"} · {pack.items.length}{" "}
+                          items
+                        </summary>
+                        <ul>
+                          {pack.items.map((item, iIdx) => {
+                            const resourceIndex = base + iIdx;
+                            return (
+                              <li key={`${item.title}-${resourceIndex}`}>
+                                <span>
+                                  {item.title ?? "item"} ·{" "}
+                                  {item.extension ?? "?"} · {item.fbinKind} ·{" "}
+                                  {item.fbinSize} B
+                                </span>
+                                {item.fbinKind === "midi" && (
+                                  <button
+                                    disabled={busy}
+                                    onClick={() => void extractPpi(resourceIndex)}
+                                  >
+                                    <Download size={13} /> Extract
+                                  </button>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </details>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {report.project && (
+              <section>
+                <h3>
+                  Project · {report.project.title ?? "?"} ·{" "}
+                  {report.project.resources.length} resources
+                </h3>
+                <ul className="pack-list">
+                  {report.project.resources.map((r, idx) => (
+                    <li key={`${r.title}-${idx}`}>
+                      <span>
+                        {r.title ?? "resource"} · {r.kind} · {r.size} B
+                      </span>
+                      {(r.kind === "aiff" || r.kind === "uvfXml") && (
+                        <button
+                          disabled={busy}
+                          onClick={() => void extractPpf(idx)}
+                        >
+                          <Download size={13} /> Extract
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            <section>
+              <h3>PPF reconstruction</h3>
+              <p>
+                {report.blockers.some((b) => b.includes("ppf"))
+                  ? "Blocked for installation-only recovery: samples remain in encrypted VWST. Use a source .ppf when available, or wait for Secure stream decoding."
+                  : report.project
+                    ? "Source .ppf resources can be extracted. Direct YEM-importable rebuild from .ppi alone is not claimed."
+                    : "No .ppf loaded."}
+              </p>
+            </section>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

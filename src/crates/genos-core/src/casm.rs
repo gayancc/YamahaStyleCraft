@@ -42,6 +42,14 @@ pub enum RuleField {
     deny_unknown_fields
 )]
 pub enum RouteChange {
+    PartDefaults,
+    RootEnabled {
+        root: u8,
+        enabled: bool,
+    },
+    AutoStart {
+        enabled: bool,
+    },
     Limits {
         region: Region,
         low: u8,
@@ -195,6 +203,46 @@ fn change(bytes: &mut [u8], changes: &[RouteChange]) -> Result<()> {
     }
     for change in changes {
         match *change {
+            RouteChange::PartDefaults => {
+                // Observed StyleMagic 3.7.1.3 default tables and saved Ctb2
+                // records. Rows: Auto Start, NTR, NTT/Bass, high key, limits, RTR.
+                let rows: [[u8; 7]; 8] =
+                    serde_json::from_str(include_str!("../assets/casm-part-defaults.json"))
+                        .map_err(|_| reject("invalid bundled CASM part defaults"))?;
+                let row = bytes[9]
+                    .checked_sub(8)
+                    .and_then(|part| rows.get(usize::from(part)))
+                    .ok_or_else(|| reject("CASM part defaults require destination 9–16"))?;
+                // Preserve source, name, destination, editable flag, reserved
+                // mask bits and opaque trailing fields.
+                bytes[11] |= 15;
+                bytes[12] = 255;
+                bytes[13] = (bytes[13] & !7) | 3 | (row[0] << 2);
+                bytes[14..18].fill(255);
+                bytes[18..22].copy_from_slice(&[0, 2, 0, 127]);
+                for offset in [22, 28, 34] {
+                    bytes[offset..offset + 6].copy_from_slice(&row[1..]);
+                }
+            }
+            RouteChange::RootEnabled { root, enabled } if root < 12 => {
+                // StyleMagic 3.7.1.3 Apply 004cb2a8, word helper 0049dab8:
+                // C..G are bits8..15 of the LE word at11; G#..B bits0..3.
+                let index = 12 - usize::from(root / 8);
+                let mask = 1 << (root % 8);
+                if enabled {
+                    bytes[index] |= mask;
+                } else {
+                    bytes[index] &= !mask;
+                }
+            }
+            RouteChange::AutoStart { enabled } => {
+                // Same Apply routine, byte helper 0049da8c; preserve chord bits.
+                if enabled {
+                    bytes[13] |= 4;
+                } else {
+                    bytes[13] &= !4;
+                }
+            }
             RouteChange::Limits {
                 ref region,
                 low,

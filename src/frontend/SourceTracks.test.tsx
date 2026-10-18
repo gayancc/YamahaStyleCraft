@@ -66,6 +66,88 @@ const show = () => {
   return close;
 };
 describe("source-track draft transaction", () => {
+  it("drafts bass defaults, accepts overrides back to original values, and applies once", async () => {
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Use part defaults" }));
+    expect(invoke).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Source chord")).toHaveProperty("value", "2");
+    expect(screen.getByLabelText("Output note low")).toHaveProperty(
+      "value",
+      "26",
+    );
+    expect(screen.getByLabelText("Output note high")).toHaveProperty(
+      "value",
+      "54",
+    );
+    expect(screen.getByLabelText("Region retrigger")).toHaveProperty(
+      "value",
+      "2",
+    );
+    // This equals the original route's chord. It still must override the reset.
+    fireEvent.change(screen.getByLabelText("Source chord"), {
+      target: { value: "0" },
+    });
+    fireEvent.click(screen.getByLabelText("Allow chord root C"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Apply source changes" }),
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    expect(invoke).toHaveBeenCalledWith(
+      "edit_document",
+      expect.objectContaining({
+        command: expect.objectContaining({
+          actions: [
+            expect.objectContaining({
+              changes: [
+                { type: "partDefaults" },
+                { type: "rootEnabled", root: 0, enabled: false },
+                { type: "chord", value: 0 },
+              ],
+              chords: null,
+              exclusive: false,
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+  it("discards part defaults on Cancel without a native edit", () => {
+    const close = show();
+    fireEvent.click(screen.getByRole("button", { name: "Use part defaults" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(close).toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it("edits root permissions and Auto Start in one section-local transaction", async () => {
+    show();
+    fireEvent.click(screen.getByLabelText("Allow chord root C"));
+    fireEvent.click(screen.getByLabelText("Allow chord root B"));
+    fireEvent.click(screen.getByLabelText("CASM Auto Start"));
+    expect(invoke).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Apply source changes" }),
+    );
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "edit_document",
+        expect.objectContaining({
+          command: expect.objectContaining({
+            type: "sourceTracks",
+            section: 7,
+            actions: [
+              expect.objectContaining({
+                changes: expect.arrayContaining([
+                  { type: "rootEnabled", root: 0, enabled: true },
+                  { type: "rootEnabled", root: 11, enabled: true },
+                  { type: "autoStart", enabled: true },
+                ]),
+              }),
+            ],
+          }),
+        }),
+      ),
+    );
+  });
   it("Cancel and Escape discard edits without calling native IPC", () => {
     const close = show();
     fireEvent.change(screen.getByLabelText("Source root"), {

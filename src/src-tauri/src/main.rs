@@ -28,6 +28,69 @@ struct Studio {
     epoch: u64,
     exchange_nonce: u64,
     pending_exchange: Option<PendingExchange>,
+    pending_live: Option<PendingLive>,
+}
+struct PendingLive {
+    token: String,
+    epoch: u64,
+    revision: u64,
+    compiled: genos_core::live_preview::Compiled,
+}
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LivePreview {
+    token: String,
+    report: genos_core::live_preview::Report,
+}
+#[tauri::command]
+fn preview_live_style(
+    config: genos_core::live_preview::Config,
+    revision: u64,
+    state: State<'_, Shared>,
+) -> Result<LivePreview, String> {
+    let mut s = state.lock().map_err(error)?;
+    s.pending_live = None;
+    let session = s.session.as_ref().ok_or("Open a Style first")?;
+    if session.revision != revision {
+        return Err("Document changed; check the preview again".into());
+    }
+    let compiled = genos_core::live_preview::compile(&session.document, &config).map_err(error)?;
+    s.exchange_nonce += 1;
+    let token = format!("live:{}:{}:{}", s.epoch, revision, s.exchange_nonce);
+    let report = compiled.report.clone();
+    s.pending_live = Some(PendingLive {
+        token: token.clone(),
+        epoch: s.epoch,
+        revision,
+        compiled,
+    });
+    Ok(LivePreview { token, report })
+}
+#[tauri::command]
+fn play_live_style(
+    token: String,
+    index: usize,
+    name: String,
+    looping: bool,
+    state: State<'_, Shared>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(error)?;
+    let pending = s
+        .pending_live
+        .as_ref()
+        .ok_or("Check live preview before Play")?;
+    let session = s.session.as_ref().ok_or("Open a Style first")?;
+    if pending.token != token || pending.epoch != s.epoch || pending.revision != session.revision {
+        return Err("Document or preview changed; check live preview again".into());
+    }
+    if s.capture.is_recording() {
+        return Err("Stop capture before live preview".into());
+    }
+    let plan = pending.compiled.plan.clone();
+    let channels = pending.compiled.channels.clone();
+    s.transport
+        .play_plan(plan, channels, index, name, looping)
+        .map_err(error)
 }
 struct PendingExchange {
     token: String,
@@ -331,6 +394,29 @@ fn validate_expansion_guitar_profiles(
     profiles: Vec<expansion_guitar::ExpansionGuitarProfile>,
 ) -> Result<Vec<expansion_guitar::ExpansionGuitarProfile>, String> {
     expansion_guitar::validate_expansion_guitar_profiles(&profiles).map_err(error)
+}
+
+#[tauri::command]
+fn analyze_expansion_pack(
+    ppi_path: Option<String>,
+    n27_path: Option<String>,
+    ppf_path: Option<String>,
+) -> Result<genos_core::expansion::RecoveryReport, String> {
+    genos_core::expansion::recover_pack(
+        ppi_path.as_deref().map(Path::new),
+        n27_path.as_deref().map(Path::new),
+        ppf_path.as_deref().map(Path::new),
+    )
+    .map_err(error)
+}
+
+#[tauri::command]
+fn extract_expansion_resource(
+    request: genos_core::expansion::ExtractRequest,
+) -> Result<String, String> {
+    genos_core::expansion::recovery::extract_resource(&request)
+        .map(|p| p.display().to_string())
+        .map_err(error)
 }
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -1127,6 +1213,8 @@ fn main() {
             apply_native_drums,
             inspect_style_effects,
             preview_style_effects,
+            preview_live_style,
+            play_live_style,
             apply_style_effects,
             apply_genos_system_effect,
             chord_preview_vocabulary,
@@ -1137,7 +1225,9 @@ fn main() {
             pitch_shift_wire_pitch,
             pitch_shift_retarget,
             validate_expansion_guitar_profiles,
-            expansion_guitar_candidate_phase1
+            expansion_guitar_candidate_phase1,
+            analyze_expansion_pack,
+            extract_expansion_resource
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {

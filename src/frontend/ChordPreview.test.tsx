@@ -52,6 +52,41 @@ vi.mock("./store", () => {
 });
 
 describe("ChordPreview", () => {
+  it("passes every documented minor-family table to the preview command without playing MIDI", async () => {
+    render(
+      <ChordPreview
+        section={{ id: 1, label: "Main A", start: 0, end: 1920 }}
+        channel={11}
+        onClose={() => {}}
+      />,
+    );
+    for (const ntt of [
+      "melodic_minor_5th",
+      "harmonic_minor",
+      "harmonic_minor_5th",
+      "natural_minor",
+      "natural_minor_5th",
+      "dorian",
+      "dorian_5th",
+    ]) {
+      fireEvent.change(screen.getByLabelText("Preview NTT mode"), {
+        target: { value: ntt },
+      });
+      await waitFor(() =>
+        expect(mocks.invoke).toHaveBeenCalledWith(
+          "remap_chord_preview_notes",
+          expect.objectContaining({ ntt }),
+        ),
+      );
+    }
+    expect(
+      mocks.invoke.mock.calls.some(
+        ([command]) =>
+          /play|send_midi/.test(command) &&
+          command !== "remap_chord_preview_notes",
+      ),
+    ).toBe(false);
+  });
   afterEach(() => cleanup());
   beforeEach(() => {
     cleanup();

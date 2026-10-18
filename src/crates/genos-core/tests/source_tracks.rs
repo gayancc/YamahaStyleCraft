@@ -90,6 +90,136 @@ fn edit(changes: Vec<Change>, chords: Option<Vec<u8>>, exclusive: bool) -> Actio
 fn mask(b: &[u8], c: u8) -> bool {
     b[17 - (c / 8) as usize] & (1 << (c % 8)) != 0
 }
+
+#[test]
+fn gui_saved_stylemagic_root_and_defaults_match_real_editor_transactions() {
+    let oracle: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/stylemagic-gui-oracle.json")).unwrap();
+    let payload = |key: &str| -> Vec<u8> { serde_json::from_value(oracle[key].clone()).unwrap() };
+    for (key, destination, changes) in [
+        ("rootG", 11, vec![Change::Root { value: 7 }]),
+        ("bassDefaults", 11, vec![Change::PartDefaults]),
+        ("rhythmDefaults", 9, vec![Change::PartDefaults]),
+    ] {
+        let mut before = payload("baseline");
+        before[9] = destination - 1;
+        let events = smf::encode_track(&[
+            Event {
+                id: 1,
+                tick: 0,
+                order: 1,
+                data: vec![0xff, 6, 6, b'M', b'a', b'i', b'n', b' ', b'A'],
+            },
+            Event {
+                id: 2,
+                tick: 480,
+                order: 2,
+                data: vec![0xff, 6, 6, b'M', b'a', b'i', b'n', b' ', b'B'],
+            },
+            Event {
+                id: 3,
+                tick: 960,
+                order: 3,
+                data: vec![0xff, 0x2f, 0],
+            },
+        ])
+        .unwrap();
+        let records = smf::pack(&[
+            chunk(b"Sdec", b"Main A,Main B".to_vec()),
+            chunk(b"Ctb2", before.clone()),
+            chunk(b"Xtra", vec![1, 3, 5, 7]),
+        ])
+        .unwrap();
+        let data = smf::pack(&[
+            chunk(b"MThd", vec![0, 0, 0, 1, 1, 224]),
+            chunk(b"MTrk", events),
+            chunk(b"CASM", smf::pack(&[chunk(b"CSEG", records)]).unwrap()),
+        ])
+        .unwrap();
+        let mut s = Session::open(&data, "Observed GUI CASM records".into()).unwrap();
+        let section = s
+            .document
+            .sections
+            .iter()
+            .find(|s| s.label == "Main A")
+            .unwrap()
+            .id;
+        s.execute(
+            s.revision,
+            Command::SourceTracks {
+                section,
+                actions: vec![Action::Edit {
+                    source: 6,
+                    destination,
+                    changes,
+                    chords: None,
+                    exclusive: false,
+                }],
+            },
+        )
+        .unwrap();
+        assert_eq!(selected(&s.document, "Main A", 6), payload(key), "{key}");
+        assert_eq!(
+            selected(&s.document, "Main B", 6),
+            before,
+            "other section {key}"
+        );
+        let saved = s.document.style.bytes().unwrap();
+        let reopened = Session::open(&saved, "Reopened observed record".into()).unwrap();
+        assert_eq!(selected(&reopened.document, "Main A", 6), payload(key));
+        assert!(saved.windows(4).any(|b| b == [1, 3, 5, 7]));
+        s.undo().unwrap();
+        assert_eq!(s.document.style.bytes().unwrap(), data, "exact undo {key}");
+    }
+}
+
+#[test]
+fn part_defaults_preserve_reserved_fields_and_allow_later_overrides_atomically() {
+    let mut s = session(false);
+    let original = s.document.style.bytes().unwrap();
+    let before = selected(&s.document, "Main A", 1).to_vec();
+    apply(
+        &mut s,
+        vec![edit(
+            vec![
+                Change::PartDefaults,
+                Change::Root { value: 7 },
+                Change::AutoStart { enabled: false },
+            ],
+            None,
+            false,
+        )],
+    )
+    .unwrap();
+    let after = selected(&s.document, "Main A", 1);
+    assert_eq!(after[13] & 0xf8, before[13] & 0xf8);
+    assert_eq!(after[11] & 0xf0, before[11] & 0xf0);
+    assert_eq!(&after[..11], &before[..11]);
+    assert_eq!(&after[40..], &before[40..]);
+    assert_eq!(after[18], 7);
+    assert_eq!(after[13] & 4, 0);
+    for offset in [22, 28, 34] {
+        assert_eq!(&after[offset..offset + 6], &[1, 0, 6, 0, 127, 1]);
+    }
+    for chord in 0..34 {
+        assert!(mask(after, chord));
+    }
+    assert_eq!(selected(&s.document, "Main B", 1), before);
+    s.undo().unwrap();
+    assert_eq!(s.document.style.bytes().unwrap(), original);
+    assert!(
+        apply(
+            &mut s,
+            vec![edit(
+                vec![Change::PartDefaults, Change::Root { value: 12 }],
+                None,
+                false
+            )]
+        )
+        .is_err()
+    );
+    assert_eq!(s.document.style.bytes().unwrap(), original);
+}
 fn selected<'a>(d: &'a Document, label: &str, source: u8) -> &'a [u8] {
     &d.routes
         .iter()
@@ -155,6 +285,117 @@ fn source_regions_split_shared_groups_preserve_unknowns_and_undo_exactly() {
     assert_eq!(s.document.style.bytes().unwrap(), before);
     s.redo().unwrap();
     assert_eq!(s.document.style.bytes().unwrap(), exported);
+}
+
+#[test]
+fn root_mask_and_autostart_follow_reference_bits_and_preserve_sections_reserved_bits_and_undo() {
+    let mut s = session(false);
+    let before = s.document.style.bytes().unwrap();
+    for root in 0..12 {
+        let rev = s.revision;
+        apply(
+            &mut s,
+            vec![edit(
+                vec![Change::RootEnabled {
+                    root,
+                    enabled: true,
+                }],
+                None,
+                false,
+            )],
+        )
+        .unwrap();
+        let a = selected(&s.document, "Main A", 1);
+        assert_eq!(a[12 - (root / 8) as usize], 1 << (root % 8));
+        assert_eq!(&a[13..], &route(1)[13..]);
+        assert_eq!(selected(&s.document, "Main B", 1), route(1));
+        assert_eq!(selected(&s.document, "Main A", 2), route(2));
+        s.undo().unwrap();
+        assert!(s.revision > rev);
+        assert_eq!(s.document.style.bytes().unwrap(), before);
+    }
+    apply(
+        &mut s,
+        vec![edit(
+            vec![Change::AutoStart { enabled: false }],
+            Some(vec![0, 33]),
+            false,
+        )],
+    )
+    .unwrap();
+    let a = selected(&s.document, "Main A", 1);
+    assert_eq!(a[13] & 4, 0);
+    assert_eq!(a[13] & 0xf8, 0xf8);
+    assert!(mask(a, 0) && mask(a, 33));
+    apply(
+        &mut s,
+        vec![edit(vec![Change::AutoStart { enabled: true }], None, false)],
+    )
+    .unwrap();
+    assert_eq!(selected(&s.document, "Main A", 1)[13] & 4, 4);
+    let stable = s.document.style.bytes().unwrap();
+    assert!(
+        apply(
+            &mut s,
+            vec![edit(
+                vec![
+                    Change::RootEnabled {
+                        root: 0,
+                        enabled: true
+                    },
+                    Change::RootEnabled {
+                        root: 12,
+                        enabled: true
+                    }
+                ],
+                None,
+                false
+            )]
+        )
+        .is_err()
+    );
+    assert_eq!(s.document.style.bytes().unwrap(), stable);
+}
+
+#[test]
+fn root_mask_and_autostart_match_608_observed_stylemagic_helper_results() {
+    let oracle: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/stylemagic-bit-oracle.json")).unwrap();
+    let roots = oracle["rows"]["root"].as_array().unwrap();
+    let starts = oracle["rows"]["autoStart"].as_array().unwrap();
+    assert_eq!(roots.len(), 96);
+    assert_eq!(starts.len(), 512);
+    let template = route(1);
+    for (kind, rows) in [("root", roots), ("autoStart", starts)] {
+        for row in rows {
+            let a = row.as_array().unwrap();
+            let n = |i: usize| a[i].as_u64().unwrap() as u16;
+            let mut raw = fixture(false);
+            let pos = raw.windows(47).position(|w| w == template).unwrap();
+            let (change, expected) = if kind == "root" {
+                raw[pos + 11..pos + 13].copy_from_slice(&n(2).to_le_bytes());
+                (
+                    Change::RootEnabled {
+                        root: n(0) as u8,
+                        enabled: n(1) != 0,
+                    },
+                    n(3),
+                )
+            } else {
+                raw[pos + 13] = n(1) as u8;
+                (Change::AutoStart { enabled: n(0) != 0 }, n(2))
+            };
+            let mut s = Session::open(&raw, "StyleMagic bit oracle".into()).unwrap();
+            apply(&mut s, vec![edit(vec![change], None, false)]).unwrap();
+            let result = selected(&s.document, "Main A", 1);
+            let observed = if kind == "root" {
+                u16::from_le_bytes([result[11], result[12]])
+            } else {
+                u16::from(result[13])
+            };
+            assert_eq!(observed, expected, "{kind}: {row}");
+        }
+    }
 }
 #[test]
 fn source_chords_exclusive_preserves_reserved_bits_and_other_sections() {

@@ -273,6 +273,24 @@ impl Transport {
             initial_effects,
         } = options;
         let plan = plan_with_initial_effects(doc, section, &channels, initial_effects)?;
+        self.play_plan(plan, channels, index, name, looping)
+    }
+    pub fn play_plan(
+        &mut self,
+        plan: Plan,
+        channels: Vec<u8>,
+        index: usize,
+        name: String,
+        looping: bool,
+    ) -> Result<()> {
+        if channels.is_empty()
+            || channels.iter().any(|c| !(1..=16).contains(c))
+            || plan.duration.is_zero()
+        {
+            return Err(Error::Midi(
+                "Invalid prepared playback route or duration".into(),
+            ));
+        }
         self.stop();
         let output = MidiOutput::new("GenosStyleStudio playback").map_err(err)?;
         let ports = output.ports();

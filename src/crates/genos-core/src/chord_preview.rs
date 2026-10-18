@@ -394,7 +394,20 @@ fn validate_rule(rule: &PitchRule<'_>) -> Result<()> {
         || rule.note_limit_high > 127
         || !matches!(rule.kind, "pitched" | "guitar")
         || !matches!(rule.ntr, "root_trans" | "root_fixed")
-        || !matches!(rule.ntt, "bypass" | "chord" | "melody" | "melodic_minor")
+        || !matches!(
+            rule.ntt,
+            "bypass"
+                | "chord"
+                | "melody"
+                | "melodic_minor"
+                | "melodic_minor_5th"
+                | "harmonic_minor"
+                | "harmonic_minor_5th"
+                | "natural_minor"
+                | "natural_minor_5th"
+                | "dorian"
+                | "dorian_5th"
+        )
         || tone_degrees(source).is_none()
         || tone_degrees(rule.target_quality).is_none()
     {
@@ -461,22 +474,47 @@ fn preview_pitched(note: u8, rule: &PitchRule<'_>) -> Result<Option<u8>> {
     let pc = diff.rem_euclid(12) as u8;
     let mut mapped = pc;
 
-    if rule.ntt == "melodic_minor" {
+    if matches!(
+        rule.ntt,
+        "melodic_minor"
+            | "melodic_minor_5th"
+            | "harmonic_minor"
+            | "harmonic_minor_5th"
+            | "natural_minor"
+            | "natural_minor_5th"
+            | "dorian"
+            | "dorian_5th"
+    ) {
         let minor_sources = ["Minor", "m7", "m7(11)"];
         let minor_targets = ["Minor", "m7", "dim", "m7b5"];
         let major_targets = ["Major", "Maj7", "7", "aug"];
-        if !minor_sources.contains(&source_quality)
-            && minor_targets.contains(&target_quality)
-            && pc == 4
+        // Yamaha Genos Reference Manual H0 p29: these tables alter only
+        // named degrees, not every pitch in a generic target scale.
+        let sixth = rule.ntt.starts_with("harmonic_") || rule.ntt.starts_with("natural_");
+        let seventh = rule.ntt.starts_with("natural_") || rule.ntt.starts_with("dorian");
+        if !minor_sources.contains(&source_quality) && minor_targets.contains(&target_quality) {
+            mapped = match pc {
+                4 => 3,
+                9 if sixth => 8,
+                11 if seventh => 10,
+                _ => pc,
+            };
+        } else if minor_sources.contains(&source_quality) && major_targets.contains(&target_quality)
         {
-            mapped = 3;
-        } else if minor_sources.contains(&source_quality)
-            && major_targets.contains(&target_quality)
-            && pc == 3
-        {
-            mapped = 4;
+            mapped = match pc {
+                3 => 4,
+                8 if sixth => 9,
+                10 if seventh => 11,
+                _ => pc,
+            };
         }
-        // else leave mapped=pc (no transpose_degree on melodic_minor path)
+        if rule.ntt.ends_with("_5th") && pc == 7 {
+            mapped = match target_quality {
+                "aug" => 8,
+                "dim" | "m7b5" => 6,
+                _ => mapped,
+            };
+        }
     } else if rule.ntt != "bypass" {
         mapped = transpose_degree(pc, source_quality, target_quality, rule.ntt == "chord")?;
     }

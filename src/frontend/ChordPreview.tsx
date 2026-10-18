@@ -25,6 +25,20 @@ type ChordInspect = {
 type Remapped = { source: number; preview: number | null; silent: boolean };
 
 type PreviewKind = "pitched" | "guitar" | "expansion";
+const nttModes = [
+  ["bypass", "Bypass (root shift only)"],
+  ["chord", "Chord"],
+  ["melody", "Melody"],
+  ["melodic_minor", "Melodic minor"],
+  ["melodic_minor_5th", "Melodic minor 5th"],
+  ["harmonic_minor", "Harmonic minor"],
+  ["harmonic_minor_5th", "Harmonic minor 5th"],
+  ["natural_minor", "Natural minor"],
+  ["natural_minor_5th", "Natural minor 5th"],
+  ["dorian", "Dorian"],
+  ["dorian_5th", "Dorian 5th"],
+] as const;
+type Ntt = (typeof nttModes)[number][0];
 
 export function ChordPreview({
   section,
@@ -42,9 +56,7 @@ export function ChordPreview({
   const [sourceQuality, setSourceQuality] = useState("Major");
   const [quality, setQuality] = useState("Major");
   const [kind, setKind] = useState<PreviewKind>("pitched");
-  const [ntt, setNtt] = useState<
-    "bypass" | "chord" | "melody" | "melodic_minor"
-  >("chord");
+  const [ntt, setNtt] = useState<Ntt>("chord");
   const [ntr, setNtr] = useState<"root_trans" | "root_fixed">("root_trans");
   const [bass, setBass] = useState(-1);
   const [inspect, setInspect] = useState<ChordInspect | null>(null);
@@ -262,17 +274,13 @@ export function ChordPreview({
                   <select
                     aria-label="Preview NTT mode"
                     value={ntt}
-                    onChange={(e) =>
-                      setNtt(
-                        e.target.value as
-                          "bypass" | "chord" | "melody" | "melodic_minor",
-                      )
-                    }
+                    onChange={(e) => setNtt(e.target.value as Ntt)}
                   >
-                    <option value="bypass">Bypass (root shift only)</option>
-                    <option value="chord">Chord</option>
-                    <option value="melody">Melody</option>
-                    <option value="melodic_minor">Melodic minor</option>
+                    {nttModes.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label className="field">
