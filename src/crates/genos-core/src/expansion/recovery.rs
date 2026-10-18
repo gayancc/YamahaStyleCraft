@@ -3,8 +3,13 @@
 use super::n27::{self, InstrumentInfo};
 use super::ppf::{self, PpfPackage, ResourceKind};
 use super::ppi::{self, PpiPackage};
+use super::secure::{self, SEED_LEN};
+use super::vprs::{self, VprsInfo};
+use super::wave_index::{self, WaveIndex};
 use crate::Error;
 use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
@@ -13,6 +18,8 @@ pub struct RecoveryReport {
     pub installation: Option<PpiPackage>,
     pub instrument: Option<InstrumentInfo>,
     pub project: Option<PpfPackage>,
+    pub vprs: Option<VprsInfo>,
+    pub wave_index: Option<WaveIndex>,
     pub capabilities: Vec<Capability>,
     pub blockers: Vec<String>,
     pub notes: Vec<String>,
@@ -31,15 +38,39 @@ pub struct Capability {
 pub struct ExtractRequest {
     pub source_path: String,
     pub dest_dir: String,
-    /// `"ppf"` or `"ppi"`
+    /// `"ppf"`, `"ppi"`, or `"vwst"`
     pub kind: String,
     pub resource_index: usize,
+    /// Optional 32-char hex SME seed for `vwst` extracts (EV-0316).
+    #[serde(default)]
+    pub encryption_key_hex: Option<String>,
+    /// Byte offset into VWST payload (from wave index `startAddress`).
+    #[serde(default)]
+    pub vwst_offset: Option<u64>,
+    /// Byte length to read from VWST payload.
+    #[serde(default)]
+    pub vwst_size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RecoverOptions {
+    pub wave_index_path: Option<PathBuf>,
+    pub encryption_key_hex: Option<String>,
 }
 
 pub fn recover_pack(
     ppi_path: Option<&Path>,
     n27_path: Option<&Path>,
     ppf_path: Option<&Path>,
+) -> Result<RecoveryReport, Error> {
+    recover_pack_with_options(ppi_path, n27_path, ppf_path, RecoverOptions::default())
+}
+
+pub fn recover_pack_with_options(
+    ppi_path: Option<&Path>,
+    n27_path: Option<&Path>,
+    ppf_path: Option<&Path>,
+    options: RecoverOptions,
 ) -> Result<RecoveryReport, Error> {
     let mut notes = Vec::new();
     let mut blockers = Vec::new();
@@ -66,6 +97,13 @@ pub fn recover_pack(
         None => None,
     };
 
+    let wave_index = match options.wave_index_path.as_deref() {
+        Some(p) => Some(wave_index::parse_wave_index_file(p)?),
+        None => None,
+    };
+
+    let mut vprs = None;
+
     if let Some(ref inst) = installation {
         let midi_items = inst
             .packs
@@ -87,18 +125,59 @@ pub fn recover_pack(
             status: "verified-recoverable".into(),
             detail: format!("{midi_items} MIDI FBIN payloads (bank/program setup)"),
         });
+
+        if let Some(section) = inst.sections.iter().find(|s| s.id == "VPRS") {
+            match vprs::summarize_vprs(Path::new(&inst.path), section.offset, section.size) {
+                Ok(info) => {
+                    capabilities.push(Capability {
+                        category: "voice-parameters".into(),
+                        status: "partially-recovered".into(),
+                        detail: format!(
+                            "VPRS banner={:?}; field map incomplete (EV-0317)",
+                            info.banner
+                        ),
+                    });
+                    vprs = Some(info);
+                }
+                Err(e) => notes.push(format!("VPRS summarize failed: {e}")),
+            }
+        }
+
         let has_vwst = inst.sections.iter().any(|s| s.id == "VWST");
+        let key_status = match options.encryption_key_hex.as_deref().map(str::trim) {
+            None | Some("") => Ok(false),
+            Some(hex) => parse_seed_hex(Some(hex)).map(|_| true),
+        };
         if has_vwst {
-            capabilities.push(Capability {
-                category: "waveforms".into(),
-                status: "present-undecoded".into(),
-                detail: "VWST/VWDL high-entropy sections use IO::Secure::encryptbuf; samples not recovered from installation data yet (EV-0312/0313)".into(),
-            });
-            if project.is_none() {
-                blockers.push(
-                    "Editable pack reconstruction with original samples is blocked for installation-only recovery until VWST decryption is recovered, or a source .ppf is provided."
-                        .into(),
-                );
+            match key_status {
+                Ok(true) => {
+                    capabilities.push(Capability {
+                        category: "waveforms".into(),
+                        status: "keyed-decrypt-ready".into(),
+                        detail: "SME stream cipher implemented (EV-0316); offline seed provided — VWST extract available via kind=vwst".into(),
+                    });
+                }
+                Ok(false) => {
+                    capabilities.push(Capability {
+                        category: "waveforms".into(),
+                        status: "present-undecoded".into(),
+                        detail: "VWST/VWDL use IO::Secure::sme_encryptbuf (16-byte seed → 128-byte XOR table). Offline Model Encryption supplies the seed into the encrypt context (+0x10 / CESC); not .n27 alone. Seed bytes still unidentified (EV-0316)".into(),
+                    });
+                    if project.is_none() {
+                        blockers.push(
+                            "Editable pack reconstruction with original samples is blocked for installation-only recovery until the offline SME seed is supplied (or a source .ppf is provided)."
+                                .into(),
+                        );
+                    }
+                }
+                Err(e) => {
+                    capabilities.push(Capability {
+                        category: "waveforms".into(),
+                        status: "present-undecoded".into(),
+                        detail: "VWST present but encryptionkey could not be parsed".into(),
+                    });
+                    blockers.push(format!("encryptionkey invalid: {e}"));
+                }
             }
         }
         if !inst.diagnostics.is_empty() {
@@ -107,6 +186,19 @@ pub fn recover_pack(
                 inst.diagnostics.len()
             ));
         }
+    }
+
+    if let Some(ref idx) = wave_index {
+        capabilities.push(Capability {
+            category: "yem-wave-index".into(),
+            status: "verified-recoverable".into(),
+            detail: format!(
+                "{} wave entries with VWST byte offsets (frame<<4==start) from {}",
+                idx.entries.len(),
+                idx.path
+            ),
+        });
+        notes.push(idx.note.clone());
     }
 
     if let Some(ref proj) = project {
@@ -145,14 +237,44 @@ pub fn recover_pack(
         ));
     }
 
+    notes.push(
+        "SME algorithm recovered from Expansion Manager (EV-0316). Provide the offline 16-byte SME seed (32 hex chars) to decrypt VWST slices."
+            .into(),
+    );
+
     Ok(RecoveryReport {
         installation,
         instrument,
         project,
+        vprs,
+        wave_index,
         capabilities,
         blockers,
         notes,
     })
+}
+
+fn parse_seed_hex(hex: Option<&str>) -> Result<[u8; SEED_LEN], Error> {
+    let Some(hex) = hex.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Err(Error::Format("encryption key not provided".into()));
+    };
+    let cleaned: String = hex.chars().filter(|c| *c != ' ' && *c != '-').collect();
+    if cleaned.len() != SEED_LEN * 2 {
+        return Err(Error::Format(format!(
+            "encryption key must be {} hex bytes ({} hex chars), got {}",
+            SEED_LEN,
+            SEED_LEN * 2,
+            cleaned.len()
+        )));
+    }
+    let mut seed = [0u8; SEED_LEN];
+    for (i, chunk) in cleaned.as_bytes().chunks(2).enumerate() {
+        let s = std::str::from_utf8(chunk)
+            .map_err(|_| Error::Format("encryption key is not valid hex".into()))?;
+        seed[i] = u8::from_str_radix(s, 16)
+            .map_err(|_| Error::Format("encryption key is not valid hex".into()))?;
+    }
+    Ok(seed)
 }
 
 fn resolve_dest_dir(dest: &Path) -> Result<PathBuf, Error> {
@@ -164,6 +286,64 @@ fn resolve_dest_dir(dest: &Path) -> Result<PathBuf, Error> {
         return Err(Error::Format("dest_dir is not a directory".into()));
     }
     Ok(canonical)
+}
+
+fn extract_vwst_slice(req: &ExtractRequest) -> Result<PathBuf, Error> {
+    let seed = parse_seed_hex(req.encryption_key_hex.as_deref())?;
+    let offset = req
+        .vwst_offset
+        .ok_or_else(|| Error::Format("vwst_offset required for kind=vwst".into()))?;
+    let size = req
+        .vwst_size
+        .ok_or_else(|| Error::Format("vwst_size required for kind=vwst".into()))?;
+    if size == 0 || size > 64 * 1024 * 1024 {
+        return Err(Error::Format("vwst_size out of allowed range".into()));
+    }
+
+    let source = Path::new(&req.source_path);
+    let dest = resolve_dest_dir(Path::new(&req.dest_dir))?;
+    let pkg = ppi::parse_ppi(source)?;
+    let vwst = pkg
+        .sections
+        .iter()
+        .find(|s| s.id == "VWST")
+        .ok_or_else(|| Error::Format("installation has no VWST section".into()))?;
+
+    let payload_base = vwst
+        .offset
+        .checked_add(8)
+        .ok_or_else(|| Error::Format("VWST payload base overflow".into()))?;
+    let payload_end = payload_base
+        .checked_add(vwst.size as u64)
+        .ok_or_else(|| Error::Format("VWST payload end overflow".into()))?;
+    let abs = payload_base
+        .checked_add(offset)
+        .ok_or_else(|| Error::Format("VWST slice offset overflow".into()))?;
+    let end = abs
+        .checked_add(size)
+        .ok_or_else(|| Error::Format("VWST slice end overflow".into()))?;
+    if end > payload_end {
+        return Err(Error::Format(
+            "requested VWST slice exceeds section bounds".into(),
+        ));
+    }
+    if req.resource_index != 0 {
+        return Err(Error::Format(
+            "kind=vwst ignores resource_index; pass 0".into(),
+        ));
+    }
+
+    let mut file = File::open(source)?;
+    file.seek(SeekFrom::Start(abs))?;
+    let mut cipher = vec![0u8; size as usize];
+    file.read_exact(&mut cipher)?;
+    let counter = (offset & 0x7f) as u16;
+    let plain = secure::decrypt_sme(&cipher, &seed, counter)?;
+
+    let name = format!("vwst_{offset:x}_{size:x}.bin");
+    let out = dest.join(name);
+    std::fs::write(&out, plain)?;
+    Ok(out)
 }
 
 pub fn extract_resource(req: &ExtractRequest) -> Result<PathBuf, Error> {
@@ -224,6 +404,7 @@ pub fn extract_resource(req: &ExtractRequest) -> Result<PathBuf, Error> {
             );
             ppi::extract_pack_item(source, item, &dest, &name)
         }
+        "vwst" => extract_vwst_slice(req),
         other => Err(Error::Format(format!("unsupported extract kind {other}"))),
     }
 }

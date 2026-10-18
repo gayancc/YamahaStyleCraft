@@ -2411,7 +2411,8 @@ export function App() {
               </li>
               <li>
                 <strong>Partial (expansion packs):</strong> PPI/PQI section map +
-                PACK MIDI extract; PPF AIFF/UVF extract; VWST sample decrypt and
+                PACK MIDI extract; PPF AIFF/UVF extract; SME VWST decrypt (needs
+                offline SME seed) and
                 YEM-verified .ppf rewrite remain open.
               </li>
               <li>

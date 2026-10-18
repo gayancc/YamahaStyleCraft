@@ -1589,6 +1589,14 @@ kbd {
   display: grid;
   gap: 12px;
 }
+.recovery-key-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono, ui-monospace, Consolas, monospace);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 .recovery-row {
   display: flex;
   gap: 8px;

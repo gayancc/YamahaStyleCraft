@@ -401,11 +401,18 @@ fn analyze_expansion_pack(
     ppi_path: Option<String>,
     n27_path: Option<String>,
     ppf_path: Option<String>,
+    wave_index_path: Option<String>,
+    encryption_key_hex: Option<String>,
 ) -> Result<genos_core::expansion::RecoveryReport, String> {
-    genos_core::expansion::recover_pack(
+    use genos_core::expansion::recovery::RecoverOptions;
+    genos_core::expansion::recovery::recover_pack_with_options(
         ppi_path.as_deref().map(Path::new),
         n27_path.as_deref().map(Path::new),
         ppf_path.as_deref().map(Path::new),
+        RecoverOptions {
+            wave_index_path: wave_index_path.map(PathBuf::from),
+            encryption_key_hex,
+        },
     )
     .map_err(error)
 }

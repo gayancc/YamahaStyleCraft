@@ -45,6 +45,8 @@ type RecoveryReport = {
       size: number;
     }[];
   };
+  vprs?: { banner?: string; note: string };
+  waveIndex?: { path: string; entries: { waveKey: string; startAddress: number; waveSize: number }[]; note: string };
   capabilities: Capability[];
   blockers: string[];
   notes: string[];
@@ -54,6 +56,8 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
   const [ppiPath, setPpiPath] = useState<string | null>(null);
   const [n27Path, setN27Path] = useState<string | null>(null);
   const [ppfPath, setPpfPath] = useState<string | null>(null);
+  const [waveIndexPath, setWaveIndexPath] = useState<string | null>(null);
+  const [encryptionKeyHex, setEncryptionKeyHex] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<RecoveryReport | null>(null);
@@ -75,6 +79,8 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
         ppiPath,
         n27Path,
         ppfPath,
+        waveIndexPath,
+        encryptionKeyHex: encryptionKeyHex.trim() || null,
       });
       setReport(next);
     } catch (e) {
@@ -157,9 +163,10 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
 
         <p className="modal-lead">
           Analyze Yamaha installation (`.ppi`/`.pqi`) and project (`.ppf`)
-          files. Waveforms inside installation packages may be encrypted;
-          editable `.ppf` reconstruction is offered only when verified data is
-          available.
+          files. VWST samples use the recovered SME stream cipher; the 16-byte
+          seed comes from offline Model Encryption (encrypt context /{" "}
+          <code>CESC</code>), not a live SSL registration fetch and not the{" "}
+          <code>.n27</code> alone.
         </p>
 
         <ol className="recovery-steps">
@@ -217,6 +224,38 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
               </button>
             </div>
           </li>
+          <li>
+            <strong>4. YEM wave index (optional)</strong>
+            <div className="recovery-row">
+              <code>
+                {waveIndexPath ??
+                  "Optional InstallTargets/.../.waves catalog for VWST offsets"}
+              </code>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  void pick([
+                    { name: "Wave index", extensions: ["waves", "xml"] },
+                  ]).then((p) => p && setWaveIndexPath(p))
+                }
+              >
+                <FolderOpen size={14} /> Select
+              </button>
+            </div>
+          </li>
+          <li>
+            <strong>5. Offline SME seed (optional)</strong>
+            <div className="recovery-row">
+              <input
+                className="recovery-key-input"
+                spellCheck={false}
+                placeholder="32 hex chars — offline SME seed (Model Encryption)"
+                value={encryptionKeyHex}
+                onChange={(e) => setEncryptionKeyHex(e.target.value)}
+                disabled={busy}
+              />
+            </div>
+          </li>
         </ol>
 
         <div className="recovery-actions">
@@ -265,6 +304,25 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                     <li key={b}>{b}</li>
                   ))}
                 </ul>
+              </section>
+            )}
+
+            {report.vprs?.banner && (
+              <section>
+                <h3>VPRS</h3>
+                <p>
+                  {report.vprs.banner} — {report.vprs.note}
+                </p>
+              </section>
+            )}
+
+            {report.waveIndex && (
+              <section>
+                <h3>YEM wave index</h3>
+                <p>
+                  {report.waveIndex.entries.length} entries ·{" "}
+                  {report.waveIndex.path}
+                </p>
               </section>
             )}
 
@@ -356,11 +414,13 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
             <section>
               <h3>PPF reconstruction</h3>
               <p>
-                {report.blockers.some((b) => b.includes("ppf"))
-                  ? "Blocked for installation-only recovery: samples remain in encrypted VWST. Use a source .ppf when available, or wait for Secure stream decoding."
-                  : report.project
-                    ? "Source .ppf resources can be extracted. Direct YEM-importable rebuild from .ppi alone is not claimed."
-                    : "No .ppf loaded."}
+                {report.capabilities.some((c) => c.status === "keyed-decrypt-ready")
+                  ? "SME decrypt is ready: supply VWST offsets (from a YEM .waves index) via extract kind=vwst."
+                  : report.blockers.some((b) => b.includes("encryptionkey") || b.includes("SME seed") || b.includes("samples") || b.includes("offline"))
+                    ? "Blocked for installation-only recovery: VWST still needs the offline SME seed (or a source .ppf)."
+                    : report.project
+                      ? "Source .ppf resources can be extracted. Direct YEM-importable rebuild from .ppi alone is not claimed."
+                      : "No .ppf loaded."}
               </p>
             </section>
           </div>
