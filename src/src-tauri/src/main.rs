@@ -427,6 +427,13 @@ fn extract_expansion_resource(
 }
 
 #[tauri::command]
+fn extract_all_expansion_resources(
+    request: genos_core::expansion::ExtractAllRequest,
+) -> Result<genos_core::expansion::ExtractAllResult, String> {
+    genos_core::expansion::recovery::extract_all_resources(&request).map_err(error)
+}
+
+#[tauri::command]
 fn rewrite_expansion_ppf(source_path: String, dest_path: String) -> Result<String, String> {
     let src = Path::new(&source_path);
     let data = std::fs::read(src).map_err(error)?;
@@ -1249,6 +1256,7 @@ fn main() {
             expansion_guitar_candidate_phase1,
             analyze_expansion_pack,
             extract_expansion_resource,
+            extract_all_expansion_resources,
             rewrite_expansion_ppf
         ])
         .on_window_event(|window, event| {

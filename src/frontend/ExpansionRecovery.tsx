@@ -125,13 +125,19 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const pickExtractDir = async () => {
+    const dest = await open({ directory: true, multiple: false });
+    return typeof dest === "string" ? dest : null;
+  };
+
   const extractPpi = async (index: number) => {
     if (!ppiPath || !isTauri()) return;
     setBusy(true);
+    setError(null);
     setExtractMsg(null);
     try {
-      const dest = await open({ directory: true, multiple: false });
-      if (typeof dest !== "string") return;
+      const dest = await pickExtractDir();
+      if (!dest) return;
       const out = await invoke<string>("extract_expansion_resource", {
         request: {
           sourcePath: ppiPath,
@@ -148,13 +154,40 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const extractAllPpi = async () => {
+    if (!ppiPath || !isTauri()) return;
+    setBusy(true);
+    setError(null);
+    setExtractMsg(null);
+    try {
+      const dest = await pickExtractDir();
+      if (!dest) return;
+      const out = await invoke<{ count: number; destDir: string }>(
+        "extract_all_expansion_resources",
+        {
+          request: {
+            sourcePath: ppiPath,
+            destDir: dest,
+            kind: "ppi",
+          },
+        },
+      );
+      setExtractMsg(`Extracted ${out.count} pack items to ${out.destDir}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const extractPpf = async (index: number) => {
     if (!ppfPath || !isTauri()) return;
     setBusy(true);
+    setError(null);
     setExtractMsg(null);
     try {
-      const dest = await open({ directory: true, multiple: false });
-      if (typeof dest !== "string") return;
+      const dest = await pickExtractDir();
+      if (!dest) return;
       const out = await invoke<string>("extract_expansion_resource", {
         request: {
           sourcePath: ppfPath,
@@ -164,6 +197,32 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
         },
       });
       setExtractMsg(`Extracted ${out}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const extractAllPpf = async () => {
+    if (!ppfPath || !isTauri()) return;
+    setBusy(true);
+    setError(null);
+    setExtractMsg(null);
+    try {
+      const dest = await pickExtractDir();
+      if (!dest) return;
+      const out = await invoke<{ count: number; destDir: string }>(
+        "extract_all_expansion_resources",
+        {
+          request: {
+            sourcePath: ppfPath,
+            destDir: dest,
+            kind: "ppf",
+          },
+        },
+      );
+      setExtractMsg(`Extracted ${out.count} resources to ${out.destDir}`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -425,6 +484,11 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                   Installation · {report.installation.header.model ?? "?"} ·{" "}
                   {(report.installation.fileSize / (1024 * 1024)).toFixed(1)} MiB
                 </h3>
+                <div className="recovery-row" style={{ marginBottom: 8 }}>
+                  <button disabled={busy || !ppiPath} onClick={() => void extractAllPpi()}>
+                    <Download size={13} /> Extract all pack items
+                  </button>
+                </div>
                 <div className="section-chips">
                   {report.installation.sections.map((s) => (
                     <span key={`${s.id}-${s.offset}`} title={s.note}>
@@ -450,17 +514,21 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                               <li key={`${item.title}-${resourceIndex}`}>
                                 <span>
                                   {item.title ?? "item"} ·{" "}
-                                  {item.extension ?? "?"} · {item.fbinKind} ·{" "}
-                                  {item.fbinSize} B
+                                  {item.extension ?? "?"}
+                                  {item.fbinKind === "midi"
+                                    ? " (SMF setup)"
+                                    : ` · ${item.fbinKind}`}{" "}
+                                  · {item.fbinSize} B
                                 </span>
-                                {item.fbinKind === "midi" && (
-                                  <button
-                                    disabled={busy}
-                                    onClick={() => void extractPpi(resourceIndex)}
-                                  >
-                                    <Download size={13} /> Extract
-                                  </button>
-                                )}
+                                <button
+                                  disabled={busy}
+                                  onClick={() => void extractPpi(resourceIndex)}
+                                >
+                                  <Download size={13} /> Extract
+                                  {item.extension
+                                    ? ` .${item.extension}`
+                                    : ""}
+                                </button>
                               </li>
                             );
                           })}
@@ -479,6 +547,9 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                   {report.project.resources.length} resources
                 </h3>
                 <div className="recovery-row" style={{ marginBottom: 8 }}>
+                  <button disabled={busy || !ppfPath} onClick={() => void extractAllPpf()}>
+                    <Download size={13} /> Extract all resources
+                  </button>
                   <button disabled={busy} onClick={() => void rewritePpf()}>
                     <Download size={13} /> Rewrite structural .ppf
                   </button>

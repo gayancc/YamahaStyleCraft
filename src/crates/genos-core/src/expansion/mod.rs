@@ -17,7 +17,8 @@ pub use n27::{InstrumentInfo, parse_n27};
 pub use ppf::{PpfPackage, PpfResource, PpfWriteResource, parse_ppf, rewrite_ppf, write_ppf};
 pub use ppi::{PpiPackage, parse_ppi};
 pub use recovery::{
-    ExtractRequest, RecoverOptions, RecoveryReport, recover_pack, recover_pack_with_options,
+    ExtractAllRequest, ExtractAllResult, ExtractRequest, RecoverOptions, RecoveryReport,
+    extract_all_resources, recover_pack, recover_pack_with_options,
 };
 pub use secure::{decrypt_sme, expand_keystream};
 pub use voice_map::{PackVoiceMap, VoiceAddress, scan_midi_voice_addresses};

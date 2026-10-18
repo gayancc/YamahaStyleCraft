@@ -54,6 +54,23 @@ pub struct ExtractRequest {
     pub vwst_size: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractAllRequest {
+    pub source_path: String,
+    pub dest_dir: String,
+    /// `"ppf"` or `"ppi"`
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractAllResult {
+    pub dest_dir: String,
+    pub count: usize,
+    pub paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RecoverOptions {
     pub wave_index_path: Option<PathBuf>,
@@ -307,6 +324,100 @@ pub fn recover_pack_with_options(
     })
 }
 
+fn sanitize_export_stem(title: Option<&str>, fallback: &str) -> String {
+    title
+        .unwrap_or(fallback)
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+fn clean_eext(ext: Option<&str>) -> Option<String> {
+    let ext = ext?;
+    let cleaned: String = ext
+        .trim()
+        .trim_start_matches('.')
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_ascii_lowercase())
+    }
+}
+
+/// File extension for a PACK item export.
+///
+/// Uses the pack's `EEXT` when present (`vce`, `drm`, …). Only falls back to
+/// payload-derived extensions (`mid`/`xml`/`aif`/`bin`) when EEXT is missing.
+pub(crate) fn pack_item_export_extension(item: &ppi::PackItem) -> String {
+    if let Some(ext) = clean_eext(item.extension.as_deref()) {
+        return ext;
+    }
+    match item.fbin_kind.as_str() {
+        "midi" => "mid".into(),
+        "xml" => "xml".into(),
+        "aiff" => "aif".into(),
+        _ => "bin".into(),
+    }
+}
+
+fn ppf_resource_export_extension(res: &ppf::PpfResource) -> String {
+    if let Some(ext) = clean_eext(res.extension.as_deref()) {
+        return ext;
+    }
+    match res.kind {
+        ResourceKind::UvfXml => "xml".into(),
+        ResourceKind::Aiff => "aif".into(),
+        _ => "bin".into(),
+    }
+}
+
+fn count_extractable(source: &Path, kind: &str) -> Result<usize, Error> {
+    match kind {
+        "ppi" => {
+            let pkg = ppi::parse_ppi(source)?;
+            Ok(pkg.packs.iter().map(|p| p.items.len()).sum())
+        }
+        "ppf" => {
+            let pkg = ppf::parse_ppf_file(source)?;
+            Ok(pkg.resources.len())
+        }
+        other => Err(Error::Format(format!(
+            "unsupported extract-all kind {other}"
+        ))),
+    }
+}
+
+/// Extract every PPI pack item or PPF resource into `dest_dir`.
+pub fn extract_all_resources(req: &ExtractAllRequest) -> Result<ExtractAllResult, Error> {
+    let source = Path::new(&req.source_path);
+    let dest = resolve_dest_dir(Path::new(&req.dest_dir))?;
+    let total = count_extractable(source, &req.kind)?;
+    if total == 0 {
+        return Err(Error::Format("no extractable resources".into()));
+    }
+    let mut paths = Vec::with_capacity(total);
+    for resource_index in 0..total {
+        let out = extract_resource(&ExtractRequest {
+            source_path: req.source_path.clone(),
+            dest_dir: dest.display().to_string(),
+            kind: req.kind.clone(),
+            resource_index,
+            encryption_key_hex: None,
+            vwst_offset: None,
+            vwst_size: None,
+        })?;
+        paths.push(out.display().to_string());
+    }
+    Ok(ExtractAllResult {
+        dest_dir: dest.display().to_string(),
+        count: paths.len(),
+        paths,
+    })
+}
+
 fn parse_seed_hex(hex: Option<&str>) -> Result<[u8; SEED_LEN], Error> {
     let Some(hex) = hex.map(str::trim).filter(|s| !s.is_empty()) else {
         return Err(Error::Format("encryption key not provided".into()));
@@ -410,20 +521,11 @@ pub fn extract_resource(req: &ExtractRequest) -> Result<PathBuf, Error> {
                 .resources
                 .get(req.resource_index)
                 .ok_or_else(|| Error::Format("resource index out of range".into()))?;
-            let ext = match res.kind {
-                ResourceKind::UvfXml => "xml",
-                ResourceKind::Aiff => "aif",
-                _ => "bin",
-            };
+            let ext = ppf_resource_export_extension(res);
             let name = format!(
                 "{}_{}.{}",
                 req.resource_index,
-                res.title
-                    .as_deref()
-                    .unwrap_or("resource")
-                    .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                    .collect::<String>(),
+                sanitize_export_stem(res.title.as_deref(), "resource"),
                 ext
             );
             ppf::extract_resource(&data, res, &dest, &name)
@@ -439,25 +541,61 @@ pub fn extract_resource(req: &ExtractRequest) -> Result<PathBuf, Error> {
             let item = flat
                 .get(req.resource_index)
                 .ok_or_else(|| Error::Format("resource index out of range".into()))?;
-            let ext = if item.fbin_kind == "midi" {
-                "mid"
-            } else {
-                "bin"
-            };
+            // Prefer Yamaha EEXT (vce/drm/…) over SMF magic — FBIN is often MThd
+            // but Expansion Manager stores these as voice/drum content, not .mid.
+            let ext = pack_item_export_extension(item);
             let name = format!(
                 "{}_{}.{}",
                 req.resource_index,
-                item.title
-                    .as_deref()
-                    .unwrap_or("item")
-                    .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                    .collect::<String>(),
+                sanitize_export_stem(item.title.as_deref(), "item"),
                 ext
             );
             ppi::extract_pack_item(source, item, &dest, &name)
         }
         "vwst" => extract_vwst_slice(req),
         other => Err(Error::Format(format!("unsupported extract kind {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pack_item_export_extension;
+    use crate::expansion::ppi::{ContentStatus, PackItem};
+
+    fn item(extension: Option<&str>, fbin_kind: &str) -> PackItem {
+        PackItem {
+            title: Some("Test".into()),
+            extension: extension.map(str::to_string),
+            icon: None,
+            fbin_kind: fbin_kind.into(),
+            fbin_size: 0,
+            fbin_offset: 0,
+            status: ContentStatus::FullyDecoded,
+        }
+    }
+
+    #[test]
+    fn export_extension_prefers_pack_eext_over_midi_payload() {
+        assert_eq!(pack_item_export_extension(&item(Some("vce"), "midi")), "vce");
+        assert_eq!(pack_item_export_extension(&item(Some("drm"), "midi")), "drm");
+        assert_eq!(pack_item_export_extension(&item(Some(".VCE"), "midi")), "vce");
+    }
+
+    #[test]
+    fn export_extension_falls_back_when_eext_missing() {
+        assert_eq!(pack_item_export_extension(&item(None, "midi")), "mid");
+        assert_eq!(pack_item_export_extension(&item(Some("  "), "xml")), "xml");
+        assert_eq!(pack_item_export_extension(&item(None, "unknown")), "bin");
+    }
+
+    #[test]
+    fn extract_all_rejects_unsupported_kind() {
+        let err = super::extract_all_resources(&super::ExtractAllRequest {
+            source_path: "missing.ppi".into(),
+            dest_dir: ".".into(),
+            kind: "vwst".into(),
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("unsupported extract-all kind"));
     }
 }
