@@ -760,16 +760,16 @@ export function ControllerLane({
         tabIndex={0}
         aria-label={
           lane === -1
-            ? "Velocity lane. For Linear/Ease/Step, drag between points; yellow handle shows curve shape."
+            ? "Velocity lane"
             : eqBand
-              ? `EQ ${eqBand === "eqLow" ? "Low" : "High"} NRPN lane. Draw timed EQ automation as Genos NRPN packets.`
+              ? `EQ ${eqBand === "eqLow" ? "Low" : "High"} lane`
               : isBend
-                ? "Pitch bend lane. Draw 14-bit bend automation (0–16383, center 8192)."
+                ? "Pitch bend lane"
                 : isTempo
-                  ? "Tempo lane. Draw section BPM automation as SMF tempo meta (20–400)."
-                  : `MIDI CC${lane} lane. Click start and end points, then drag to shape the curve (yellow handle).`
+                  ? "Tempo lane"
+                  : `MIDI CC${lane} lane`
         }
-        title="Click start and end points, then drag to shape the curve (yellow handle for Linear/Ease/Step)."
+        title="Drag to draw. For Linear/Ease/Step: set start and end, then drag the yellow handle."
         style={{ touchAction: "none" }}
         onPointerDown={down}
         onPointerMove={move}

@@ -323,7 +323,7 @@ export function StyleLibrary({
     >
       <section
         ref={dialog}
-        className="modal"
+        className="modal library-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="style-library-title"

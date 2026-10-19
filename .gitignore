@@ -4,6 +4,7 @@
 !/src/
 !/assets/
 !/assets/**
+!readme.md
 
 # Documentation, research and local verification evidence stay local.
 /docs/
@@ -16,6 +17,8 @@
 
 # Dependencies, generated files and build products.
 node_modules/
+.venv-wu/
+.venv-windows-use/
 target/
 dist/
 test-results/

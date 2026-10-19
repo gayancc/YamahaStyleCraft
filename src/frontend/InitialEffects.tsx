@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { CircleHelp } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Port, View } from "./contracts";
 
@@ -81,22 +82,27 @@ export function InitialEffects({
   };
   return (
     <div className="initial-effects">
-      <label>
-        <input
-          type="checkbox"
-          aria-label="Preview initial Genos effects"
-          checked={checked}
-          disabled={disabled || pending || !view || !output}
-          onChange={() => void toggle()}
-        />{" "}
-        Preview initial Genos effects
-      </label>
-      <p className="muted">
-        Sends known reverb/chorus type and Return values once before Play. These
-        are global keyboard settings. Detailed parameters, drum setup and later
-        effect changes are not applied. Selection resets after document or
-        output changes.
-      </p>
+      <div className="initial-effects-row">
+        <label>
+          <input
+            type="checkbox"
+            aria-label="Preview initial Genos effects"
+            checked={checked}
+            disabled={disabled || pending || !view || !output}
+            onChange={() => void toggle()}
+          />{" "}
+          Preview initial Genos effects
+        </label>
+        <span
+          className="help-tip"
+          tabIndex={0}
+          role="img"
+          aria-label="Initial effects help"
+          data-tip="Sends known reverb/chorus type and Return values once before Play. These are global keyboard settings. Detailed parameters, drum setup, and later effect changes are not applied. Selection resets after document or output changes."
+        >
+          <CircleHelp size={13} aria-hidden />
+        </span>
+      </div>
       {pending && (
         <p className="muted" role="status">
           Checking initial effect settings…

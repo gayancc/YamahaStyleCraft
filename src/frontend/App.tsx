@@ -44,6 +44,8 @@ import {
   SkipForward,
   TextCursor,
   Hand,
+  AppWindow,
+  PictureInPicture2,
 } from "lucide-react";
 import { currentUiState, useStudio } from "./store";
 import type { StudioTool } from "./store";
@@ -146,6 +148,19 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+function HelpTip({ tip, label }: { tip: string; label: string }) {
+  return (
+    <span
+      className="help-tip"
+      tabIndex={0}
+      role="img"
+      aria-label={label}
+      data-tip={tip}
+    >
+      <CircleHelp size={13} aria-hidden />
+    </span>
   );
 }
 function NumberField({
@@ -1465,12 +1480,73 @@ export function App() {
   return (
     <div className="app" style={{ zoom: uiScale }}>
       <header className="titlebar">
-        <div className="brand">
-          <AudioLines size={23} />
+        <div className="brand" title="Genos Style Studio">
+          <AudioLines size={18} />
           <span>
-            Genos<span className="brand-light">StyleStudio</span>
+            Genos<span className="brand-light">Style</span>
           </span>
-          <small>0.1</small>
+        </div>
+        <div className="file-actions">
+          <button onClick={() => void openFile()} disabled={busy}>
+            <FolderOpen size={14} /> Open
+          </button>
+          <button onClick={() => void openComposer()} disabled={busy}>
+            <FilePlus2 size={14} /> New
+          </button>
+          <IconButton
+            label="Open another independent project window"
+            disabled={busy}
+            onClick={() => {
+              void openProjectWindow().catch((e) =>
+                useStudio.setState({ error: String(e) }),
+              );
+            }}
+          >
+            <AppWindow size={14} />
+          </IconButton>
+          <IconButton
+            label="Save project (Ctrl+S)"
+            onClick={() => void saveFile(true)}
+            disabled={!view || busy}
+          >
+            <Save size={14} />
+          </IconButton>
+          <IconButton
+            label="Export Style (Ctrl+Shift+S)"
+            onClick={() => void saveFile(false)}
+            disabled={!view || busy}
+          >
+            <Download size={14} />
+          </IconButton>
+          <IconButton
+            label="Export section notes CSV"
+            onClick={() => void exportCsv()}
+            disabled={!view || busy}
+          >
+            <FileDown size={14} />
+          </IconButton>
+          <IconButton
+            label="Export section JSON snapshot"
+            onClick={() => void exportJson()}
+            disabled={!view || busy}
+          >
+            <FileJson size={14} />
+          </IconButton>
+          <span className="divider" />
+          <IconButton
+            label="Undo (Ctrl+Z)"
+            onClick={() => void state.history(false)}
+            disabled={!view?.canUndo || editingDisabled}
+          >
+            <Undo2 size={14} />
+          </IconButton>
+          <IconButton
+            label="Redo (Ctrl+Shift+Z)"
+            onClick={() => void state.history(true)}
+            disabled={!view?.canRedo || editingDisabled}
+          >
+            <Redo2 size={14} />
+          </IconButton>
         </div>
         <div className="project-title">
           {view ? (
@@ -1490,101 +1566,55 @@ export function App() {
             </span>
           )}
         </div>
-        <IconButton
-          label="Expansion Pack Recovery"
-          onClick={() => setExpansionOpen(true)}
-        >
-          <PackageOpen size={17} />
-        </IconButton>
-        <IconButton
-          label="Feature inventory / limits"
-          onClick={() => setLimitsOpen(true)}
-        >
-          <ListTree size={17} />
-        </IconButton>
-          <IconButton
-            label="Recording & MIDI settings"
-            onClick={() => setRecordingMidiOpen(true)}
-          >
-            <AudioLines size={17} />
-          </IconButton>
-          <IconButton label="Help" onClick={() => setHelpOpen(true)}>
-            <CircleHelp size={17} />
-          </IconButton>
-        <IconButton
-          label="MIDI device settings"
+        <button
+          type="button"
+          className="output-select"
+          title={output?.name ?? "Select MIDI output"}
           onClick={() => {
             setDeviceOpen(true);
             void scan();
           }}
         >
-          <Settings2 size={17} />
-        </IconButton>
-      </header>
-      <div className="toolbar">
-        <div className="file-actions">
-          <button onClick={() => void openFile()} disabled={busy}>
-            <FolderOpen size={16} /> Open
-          </button>
-          <button onClick={() => void openComposer()} disabled={busy}>
-            <FilePlus2 size={16} /> New
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            title="Open another independent project window"
+          <span className={`connection-dot ${output ? "connected" : ""}`} />
+          <span className="output-select-name">
+            {output?.name ?? "Select MIDI output"}
+          </span>
+          <ChevronRight size={12} />
+        </button>
+        <div className="titlebar-tools">
+          <IconButton
+            label="Expansion Pack Recovery"
+            onClick={() => setExpansionOpen(true)}
+          >
+            <PackageOpen size={15} />
+          </IconButton>
+          <IconButton
+            label="Feature inventory / limits"
+            onClick={() => setLimitsOpen(true)}
+          >
+            <ListTree size={15} />
+          </IconButton>
+          <IconButton
+            label="Recording & MIDI settings"
+            onClick={() => setRecordingMidiOpen(true)}
+          >
+            <AudioLines size={15} />
+          </IconButton>
+          <IconButton label="Help" onClick={() => setHelpOpen(true)}>
+            <CircleHelp size={15} />
+          </IconButton>
+          <IconButton
+            label="MIDI device settings"
             onClick={() => {
-              void openProjectWindow().catch((e) =>
-                useStudio.setState({ error: String(e) }),
-              );
+              setDeviceOpen(true);
+              void scan();
             }}
           >
-            New window
-          </button>
-          <IconButton
-            label="Save project (Ctrl+S)"
-            onClick={() => void saveFile(true)}
-            disabled={!view || busy}
-          >
-            <Save size={16} />
-          </IconButton>
-          <IconButton
-            label="Export Style (Ctrl+Shift+S)"
-            onClick={() => void saveFile(false)}
-            disabled={!view || busy}
-          >
-            <Download size={16} />
-          </IconButton>
-          <IconButton
-            label="Export section notes CSV"
-            onClick={() => void exportCsv()}
-            disabled={!view || busy}
-          >
-            <FileDown size={16} />
-          </IconButton>
-          <IconButton
-            label="Export section JSON snapshot"
-            onClick={() => void exportJson()}
-            disabled={!view || busy}
-          >
-            <FileJson size={16} />
-          </IconButton>
-          <span className="divider" />
-          <IconButton
-            label="Undo (Ctrl+Z)"
-            onClick={() => void state.history(false)}
-            disabled={!view?.canUndo || editingDisabled}
-          >
-            <Undo2 size={16} />
-          </IconButton>
-          <IconButton
-            label="Redo (Ctrl+Shift+Z)"
-            onClick={() => void state.history(true)}
-            disabled={!view?.canRedo || editingDisabled}
-          >
-            <Redo2 size={16} />
+            <Settings2 size={15} />
           </IconButton>
         </div>
+      </header>
+      <div className="toolbar">
         <div className="transport">
           {view && section && (
             <ChordStrip
@@ -1596,10 +1626,12 @@ export function App() {
           )}
           <button
             type="button"
+            className="ghost transport-live"
             disabled={!section || capturing || busy || transport.playing}
+            title="Live Style preview"
             onClick={() => setLivePreviewOpen(true)}
           >
-            Live Style preview
+            Live
           </button>
           <IconButton
             label="Stop / release notes (Escape)"
@@ -1698,7 +1730,7 @@ export function App() {
               void claimMidiHere();
             }}
           >
-            {midiActive ? "MIDI active here" : "Use MIDI here"}
+            {midiActive ? "MIDI here" : "Use MIDI"}
           </button>
           <IconButton
             label="Test note (audition)"
@@ -1857,17 +1889,6 @@ export function App() {
             </select>
           </div>
         </div>
-        <button
-          className="output-select"
-          onClick={() => {
-            setDeviceOpen(true);
-            void scan();
-          }}
-        >
-          <span className={`connection-dot ${output ? "connected" : ""}`} />
-          {output?.name ?? "Select MIDI output"}
-          <ChevronRight size={13} />
-        </button>
       </div>
       {error && (
         <div className="error" role="alert">
@@ -1949,48 +1970,15 @@ export function App() {
       ) : (
         <>
           <section className="sections-strip">
-            <div className="section-heading">
-              <span className="eyebrow">STYLE SECTIONS</span>
-              <div className="section-heading-meta">
-                <span>
-                  {view.format} <i>·</i> {view.ppq} PPQN
-                </span>
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={
-                    busy || transport.playing || view.sections.length < 2
-                  }
-                  title="Copy notes and controllers into another section"
-                  onClick={() => setCopyOpen(true)}
-                >
-                  Copy…
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={busy || transport.playing}
-                  title="Fill/Break length or Shorten Section"
-                  onClick={() => setSectionLengthOpen(true)}
-                >
-                  Length…
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={busy || transport.playing}
-                  title="Import notes from another Style file"
-                  onClick={() => setLibraryOpen(true)}
-                >
-                  Library…
-                </button>
-              </div>
-            </div>
             <nav aria-label="Style sections">
               {sortSections(view.sections).map((s) => {
                 const hasNotes = view.notes.some(
                   (n) => n.start >= s.start && n.start < s.end,
                 );
+                const bars = (
+                  (s.end - s.start) /
+                  (((view.ppq * 4) / view.denominator) * view.numerator)
+                ).toLocaleString(undefined, { maximumFractionDigits: 1 });
                 return (
                   <button
                     key={s.id}
@@ -2001,25 +1989,50 @@ export function App() {
                     className={`section-chip ${s.id === sectionId ? "selected" : ""}${hasNotes ? "" : " empty-section"}`}
                     title={
                       hasNotes
-                        ? s.label
-                        : `${s.label} (no notes in this section)`
+                        ? `${s.label} · ${bars} bars`
+                        : `${s.label} · ${bars} bars (empty)`
                     }
                   >
                     <span>{s.label}</span>
                     <small>
-                      {(
-                        (s.end - s.start) /
-                        (((view.ppq * 4) / view.denominator) * view.numerator)
-                      ).toLocaleString(undefined, {
-                        maximumFractionDigits: 1,
-                      })}{" "}
-                      bars
-                      {!hasNotes ? " · empty" : ""}
+                      {bars}b{!hasNotes ? " ·∅" : ""}
                     </small>
                   </button>
                 );
               })}
             </nav>
+            <div className="section-heading-meta">
+              <span title={`${view.format} · ${view.ppq} PPQN`}>
+                {view.format}
+              </span>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy || transport.playing || view.sections.length < 2}
+                title="Copy notes and controllers into another section"
+                onClick={() => setCopyOpen(true)}
+              >
+                Copy
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy || transport.playing}
+                title="Fill/Break length or Shorten Section"
+                onClick={() => setSectionLengthOpen(true)}
+              >
+                Length
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy || transport.playing}
+                title="Import notes from another Style file"
+                onClick={() => setLibraryOpen(true)}
+              >
+                Library
+              </button>
+            </div>
           </section>
           <main
             className={`workspace${inspectorHidden ? " inspector-collapsed" : ""}`}
@@ -2137,26 +2150,22 @@ export function App() {
                   {section?.label} <i>/</i> {role(channel)}
                 </span>
                 {tab === "notes" && (
-                  <button
-                    type="button"
-                    className="ghost"
+                  <IconButton
+                    label="Detach Piano Roll (separate window)"
                     disabled={!view || busy}
-                    title="Open Piano Roll in a separate window"
                     onClick={() => {
                       void openDetachedPianoRoll(docLabel).catch((e) =>
                         useStudio.setState({ error: String(e) }),
                       );
                     }}
                   >
-                    Detach Piano Roll
-                  </button>
+                    <PictureInPicture2 size={14} />
+                  </IconButton>
                 )}
                 {tab === "mixer" && (
-                  <button
-                    type="button"
-                    className="ghost"
+                  <IconButton
+                    label="Detach Mixer (separate window)"
                     disabled={!view || busy}
-                    title="Open Mixer in a separate window"
                     onClick={() => {
                       void openDetachedMixer(docLabel)
                         .then(() => {
@@ -2173,8 +2182,8 @@ export function App() {
                         );
                     }}
                   >
-                    Detach Mixer
-                  </button>
+                    <PictureInPicture2 size={14} />
+                  </IconButton>
                 )}
               </div>
               {tab === "notes" ? (
@@ -3176,12 +3185,14 @@ export function App() {
                 <X size={18} />
               </IconButton>
             </div>
-            <p>
-              Choose a destination for source-note playback. Opening a Style
-              sends no MIDI.
-            </p>
             <label className="field">
-              <span>MIDI output</span>
+              <span className="field-label">
+                MIDI output
+                <HelpTip
+                  label="MIDI output help"
+                  tip="Choose a destination for source-note playback. Opening a Style sends no MIDI."
+                />
+              </span>
               <select
                 aria-label="MIDI output"
                 value={output ? `${output.index}:${output.name}` : ""}
@@ -3215,14 +3226,13 @@ export function App() {
               onChange={setInitialEffects}
               disabled={busy || transport.playing || capturing}
             />
-            <h3>MIDI input monitor</h3>
-            <p className="muted local-control-tip">
-              Host listen needs Genos MIDI Local Control / MIDI Out → USB so key
-              presses appear on an input such as Digital Workstation-1. Match
-              Genos transmit settings (Local Control / MIDI Out) so notes reach
-              USB. Monitor is display-only (F026 capture is separate). Zero
-              events usually means Local Out is off, not a broken port list.
-            </p>
+            <div className="section-with-help">
+              <h3>MIDI input monitor</h3>
+              <HelpTip
+                label="MIDI input monitor help"
+                tip="Host listen needs Genos MIDI Local Control / MIDI Out → USB so key presses appear on an input such as Digital Workstation-1. Match Genos transmit settings so notes reach USB. Monitor is display-only (capture is separate). Zero events usually means Local Out is off, not a broken port list."
+              />
+            </div>
             <label className="field">
               <span>Input port</span>
               <select
@@ -3293,15 +3303,13 @@ export function App() {
                 </p>
               )}
             </div>
-            <h3>MIDI capture</h3>
-            <p className="muted">
-              Arm a part with <strong>R</strong> on Source Channels (or Mixer),
-              then Start capture. Existing parts overdub under Mute/Solo while
-              you record into the armed part; Apply commits the take. Count-in,
-              thru, quantize, offset, and Record Voice live in Recording &amp;
-              MIDI settings. Export Type-0 MIDI only — no Style/CASM builder
-              (F027 gated).
-            </p>
+            <div className="section-with-help">
+              <h3>MIDI capture</h3>
+              <HelpTip
+                label="MIDI capture help"
+                tip="Arm a part with R on Source Channels or Mixer, then Start capture. Existing parts overdub under Mute/Solo while you record into the armed part; Apply commits the take. Count-in, thru, quantize, offset, and Record Voice live in Recording & MIDI settings. Export Type-0 MIDI only — no Style/CASM builder."
+              />
+            </div>
             <div className="capture-options">
               <button
                 type="button"
@@ -3562,7 +3570,7 @@ export function App() {
       {helpOpen && (
         <div className="modal-backdrop" onClick={() => setHelpOpen(false)}>
           <section
-            className="modal"
+            className="modal help-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="help-title"

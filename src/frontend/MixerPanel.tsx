@@ -37,10 +37,13 @@ function Slider({
   label,
   value,
   onCommit,
+  ariaLabel,
 }: {
   label: string;
   value: number;
   onCommit: (n: number) => void;
+  /** Accessible name; defaults to visible label. */
+  ariaLabel?: string;
 }) {
   const [v, set] = useState(value);
   useEffect(() => set(value), [value]);
@@ -51,7 +54,7 @@ function Slider({
     <label className="mixer-slider">
       <span>{label}</span>
       <input
-        aria-label={label}
+        aria-label={ariaLabel ?? label}
         type="range"
         min="0"
         max="127"
@@ -225,9 +228,8 @@ export function MixerPanel({
   return (
     <div className="mixer">
       <p className="mixer-note">
-        Controllers are written at section start. Mute and solo apply live to
-        play and parts-recording overdub. EQ High/Low use NRPN (not CC). Bend
-        range uses Genos RPN 0,0. Auto Pan writes CC10 over the section.
+        Section-start CCs · Mute/Solo live · EQ via NRPN · Bend via RPN 0,0 ·
+        Auto Pan = CC10. Scroll each strip for EQ High and bend range.
       </p>
       <label className="mixer-scope">
         <input
@@ -238,6 +240,105 @@ export function MixerPanel({
         />
         Apply mixer CC to all sections
       </label>
+      <fieldset className="mixer-autopan" disabled={editingDisabled || !section}>
+        <legend>Safe FX · CH {panTarget}</legend>
+        <label>
+          Preset
+          <select
+            aria-label="Yamaha Safe FX preset"
+            value={safeFx}
+            onChange={(e) => setSafeFx(e.target.value as SafeFxKey)}
+          >
+            {SAFE_FX_PRESETS.map((p) => (
+              <option key={p.key} value={p.key}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          disabled={busy || !section}
+          onClick={() => {
+            const preset = SAFE_FX_PRESETS.find((p) => p.key === safeFx);
+            if (!preset) return;
+            onSafeFx(
+              panTarget,
+              preset.values.map((v) => [v.controller, v.value]),
+            );
+          }}
+        >
+          Apply Safe FX
+        </button>
+        <p className="muted mixer-note" style={{ margin: 0, flexBasis: "100%" }}>
+          MIDI CC only (reverb/chorus/cutoff/resonance). Does not rewrite DSP
+          SysEx.
+        </p>
+      </fieldset>
+      <fieldset className="mixer-autopan" disabled={editingDisabled || !section}>
+        <legend>Auto Pan · CH {panTarget}</legend>
+        <label>
+          Beats
+          <input
+            type="number"
+            min={1}
+            max={16}
+            value={panBeats}
+            aria-label="Auto Pan beats"
+            onChange={(e) =>
+              setPanBeats(Math.max(1, Math.min(16, +e.target.value || 1)))
+            }
+          />
+        </label>
+        <label>
+          Shape
+          <select
+            aria-label="Auto Pan shape"
+            value={panShape}
+            onChange={(e) => setPanShape(e.target.value as AutoPanShape)}
+          >
+            <option value="sine">Sine</option>
+            <option value="triangle">Triangle</option>
+            <option value="square">Square</option>
+          </select>
+        </label>
+        <label>
+          Depth
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={panDepth}
+            aria-label="Auto Pan depth"
+            onChange={(e) => setPanDepth(+e.target.value)}
+          />
+          <output>{panDepth}%</output>
+        </label>
+        <label className="mixer-scope">
+          <input
+            type="checkbox"
+            checked={panReverse}
+            onChange={(e) => setPanReverse(e.target.checked)}
+          />
+          Reverse
+        </label>
+        <div className="mixer-autopan-actions">
+          <button
+            type="button"
+            disabled={busy || !section}
+            onClick={applyAutoPan}
+          >
+            Apply
+          </button>
+          <button
+            type="button"
+            disabled={busy || !section}
+            onClick={removeAutoPan}
+          >
+            Remove
+          </button>
+        </div>
+      </fieldset>
       <div className="mixer-strips">
         {sources.map((ch) => {
           const sounding =
@@ -309,52 +410,62 @@ export function MixerPanel({
               </div>
               <fieldset disabled={editingDisabled}>
                 <Slider
-                  label={`Ch ${ch} volume`}
+                  label="Volume"
+                  ariaLabel={`Ch ${ch} volume`}
                   value={valueAt(ch, 0xb0, 7, 100)}
                   onCommit={(n) => onCc(ch, 7, n)}
                 />
                 <Slider
-                  label={`Ch ${ch} pan`}
+                  label="Pan"
+                  ariaLabel={`Ch ${ch} pan`}
                   value={valueAt(ch, 0xb0, 10, 64)}
                   onCommit={(n) => onCc(ch, 10, n)}
                 />
                 <Slider
-                  label={`Ch ${ch} expression`}
+                  label="Expression"
+                  ariaLabel={`Ch ${ch} expression`}
                   value={valueAt(ch, 0xb0, 11, 127)}
                   onCommit={(n) => onCc(ch, 11, n)}
                 />
                 <Slider
-                  label={`Ch ${ch} sustain`}
+                  label="Sustain"
+                  ariaLabel={`Ch ${ch} sustain`}
                   value={valueAt(ch, 0xb0, 64, 0)}
                   onCommit={(n) => onCc(ch, 64, n)}
                 />
                 <Slider
-                  label={`Ch ${ch} reverb send`}
+                  label="Reverb"
+                  ariaLabel={`Ch ${ch} reverb send`}
                   value={valueAt(ch, 0xb0, 91, 40)}
                   onCommit={(n) => onCc(ch, 91, n)}
                 />
                 <Slider
-                  label={`Ch ${ch} chorus send`}
+                  label="Chorus"
+                  ariaLabel={`Ch ${ch} chorus send`}
                   value={valueAt(ch, 0xb0, 93, 0)}
                   onCommit={(n) => onCc(ch, 93, n)}
                 />
                 <Slider
-                  label={`Ch ${ch} resonance`}
+                  label="Resonance"
+                  ariaLabel={`Ch ${ch} resonance`}
                   value={valueAt(ch, 0xb0, 71, 64)}
                   onCommit={(n) => onCc(ch, 71, n)}
                 />
                 <Slider
-                  label={`Ch ${ch} cutoff`}
+                  label="Cutoff"
+                  ariaLabel={`Ch ${ch} cutoff`}
                   value={valueAt(ch, 0xb0, 74, 64)}
                   onCommit={(n) => onCc(ch, 74, n)}
                 />
                 <Slider
-                  label={`Ch ${ch} EQ Low`}
+                  label="EQ Low"
+                  ariaLabel={`Ch ${ch} EQ Low`}
                   value={eqValueAt(ch, "eqLow")}
                   onCommit={(n) => onEq(ch, "eqLow", n)}
                 />
                 <Slider
-                  label={`Ch ${ch} EQ High`}
+                  label="EQ High"
+                  ariaLabel={`Ch ${ch} EQ High`}
                   value={eqValueAt(ch, "eqHigh")}
                   onCommit={(n) => onEq(ch, "eqHigh", n)}
                 />
@@ -369,95 +480,6 @@ export function MixerPanel({
           );
         })}
       </div>
-      <fieldset className="mixer-autopan" disabled={editingDisabled || !section}>
-        <legend>Safe FX · CH {panTarget}</legend>
-        <label>
-          Preset
-          <select
-            aria-label="Yamaha Safe FX preset"
-            value={safeFx}
-            onChange={(e) => setSafeFx(e.target.value as SafeFxKey)}
-          >
-            {SAFE_FX_PRESETS.map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          disabled={busy || !section}
-          onClick={() => {
-            const preset = SAFE_FX_PRESETS.find((p) => p.key === safeFx);
-            if (!preset) return;
-            onSafeFx(
-              panTarget,
-              preset.values.map((v) => [v.controller, v.value]),
-            );
-          }}
-        >
-          Apply Safe FX
-        </button>
-        <p className="muted mixer-note" style={{ margin: 0, flexBasis: "100%" }}>
-          MIDI CC only (reverb/chorus/cutoff/resonance). Does not rewrite DSP
-          SysEx.
-        </p>
-      </fieldset>
-      <fieldset className="mixer-autopan" disabled={editingDisabled || !section}>
-        <legend>Auto Pan · CH {panTarget}</legend>
-        <label>
-          Beats
-          <input
-            type="number"
-            min={1}
-            max={16}
-            value={panBeats}
-            aria-label="Auto Pan beats"
-            onChange={(e) => setPanBeats(Math.max(1, Math.min(16, +e.target.value || 1)))}
-          />
-        </label>
-        <label>
-          Shape
-          <select
-            aria-label="Auto Pan shape"
-            value={panShape}
-            onChange={(e) => setPanShape(e.target.value as AutoPanShape)}
-          >
-            <option value="sine">Sine</option>
-            <option value="triangle">Triangle</option>
-            <option value="square">Square</option>
-          </select>
-        </label>
-        <label>
-          Depth
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={panDepth}
-            aria-label="Auto Pan depth"
-            onChange={(e) => setPanDepth(+e.target.value)}
-          />
-          <output>{panDepth}%</output>
-        </label>
-        <label className="mixer-scope">
-          <input
-            type="checkbox"
-            checked={panReverse}
-            onChange={(e) => setPanReverse(e.target.checked)}
-          />
-          Reverse
-        </label>
-        <div className="mute-solo">
-          <button type="button" disabled={busy || !section} onClick={applyAutoPan}>
-            Apply Auto Pan
-          </button>
-          <button type="button" disabled={busy || !section} onClick={removeAutoPan}>
-            Remove Auto Pan
-          </button>
-        </div>
-      </fieldset>
       {section && (
         <p className="muted mixer-note">
           Section {section.label} · {sources.length} sources

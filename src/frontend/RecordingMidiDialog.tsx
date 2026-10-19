@@ -101,7 +101,7 @@ export function RecordingMidiDialog({
     >
       <section
         ref={dialog}
-        className="modal"
+        className="modal recording-midi-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="recording-midi-title"
@@ -120,11 +120,10 @@ export function RecordingMidiDialog({
             ×
           </button>
         </div>
+        <div className="recording-midi-body">
         <p className="source-zone">
-          Input, output, count-in, quantize, offset, thru, metronome, Record
-          data, and Record Voice. Capture starts from the MIDI panel or
-          transport Rec. Genos EQ input is not available (no verified part-EQ
-          SysEx). Unknown SysEx/DSP are never applied.
+          Capture from the MIDI panel or transport Rec. Genos EQ input is
+          unavailable (no verified part-EQ SysEx).
         </p>
         <fieldset className="field" disabled={disabled}>
           <label>
@@ -237,22 +236,22 @@ export function RecordingMidiDialog({
               title="Positive pulls notes earlier (latency compensation)"
             />
           </label>
-          <label className="mixer-scope">
+          <label className="check">
             <input
               type="checkbox"
               checked={midiThru}
               disabled={!output}
               onChange={(e) => onThruChange(e.target.checked)}
             />
-            MIDI thru
+            <span>MIDI thru</span>
           </label>
-          <label className="mixer-scope">
+          <label className="check">
             <input
               type="checkbox"
               checked={metronome}
               onChange={(e) => onMetronomeChange(e.target.checked)}
             />
-            Metronome during playback
+            <span>Metronome during playback</span>
           </label>
           <div className="capture-options">
             <button
@@ -282,12 +281,12 @@ export function RecordingMidiDialog({
               <option value="notes">Notes only</option>
             </select>
           </label>
-          <label className="mixer-scope" title="Excluded: no verified Genos part-EQ SysEx">
+          <label className="check" title="Excluded: no verified Genos part-EQ SysEx">
             <input type="checkbox" checked={false} disabled />
-            Record Genos EQ input (unavailable)
+            <span>Record Genos EQ input (unavailable)</span>
           </label>
           <label
-            className="mixer-scope"
+            className="check"
             title={
               recData === "notes"
                 ? "Voice change applies with controller/Voice Record data modes"
@@ -300,7 +299,7 @@ export function RecordingMidiDialog({
               disabled={recData === "notes"}
               onChange={(e) => onRecordVoiceChange(e.target.checked)}
             />
-            Record Voice change
+            <span>Record Voice change</span>
           </label>
           {recordVoice && recData !== "notes" && (
             <div className="capture-options">
@@ -352,6 +351,7 @@ export function RecordingMidiDialog({
             </div>
           )}
         </fieldset>
+        </div>
         <div className="modal-actions">
           <button type="button" disabled={disabled} onClick={() => close.current()}>
             Done

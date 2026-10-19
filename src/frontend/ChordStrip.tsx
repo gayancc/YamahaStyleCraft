@@ -145,7 +145,9 @@ export function ChordStrip({
 
   return (
     <div className="chord-strip" aria-label="Chord preview">
-      <span className="chord-strip-label">Chord preview</span>
+      <span className="chord-strip-label" title="Chord preview">
+        Chord
+      </span>
       <select
         aria-label="Chord preview mode"
         value={mode}

@@ -233,14 +233,8 @@ export function PianoTools({
         />{" "}
         Follow playback
       </label>
-      <p className="muted piano-tool-hint">
-        Smart Tool (Select): empty click adds a note; drag empty space
-        marquee-selects; drag notes to move; edge-drag resizes; right-drag
-        erases. Draw (P) · Paint (B) · Erase (D) · Cursor (2) · Pan (3) ·
-        middle-drag pans. Hold-right 1s opens note properties.
-      </p>
       <details className="piano-tool-menu">
-        <summary>Tools</summary>
+        <summary title="Note transforms and Clear Part">Tools</summary>
         <div>
           <select
             aria-label="Note transform"
@@ -452,6 +446,12 @@ export function PianoTools({
           </button>
           <small>{advisory.text}</small>
           <small>Each tool commits once. CASM is preserved.</small>
+          <small>
+            Select: empty click adds; drag empty marquee-selects; drag notes
+            to move; edge-drag resizes; right-drag erases. Draw (P) · Paint
+            (B) · Erase (D) · Cursor (2) · Pan (3). Hold-right 1s for note
+            properties.
+          </small>
         </div>
       </details>
       {onNoteColorsChange ? (

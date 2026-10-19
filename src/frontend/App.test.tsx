@@ -688,7 +688,7 @@ describe("real IPC wiring with isolated test mocks", () => {
     expect(screen.getByText(/F027/i)).toBeTruthy();
     expect(screen.getByText(/EV-0171/i)).toBeTruthy();
   });
-  it("shows input routing guidance for MIDI input monitor", async () => {
+  it("opens MIDI connections with input monitor help tip", async () => {
     mocks.invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "scan_devices") {
         return {
@@ -702,8 +702,13 @@ describe("real IPC wiring with isolated test mocks", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "MIDI device settings" }),
     );
-    await screen.findByRole("heading", { name: "MIDI input monitor" });
-    expect(screen.getByText(/transmit settings/i)).toBeTruthy();
+    await screen.findByRole("heading", { name: "MIDI connections" });
+    expect(
+      screen.getByRole("heading", { name: "MIDI input monitor" }),
+    ).toBeTruthy();
+    const tip = screen.getByRole("img", { name: "MIDI input monitor help" });
+    expect(tip.getAttribute("data-tip") ?? "").toMatch(/transmit settings/i);
+    expect(screen.getByLabelText("MIDI input")).toBeTruthy();
   });
   it("starts raw MIDI capture from device settings", async () => {
     useStudio.setState({ view, sectionId: 7 });
