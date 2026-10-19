@@ -200,17 +200,13 @@ export function DrumKits({
             Genos per-key setup…
           </button>
           <p className="muted">
-            Catalog DrumKit programs from the imported Genos v2.00 Data List.
+            Genos factory drum-kit programs, included with the application.
             Apply sets the kit at the section start on channel 9 or 10.
             Following sections inherit it until another Program Change. Audition
             plays the instrument's current kit; selecting a row does not send
             that kit. A kit Program Change can reset per-key settings.
           </p>
-          {!catalog && (
-            <p className="muted">
-              Import the supported Genos Data List PDF first (Voice browser).
-            </p>
-          )}
+          {!catalog && <p className="muted">Loading Genos drum kits…</p>}
           {owners.length > 0 && (
             <ul className="drum-owners" aria-label="Rhythm channel kits">
               {owners.map((o) => (

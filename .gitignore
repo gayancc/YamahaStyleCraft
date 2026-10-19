@@ -4,7 +4,6 @@
 !/src/
 !/assets/
 !/assets/**
-!readme.md
 
 # Documentation, research and local verification evidence stay local.
 /docs/
@@ -14,6 +13,8 @@
 *.txt
 *.pdf
 *.docx
+!/README.md
+!/src/crates/genos-core/data/README.md
 
 # Dependencies, generated files and build products.
 node_modules/

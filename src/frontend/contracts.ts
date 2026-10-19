@@ -59,6 +59,40 @@ export interface View {
   chunks: { tag: string; bytes: number }[];
   warnings: string[];
   uiState?: ProjectUiState | null;
+  quantizeOriginal?: Record<
+    string,
+    {
+      notes: { id: number; start: number; duration: number }[];
+      events: { id: number; tick: number; ownerNoteId: number }[];
+    }
+  > | null;
+}
+export type QuantizeGrid =
+  | "480"
+  | "320"
+  | "240"
+  | "160"
+  | "120"
+  | "80"
+  | "60"
+  | "40"
+  | "mixed8"
+  | "mixed16";
+export interface QuantizeOptions {
+  target: "starts" | "ends" | "lengths" | "both";
+  mode: "yamaha" | "relative";
+  size: QuantizeGrid;
+  soft: boolean;
+  strength: number;
+  tuplet: number;
+  swing: number;
+  catchEnabled: boolean;
+  catchPercent: number;
+  safeRange: number;
+  rough: number;
+  moveControllers: boolean;
+  fromOriginal: boolean;
+  sourceFiltered: boolean;
 }
 export interface NoteInput {
   track: number;
@@ -103,7 +137,11 @@ export interface ExchangePreview {
     duration: number;
     velocity: number;
   }[];
-  channels?: { channel: number; originalNotes: number; importedNotes: number }[];
+  channels?: {
+    channel: number;
+    originalNotes: number;
+    importedNotes: number;
+  }[];
 }
 export interface CatalogVoice {
   category: string;
@@ -120,10 +158,13 @@ export interface CatalogSummary {
   sourceName: string;
   sourceSha256: string;
   count: number;
+  categories?: string[];
 }
 export interface VoiceSearch {
   total: number;
   voices: CatalogVoice[];
+  offset?: number;
+  hasMore?: boolean;
 }
 export interface DrumChannelStatus {
   channel: number;
@@ -240,6 +281,14 @@ export type Command =
       moveControllers?: boolean;
     }
   | {
+      type: "advancedQuantize";
+      section: number;
+      channel: number;
+      ids?: number[];
+      options: Partial<QuantizeOptions>;
+      reset?: boolean;
+    }
+  | {
       type: "casm";
       route: number;
       field: "root" | "chord" | "ntr" | "ntt";
@@ -325,8 +374,7 @@ export type Command =
       type: "sectionLength";
       section: number;
       op:
-        | { type: "fillBreak"; bars: number }
-        | { type: "shorten"; bars: number };
+        { type: "fillBreak"; bars: number } | { type: "shorten"; bars: number };
     };
 export interface RecentEntry {
   id: string;

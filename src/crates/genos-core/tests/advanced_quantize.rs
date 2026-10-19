@@ -597,3 +597,84 @@ fn original_zero_tick_pair_retains_its_edge_identity_when_translated() {
     let p = run(&d, Default::default());
     assert_eq!(timing(&p, 1), (0, 1));
 }
+
+#[test]
+fn recognized_eq_packets_stay_put_but_interleaved_volume_follows_notes() {
+    let mut d = fixture(&[(50, 100, 60)], 480, 480);
+    for (i, (cc, value)) in [(99, 1), (98, 48), (7, 90), (6, 70), (101, 127), (100, 127)]
+        .into_iter()
+        .enumerate()
+    {
+        d.style.tracks[0].push(Event {
+            id: 100 + i as u64,
+            tick: 80,
+            order: 100 + i as u64,
+            data: vec![0xb8, cc, value],
+        });
+    }
+    let p = run(&d, Default::default());
+    assert_eq!(p.events, vec![EventMove { id: 102, tick: 30 }]);
+    assert_eq!(p.baseline.events.len(), 1);
+    // Even an earlier malformed/stale baseline cannot re-time EQ on Reset.
+    let baseline = Baseline {
+        notes: p.baseline.notes,
+        events: (100..106)
+            .map(|id| EventOriginal {
+                id,
+                tick: 60,
+                owner_note_id: 1,
+            })
+            .collect(),
+    };
+    let restored = reset(&d, 0, 9, &[], &baseline, false).unwrap();
+    assert_eq!(restored.events, vec![EventMove { id: 102, tick: 60 }]);
+}
+
+#[test]
+fn full_dense_eighth_result_matches_saved_live_sfm_output() {
+    let case: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/sfm-quantize-dense-eighth-oracle.json"
+    ))
+    .unwrap();
+    let rows = case["notes"].as_array().unwrap();
+    let notes: Vec<_> = rows
+        .iter()
+        .map(|n| {
+            (
+                n["beforeStart"].as_u64().unwrap(),
+                n["beforeDuration"].as_u64().unwrap(),
+                n["pitch"].as_u64().unwrap() as u8,
+            )
+        })
+        .collect();
+    let d = fixture(
+        &notes,
+        case["sectionLength"].as_u64().unwrap(),
+        case["ppq"].as_u64().unwrap() as u16,
+    );
+    let p = run(
+        &d,
+        QuantizeOptions {
+            size: Grid::Eighth,
+            ..Default::default()
+        },
+    );
+    for (i, row) in rows.iter().enumerate() {
+        let id = i as u64 * 2 + 1;
+        let current = d.notes.iter().find(|n| n.id == id).unwrap();
+        let result = p
+            .notes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| (n.start, n.duration))
+            .unwrap_or((current.start, current.duration));
+        assert_eq!(
+            result,
+            (
+                row["afterStart"].as_u64().unwrap(),
+                row["afterDuration"].as_u64().unwrap()
+            ),
+            "SFM note {i}"
+        );
+    }
+}

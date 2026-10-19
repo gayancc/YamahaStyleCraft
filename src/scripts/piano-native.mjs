@@ -5,6 +5,10 @@ import crypto from "node:crypto";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { chromium, expect } from "@playwright/test";
+import { verifyQuantizeNative, verifyExchangeWindowsNative } from "./verify-quantize-native.mjs";
+import { verifyClipboardNative } from "./verify-clipboard-native.mjs";
+import { verifyStudioDesign } from "./verify-studio-design-native.mjs";
+import { verifyPianoContinuity } from "./verify-piano-continuity-native.mjs";
 const run = path.resolve(`../docs/piano-roll/validation/native-${Date.now()}`);
 fs.mkdirSync(run, { recursive: true });
 const existing = execFileSync(
@@ -73,7 +77,9 @@ try {
   browser = await chromium.connectOverCDP("http://127.0.0.1:9449");
   page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(15000);
-  await page.waitForSelector(".brand");
+  await page.waitForSelector(".brand", { state: "attached" });
+  await expect.poll(() => page.evaluate(() => window.__TAURI_INTERNALS__.invoke("native_context_menu_enabled"))).toBe(false);
+  results.push("main WebView2 native setting readback: default context menus disabled");
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   const ipc = (cmd, args = {}) =>
@@ -94,10 +100,12 @@ try {
     await page
       .getByRole("button", { name: "Restore session", exact: true })
       .count()
-  )
+  ) {
     await page
       .getByRole("button", { name: "Restore session", exact: true })
       .click();
+    await expect(page.getByRole("button", { name: "Restore session", exact: true })).toHaveCount(0);
+  }
   const source = path.resolve(
       "../docs/research/experiments/fixtures/08.3-4-ACOUSTIC-control.STY",
     ),
@@ -206,6 +214,105 @@ try {
     await settle();
   };
   await reset();
+  await verifyStudioDesign({ page, ipc, run, results, source, reset });
+  // Actual WebView right clicks must route to piano actions and cancel its
+  // native context menu, including children outside the note canvas.
+  await page.evaluate(() => {
+    window.__pianoContexts = [];
+    window.addEventListener("contextmenu", (e) => {
+      if (e.target.closest?.(".piano")) window.__pianoContexts.push(e.defaultPrevented);
+    });
+  });
+  const contextBox = await page.locator(".piano-scroll canvas").boundingBox();
+  await page.mouse.click(contextBox.x + 72, contextBox.y + 80, { button: "right" });
+  await expect(page.getByRole("menu", { name: "Piano actions" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Select all notes", exact: true }).click();
+  assert.equal((await state()).selected.length, 3);
+  await page.getByLabel("New note length", { exact: true }).click({ button: "right" });
+  assert((await page.evaluate(() => window.__pianoContexts)).every(Boolean));
+  assert((await page.evaluate(() => window.__pianoContexts)).length >= 2);
+  results.push("piano native context menu suppressed across editor; blank-grid right click opens working piano actions");
+  await page.evaluate(async () => {
+    const { useStudio } = await import("/frontend/store.ts");
+    useStudio.getState().select([]);
+  });
+  const propertyNote = (await notes())[0];
+  const propertyPoint = await coordinate(propertyNote);
+  const propertyRevision = (await state()).view.revision;
+  await page.keyboard.down("Shift");
+  await page.mouse.click(propertyPoint.x, propertyPoint.y, { button: "right" });
+  await page.keyboard.up("Shift");
+  await page.getByRole("menuitem", { name: "Note properties…", exact: true }).click();
+  let properties = page.getByRole("dialog", { name: "Note properties", exact: true });
+  await expect(properties).toBeVisible();
+  await properties.getByRole("button",{name:"Enter Note properties velocity value",exact:true}).click();
+  await properties.getByLabel("Note properties velocity value",{exact:true}).fill("99");
+  await properties.getByLabel("Note properties velocity value",{exact:true}).press("Enter");
+  await expect(properties).toBeVisible();
+  await properties.getByLabel("Note properties duration").fill("0:0:240");
+  assert.equal((await state()).view.revision, propertyRevision);
+  assert.equal(await properties.getAttribute("aria-modal"),"false");
+  assert.equal(await page.locator(".modal-backdrop").count(),0);
+  const utilityBox=await properties.boundingBox();assert(utilityBox.width<=330 && utilityBox.height<280);
+  const canvasBox=await page.locator(".piano-scroll canvas").boundingBox();
+  const hit=await page.evaluate(({x,y})=>Boolean(document.elementFromPoint(x,y)?.closest("canvas")),{x:canvasBox.x+canvasBox.width-20,y:canvasBox.y+30});assert(hit,"no full-screen event shield");
+  const titlebar=await properties.getByRole("button",{name:"Move note properties",exact:true}).boundingBox();
+  await page.mouse.move(titlebar.x+50,titlebar.y+12);await page.mouse.down();await page.mouse.move(titlebar.x+100,titlebar.y+32,{steps:8});await page.mouse.up();
+  const movedUtility=await properties.boundingBox();assert(Math.abs(movedUtility.x-utilityBox.x)>20);
+  assert(movedUtility.x>=8 && movedUtility.y>=8);
+  await properties.getByRole("button",{name:"Reset",exact:true}).click();
+  assert.equal(Number(await properties.getByRole("slider",{name:"Note properties velocity",exact:true}).getAttribute("aria-valuenow")),propertyNote.velocity);
+  assert.equal((await state()).view.revision,propertyRevision);
+  await page.screenshot({path:path.join(run,"desktop-note-properties.png")});
+  results.push("note utility: no backdrop/event shield, compact movable title bar, staged velocity Reset and unchanged history");
+  await properties.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal((await state()).view.revision, propertyRevision);
+  assert.equal((await notes()).find(m=>m.id===propertyNote.id).velocity,propertyNote.velocity);
+  results.push("note properties drafts and Cancel preserve note data and history");
+  await page.mouse.dblclick(propertyPoint.x,propertyPoint.y);
+  await expect(properties).toBeVisible();
+  await page.locator(".track-select").filter({hasText:"Chord 1"}).click();
+  await expect(properties).toHaveCount(0);
+  await page.locator(".track-select").filter({hasText:"Bass"}).click();
+  await expect(properties).toHaveCount(0);
+  assert.equal((await state()).view.revision,propertyRevision);
+  results.push("double-click opens desktop note utility; changing part closes it and returning cannot resurrect drafts");
+  const holdPropertyPoint=await coordinate(propertyNote);
+  await page.mouse.move(holdPropertyPoint.x,holdPropertyPoint.y);
+  await page.mouse.down({ button:"right" });
+  await expect(properties).toBeVisible();
+  await page.mouse.up({ button:"right" });
+  await properties.getByLabel("Time (bar:beat:tick)").fill("2:1:0");
+  await properties.getByLabel("Note properties pitch").selectOption("70");
+  await properties.getByRole("button",{name:"Enter Note properties velocity value",exact:true}).click();
+  await properties.getByLabel("Note properties velocity value",{exact:true}).fill("99");
+  await properties.getByLabel("Note properties velocity value",{exact:true}).press("Enter");
+  await expect(properties).toBeVisible();
+  await properties.getByLabel("Note properties duration").fill("0:0:240");
+  assert.equal((await state()).view.revision,propertyRevision);
+  await properties.getByRole("button",{name:"Apply",exact:true}).click();
+  await settle();
+  await expect(properties).toHaveCount(0);
+  let propertyChanged=(await notes()).find(m=>m.id===propertyNote.id);
+  assert.equal((await state()).view.revision,propertyRevision+1);
+  assert.deepEqual([propertyChanged.start,propertyChanged.duration,propertyChanged.pitch,propertyChanged.velocity,propertyChanged.channel],
+    [section.start+5760,240,70,99,11]);
+  await page.keyboard.press("Control+z");await settle();
+  assert.deepEqual((await notes()).find(m=>m.id===propertyNote.id),propertyNote);
+  await page.keyboard.press("Control+Shift+z");await settle();
+  assert.deepEqual((await notes()).find(m=>m.id===propertyNote.id),propertyChanged);
+  results.push("hold-right properties uses true 3/4 meter and commits all fields in one Undo/Redo step");
+  const propertiesProject=path.join(run,"note-properties.gss");
+  const propertiesBefore=(await state()).view;
+  await ipc("save_document",{path:propertiesProject,projectFile:true});
+  await page.evaluate(async file=>{
+    const {useStudio}=await import("/frontend/store.ts");await useStudio.getState().load(file);
+  },propertiesProject);
+  await settle();
+  assert.deepEqual((await state()).view.notes.map(n=>[n.start,n.duration,n.pitch,n.velocity,n.channel]),propertiesBefore.notes.map(n=>[n.start,n.duration,n.pitch,n.velocity,n.channel]));
+  results.push("note properties data survives native project save/reopen");
+  await reset();
+  await verifyPianoContinuity({ page, reset, notes, coordinate, state, settle, results, run });
   let n = (await notes())[0],
     p = await coordinate(n);
   await drag(p, { x: p.x + 18, y: p.y - 18 });
@@ -252,6 +359,7 @@ try {
   assert.equal((await state()).selected.length, 2);
   results.push("copy / duplicate selects new notes");
   await page.keyboard.press("Control+x");
+  await expect.poll(async () => (await notes()).length).toBe(3);
   await settle();
   assert.equal((await notes()).length, 3);
   await page.keyboard.press("Control+v");
@@ -334,7 +442,7 @@ try {
   const noteCanvas = page.getByRole("img", { name: /^Piano roll\./ });
   await noteCanvas.focus();
   await page.keyboard.press("Control+a");
-  await page.locator(".piano-tool-menu summary").click();
+  await page.getByRole("button",{name:"Piano tools",exact:true}).click();
   await page.getByLabel("Note transform").selectOption("gate");
   await page.getByLabel("Transform amount").fill("50");
   await page
@@ -343,7 +451,7 @@ try {
   await settle();
   assert((await notes()).every((n) => n.duration === 240));
   results.push("advanced gate tool");
-  await page.locator(".piano-tool-menu summary").click();
+  await page.locator(".floating-tool-window .note-utility-close").click();
   await noteCanvas.focus();
   await page.keyboard.press("b");
   const r = await noteCanvas.boundingBox();
@@ -447,7 +555,8 @@ try {
     oldHeight + 8,
   );
   results.push("accessible lane splitter resize");
-  await page.getByRole("button", { name: "Fit", exact: true }).click();
+  await page.getByRole("button", { name: "Fit notes", exact: true }).click();
+  if (!(await page.locator(".piano-options > .studio-menu").evaluate(el => el.open))) await page.locator(".piano-options > .studio-menu > summary").click();
   await page.getByLabel("Pitch row height").focus();
   await page.keyboard.press("Home");
   for (let i = 0; i < 12; i++) await page.keyboard.press("ArrowRight");
@@ -559,14 +668,16 @@ try {
   await page.getByLabel("Controller lane", { exact: true }).selectOption("-1");
   await page.getByLabel("Controller gesture").selectOption("draw");
   await page.getByLabel("Ghosts", { exact: true }).uncheck();
-  await page.getByRole("button", { name: "Fit", exact: true }).click();
+  await page.getByRole("button", { name: "Fit notes", exact: true }).click();
   await page.waitForTimeout(100);
   await page.screenshot({ path: path.join(run, "real-style-editor.png") });
   results.push("representative real style visually rendered");
   // Read pixels from the actual WebView canvas, including black-key tails and
   // the incomplete MIDI endpoints, at both ends of the pitch-zoom range.
+  await page.locator(".piano-options > .studio-menu > summary").click();
   for (const row of [10, 18, 30]) {
-    await page.getByLabel("Pitch row height").focus();
+    if (!(await page.locator(".piano-options > .studio-menu").evaluate(el => el.open))) await page.locator(".piano-options > .studio-menu > summary").click();
+  await page.getByLabel("Pitch row height").focus();
     await page.keyboard.press("Home");
     for (let i = 10; i < row; i++) await page.keyboard.press("ArrowRight");
     await page.locator(".piano-scroll").evaluate((el, row) => {
@@ -617,6 +728,9 @@ try {
     }
   }
   results.push("keyboard pixels and clipping at 10 / 18 / 30-pixel pitch rows");
+  await verifyQuantizeNative({ page, ipc, run, results });
+  await verifyExchangeWindowsNative({ ipc, run, results, data, persisted });
+  await verifyClipboardNative({ page, browser, run, results, data, persisted });
   assert.deepEqual(errors, []);
   fs.writeFileSync(
     path.join(run, "result.json"),

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useStudio } from "./store";
+import { FloatingToolWindow } from "./FloatingToolWindow";
 import type {
   CatalogSummary,
   CatalogVoice,
@@ -64,20 +65,36 @@ export function VoiceBrowser({
   const [current, setCurrent] = useState<CatalogVoice | null>(null);
   const [selected, setSelected] = useState<CatalogVoice | null>(null);
   const [query, setQuery] = useState("");
+  const [kind, setKind] = useState("all");
+  const [category, setCategory] = useState("");
+  const [offset, setOffset] = useState(0);
+  const pageSize = 40;
   const [result, setResult] = useState<VoiceSearch | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [searching, setSearching] = useState(false);
   const working = useRef(false),
-    dialog = useRef<HTMLElement>(null),
+    dialog = useRef<HTMLDivElement>(null),
     close = useRef(onClose);
   const catalogVersion = useRef(0);
   close.current = onClose;
   const stale = view !== original;
   const args = { section: section.id, channel, revision: original.revision };
+  const expansionMatches = expansionVoices.filter(
+    (v) =>
+      (!category || category === v.category) &&
+      query
+        .toLowerCase()
+        .split(/\s+/)
+        .every((term) =>
+          `${v.name} ${v.subcategory} ${v.category} ${v.msb} ${v.lsb} ${v.program + 1}`
+            .toLowerCase()
+            .includes(term),
+        ),
+  );
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    dialog.current?.querySelector<HTMLElement>("button")?.focus();
+    dialog.current?.focus();
     let live = true;
     const version = catalogVersion.current;
     void invoke<CatalogSummary | null>("voice_catalog_status")
@@ -112,7 +129,25 @@ export function VoiceBrowser({
     }
     setSearching(true);
     const timer = setTimeout(() => {
-      void invoke<VoiceSearch>("search_voice_catalog", { query })
+      if (kind === "expansion") {
+        if (live) {
+          setResult({
+            total: expansionMatches.length,
+            voices: expansionMatches.slice(offset, offset + pageSize),
+            offset,
+            hasMore: offset + pageSize < expansionMatches.length,
+          });
+          setSearching(false);
+        }
+        return;
+      }
+      void invoke<VoiceSearch>("search_voice_catalog", {
+        query,
+        kind,
+        category,
+        offset,
+        limit: pageSize,
+      })
         .then((value) => {
           if (live) {
             setResult(value);
@@ -130,7 +165,7 @@ export function VoiceBrowser({
       live = false;
       clearTimeout(timer);
     };
-  }, [query, catalog]);
+  }, [query, catalog, kind, category, offset, expansionVoices]);
   const run = async (action: () => Promise<void>) => {
     if (working.current || useStudio.getState().busy) return;
     working.current = true;
@@ -167,6 +202,7 @@ export function VoiceBrowser({
       setCatalog(imported);
       setSelected(null);
       setQuery("");
+      setOffset(0);
       const value = await invoke<CatalogVoice | null>(
         "resolve_catalog_voice",
         args,
@@ -183,10 +219,18 @@ export function VoiceBrowser({
         lsb: selected.lsb,
         program: selected.program,
       };
-      const next = await invoke<View>("apply_catalog_voice", {
-        ...args,
-        address,
-      });
+      const next = expansionVoices.includes(selected)
+        ? await invoke<View>("edit_document", {
+            revision: original.revision,
+            docLabel: "main",
+            command: {
+              type: "setVoice",
+              section: section.id,
+              channel,
+              address,
+            },
+          })
+        : await invoke<View>("apply_catalog_voice", { ...args, address });
       useStudio.setState({
         view: next,
         message:
@@ -200,74 +244,40 @@ export function VoiceBrowser({
     if (!working.current) close.current();
   };
   return (
-    <div
-      className="modal-backdrop"
-      onPointerDown={(e) => {
-        if (e.currentTarget === e.target) dismiss();
-      }}
+    <FloatingToolWindow
+      open
+      title="Genos voices"
+      context={`${section.label} · Source ${channel} · Section-start voice`}
+      className="voice-picker-window"
+      onClose={dismiss}
     >
-      <section
-        className="modal voice-browser"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="voice-browser-title"
-        tabIndex={-1}
-        ref={dialog}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === "Escape") dismiss();
-          if (e.key === "Tab") {
-            const controls = [
-                ...dialog.current!.querySelectorAll<HTMLElement>(
-                  'button:not(:disabled),input:not(:disabled),summary,[tabindex="0"]',
-                ),
-              ],
-              first = controls[0],
-              last = controls.at(-1);
-            if (!first) {
-              e.preventDefault();
-              return;
-            }
-            if (document.activeElement === dialog.current) {
-              e.preventDefault();
-              (e.shiftKey ? last : first)?.focus();
-              return;
-            }
-            if (e.shiftKey && document.activeElement === first) {
-              e.preventDefault();
-              last?.focus();
-            }
-            if (!e.shiftKey && document.activeElement === last) {
-              e.preventDefault();
-              first.focus();
-            }
-          }
-        }}
-      >
-        <header>
-          <h2 id="voice-browser-title">Genos voices</h2>
-          <p>
-            {section.label} · Source {channel} · Section-start voice
-          </p>
-        </header>
+      <div tabIndex={-1} ref={dialog}>
         <div className="voice-browser-body">
-          <div className="catalog-import">
-            <button onClick={() => void importPdf()} disabled={pending}>
-              Import Data List PDF…
-            </button>
-            <p>
-              {catalog
-                ? `${catalog.count.toLocaleString()} voices · ${catalog.edition}`
-                : "Import Yamaha’s Genos v2.00 English Data List (11/2019), genos_en_dl_f0.pdf. Up to 32 MiB; other editions are not supported yet."}
-            </p>
-          </div>
-          {expansionVoices.length > 0 && (
+          <p className="muted" role="status" aria-label="Voice catalog">
+            {catalog
+              ? `${catalog.count.toLocaleString()} factory voices · Genos v2.00`
+              : "Loading Genos voices…"}
+          </p>
+          <details className="voice-catalog-tools">
+            <summary>Catalog tools</summary>
+            <div className="catalog-import">
+              <button onClick={() => void importPdf()} disabled={pending}>
+                Import Data List PDF…
+              </button>
+              <p>
+                Optional: replace the local catalog from the supported Genos
+                v2.00 Data List. Factory voices are included with the
+                application.
+              </p>
+            </div>
+          </details>
+          {kind === "all" && expansionMatches.length > 0 && (
             <div className="voice-results" aria-label="Expansion pack voices">
               <p className="muted">
-                {expansionVoices.length} expansion address
-                {expansionVoices.length === 1 ? "" : "es"} from pack recovery
+                {expansionMatches.length} expansion address
+                {expansionMatches.length === 1 ? "" : "es"} from pack recovery
               </p>
-              {expansionVoices.map((v) => (
+              {expansionMatches.map((v) => (
                 <button
                   key={`exp-${v.msb}-${v.lsb}-${v.program}`}
                   aria-pressed={selected === v}
@@ -304,6 +314,7 @@ export function VoiceBrowser({
               <label className="voice-search">
                 <span>Search voices</span>
                 <input
+                  autoFocus
                   aria-label="Search voices"
                   placeholder="Name, category or type…"
                   value={query}
@@ -312,14 +323,64 @@ export function VoiceBrowser({
                   onChange={(e) => {
                     setError(null);
                     setQuery(e.target.value);
+                    setOffset(0);
                   }}
                 />
               </label>
+              <div className="voice-browser-filters">
+                <label>
+                  Bank group
+                  <select
+                    aria-label="Voice bank group"
+                    value={kind}
+                    disabled={pending}
+                    onChange={(e) => {
+                      setKind(e.target.value);
+                      setCategory("");
+                      setOffset(0);
+                    }}
+                  >
+                    <option value="all">All Genos voices</option>
+                    <option value="voices">Voices (no kits)</option>
+                    <option value="panel">Panel voices</option>
+                    <option value="xg">XG / GM</option>
+                    <option value="gm2">GM2</option>
+                    <option value="drums">Drum / SFX kits</option>
+                    {expansionVoices.length > 0 && (
+                      <option value="expansion">Expansion / User</option>
+                    )}
+                  </select>
+                </label>
+                <label>
+                  Category
+                  <select
+                    aria-label="Voice category"
+                    value={category}
+                    disabled={pending}
+                    onChange={(e) => {
+                      setCategory(e.target.value);
+                      setOffset(0);
+                    }}
+                  >
+                    <option value="">All categories</option>
+                    {catalog.categories?.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                    {expansionVoices.length > 0 && (
+                      <option value="Expansion">Expansion</option>
+                    )}
+                  </select>
+                </label>
+              </div>
               <p className="muted" role="status">
                 {searching
                   ? "Searching…"
                   : result
-                    ? `${result.total} ${result.total === 1 ? "match" : "matches"}${result.total > 100 ? " · showing first 100; refine your search" : ""}`
+                    ? result.total
+                      ? `${offset + 1}–${Math.min(offset + pageSize, result.total)} of ${result.total} voices`
+                      : "0 matches"
                     : ""}
               </p>
               <div
@@ -357,6 +418,28 @@ export function VoiceBrowser({
                   </p>
                 )}
               </div>
+              <nav
+                className="voice-page-controls"
+                aria-label="Voice result pages"
+              >
+                <button
+                  disabled={pending || searching || offset === 0}
+                  onClick={() => setOffset(Math.max(0, offset - pageSize))}
+                >
+                  Previous voices
+                </button>
+                <button
+                  disabled={
+                    pending ||
+                    searching ||
+                    !result ||
+                    offset + pageSize >= result.total
+                  }
+                  onClick={() => setOffset(offset + pageSize)}
+                >
+                  Next voices
+                </button>
+              </nav>
             </>
           )}
           {selected && (
@@ -401,7 +484,7 @@ export function VoiceBrowser({
             {pending ? "Working…" : "Apply voice"}
           </button>
         </footer>
-      </section>
-    </div>
+      </div>
+    </FloatingToolWindow>
   );
 }

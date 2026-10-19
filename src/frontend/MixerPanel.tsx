@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
+import { ParameterControl, formatPan, formatBipolar } from "./ParameterControl";
 import type { Note, View } from "./contracts";
-import {
-  autoPanPoints,
-  type AutoPanShape,
-} from "./autoPan";
+import { autoPanPoints, type AutoPanShape } from "./autoPan";
 import { SAFE_FX_PRESETS, type SafeFxKey } from "./mixerPresets";
 import { tickFromElapsed } from "./pianoEditing";
 
@@ -31,42 +29,6 @@ const colors = [
 function role(ch: number): string {
   if (ch >= 9 && ch <= 16) return roles[ch - 9];
   return `CH ${ch}`;
-}
-
-function Slider({
-  label,
-  value,
-  onCommit,
-  ariaLabel,
-}: {
-  label: string;
-  value: number;
-  onCommit: (n: number) => void;
-  /** Accessible name; defaults to visible label. */
-  ariaLabel?: string;
-}) {
-  const [v, set] = useState(value);
-  useEffect(() => set(value), [value]);
-  const commit = () => {
-    if (v !== value) onCommit(v);
-  };
-  return (
-    <label className="mixer-slider">
-      <span>{label}</span>
-      <input
-        aria-label={ariaLabel ?? label}
-        type="range"
-        min="0"
-        max="127"
-        value={v}
-        onChange={(e) => set(+e.target.value)}
-        onPointerUp={commit}
-        onKeyUp={commit}
-        onBlur={commit}
-      />
-      <output>{v}</output>
-    </label>
-  );
 }
 
 /** Genos RPN pitch-bend sensitivity (SFM-PITCH-RANGE fingerprint). */
@@ -124,7 +86,12 @@ export type MixerPanelProps = {
   capturing: boolean;
   busy: boolean;
   playheadTick: number | null;
-  valueAt: (channel: number, status: number, controller: number, fallback: number) => number;
+  valueAt: (
+    channel: number,
+    status: number,
+    controller: number,
+    fallback: number,
+  ) => number;
   /** Static Mixer EQ High/Low via NRPN (raw 0–127, 64 neutral). */
   eqValueAt: (channel: number, band: "eqLow" | "eqHigh") => number;
   onCc: (channel: number, controller: number, value: number) => void;
@@ -147,6 +114,7 @@ export type MixerPanelProps = {
   onArmToggle: (channel: number) => void;
   onMixerApplyAll: (next: boolean) => void;
   showArm?: boolean;
+  onSelectChannel?: (channel: number) => void;
 };
 
 /** Shared mixer strips for main editor and detached Mixer (SFM-084). */
@@ -176,15 +144,18 @@ export function MixerPanel({
   onArmToggle,
   onMixerApplyAll,
   showArm = true,
+  onSelectChannel,
 }: MixerPanelProps) {
   const section = view.sections.find((s) => s.id === sectionId) ?? null;
+  const [bank, setBank] = useState<"sends" | "tone" | "performance">("sends");
   const [panBeats, setPanBeats] = useState(1);
   const [panShape, setPanShape] = useState<AutoPanShape>("sine");
   const [panDepth, setPanDepth] = useState(50);
   const [panReverse, setPanReverse] = useState(false);
   const [safeFx, setSafeFx] = useState<SafeFxKey>("tight");
-  const panTarget =
-    sources.includes(targetChannel) ? targetChannel : (sources[0] ?? targetChannel);
+  const panTarget = sources.includes(targetChannel)
+    ? targetChannel
+    : (sources[0] ?? targetChannel);
 
   const existingPanIds = () => {
     if (!section) return [] as number[];
@@ -218,19 +189,38 @@ export function MixerPanel({
   const removeAutoPan = () => {
     if (!section || editingDisabled) return;
     const removeIds = existingPanIds();
-    onAutoPan(
-      panTarget,
-      [{ tick: section.start, value: 64 }],
-      removeIds,
-    );
+    onAutoPan(panTarget, [{ tick: section.start, value: 64 }], removeIds);
   };
 
   return (
-    <div className="mixer">
-      <p className="mixer-note">
-        Section-start CCs · Mute/Solo live · EQ via NRPN · Bend via RPN 0,0 ·
-        Auto Pan = CC10. Scroll each strip for EQ High and bend range.
-      </p>
+    <div className="mixer" key={sectionId}>
+      <div className="mixer-console-heading">
+        <div>
+          <h3>Part mixer</h3>
+          <span className="muted">{section?.label} · MIDI levels 0–127</span>
+        </div>
+        <div
+          className="console-banks"
+          role="group"
+          aria-label="Mixer parameter bank"
+        >
+          {(["sends", "tone", "performance"] as const).map((b) => (
+            <button
+              type="button"
+              key={b}
+              aria-pressed={bank === b}
+              className={bank === b ? "active" : ""}
+              onClick={() => setBank(b)}
+            >
+              {b === "sends"
+                ? "Sends"
+                : b === "tone"
+                  ? "Tone / EQ"
+                  : "Performance"}
+            </button>
+          ))}
+        </div>
+      </div>
       <label className="mixer-scope">
         <input
           type="checkbox"
@@ -240,105 +230,117 @@ export function MixerPanel({
         />
         Apply mixer CC to all sections
       </label>
-      <fieldset className="mixer-autopan" disabled={editingDisabled || !section}>
-        <legend>Safe FX · CH {panTarget}</legend>
-        <label>
-          Preset
-          <select
-            aria-label="Yamaha Safe FX preset"
-            value={safeFx}
-            onChange={(e) => setSafeFx(e.target.value as SafeFxKey)}
+      <details className="mixer-utilities">
+        <summary>Part tools · {role(panTarget)}</summary>
+        <div className="mixer-utilities-body">
+          <fieldset
+            className="mixer-autopan"
+            disabled={editingDisabled || !section}
           >
-            {SAFE_FX_PRESETS.map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          disabled={busy || !section}
-          onClick={() => {
-            const preset = SAFE_FX_PRESETS.find((p) => p.key === safeFx);
-            if (!preset) return;
-            onSafeFx(
-              panTarget,
-              preset.values.map((v) => [v.controller, v.value]),
-            );
-          }}
-        >
-          Apply Safe FX
-        </button>
-        <p className="muted mixer-note" style={{ margin: 0, flexBasis: "100%" }}>
-          MIDI CC only (reverb/chorus/cutoff/resonance). Does not rewrite DSP
-          SysEx.
-        </p>
-      </fieldset>
-      <fieldset className="mixer-autopan" disabled={editingDisabled || !section}>
-        <legend>Auto Pan · CH {panTarget}</legend>
-        <label>
-          Beats
-          <input
-            type="number"
-            min={1}
-            max={16}
-            value={panBeats}
-            aria-label="Auto Pan beats"
-            onChange={(e) =>
-              setPanBeats(Math.max(1, Math.min(16, +e.target.value || 1)))
-            }
-          />
-        </label>
-        <label>
-          Shape
-          <select
-            aria-label="Auto Pan shape"
-            value={panShape}
-            onChange={(e) => setPanShape(e.target.value as AutoPanShape)}
+            <legend>Safe FX · CH {panTarget}</legend>
+            <label>
+              Preset
+              <select
+                aria-label="Yamaha Safe FX preset"
+                value={safeFx}
+                onChange={(e) => setSafeFx(e.target.value as SafeFxKey)}
+              >
+                {SAFE_FX_PRESETS.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={busy || !section}
+              onClick={() => {
+                const preset = SAFE_FX_PRESETS.find((p) => p.key === safeFx);
+                if (!preset) return;
+                onSafeFx(
+                  panTarget,
+                  preset.values.map((v) => [v.controller, v.value]),
+                );
+              }}
+            >
+              Apply Safe FX
+            </button>
+            <p
+              className="muted mixer-note"
+              style={{ margin: 0, flexBasis: "100%" }}
+            >
+              MIDI CC only (reverb/chorus/cutoff/resonance). Does not rewrite
+              DSP SysEx.
+            </p>
+          </fieldset>
+          <fieldset
+            className="mixer-autopan"
+            disabled={editingDisabled || !section}
           >
-            <option value="sine">Sine</option>
-            <option value="triangle">Triangle</option>
-            <option value="square">Square</option>
-          </select>
-        </label>
-        <label>
-          Depth
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={panDepth}
-            aria-label="Auto Pan depth"
-            onChange={(e) => setPanDepth(+e.target.value)}
-          />
-          <output>{panDepth}%</output>
-        </label>
-        <label className="mixer-scope">
-          <input
-            type="checkbox"
-            checked={panReverse}
-            onChange={(e) => setPanReverse(e.target.checked)}
-          />
-          Reverse
-        </label>
-        <div className="mixer-autopan-actions">
-          <button
-            type="button"
-            disabled={busy || !section}
-            onClick={applyAutoPan}
-          >
-            Apply
-          </button>
-          <button
-            type="button"
-            disabled={busy || !section}
-            onClick={removeAutoPan}
-          >
-            Remove
-          </button>
+            <legend>Auto Pan · CH {panTarget}</legend>
+            <label>
+              Beats
+              <input
+                type="number"
+                min={1}
+                max={16}
+                value={panBeats}
+                aria-label="Auto Pan beats"
+                onChange={(e) =>
+                  setPanBeats(Math.max(1, Math.min(16, +e.target.value || 1)))
+                }
+              />
+            </label>
+            <label>
+              Shape
+              <select
+                aria-label="Auto Pan shape"
+                value={panShape}
+                onChange={(e) => setPanShape(e.target.value as AutoPanShape)}
+              >
+                <option value="sine">Sine</option>
+                <option value="triangle">Triangle</option>
+                <option value="square">Square</option>
+              </select>
+            </label>
+            <ParameterControl
+              label="Depth"
+              ariaLabel="Auto Pan depth"
+              value={panDepth}
+              max={100}
+              resetValue={50}
+              disabled={editingDisabled}
+              format={(n) => `${n}%`}
+              onCommit={setPanDepth}
+            />
+            <label className="mixer-scope">
+              <input
+                type="checkbox"
+                checked={panReverse}
+                onChange={(e) => setPanReverse(e.target.checked)}
+              />
+              Reverse
+            </label>
+            <div className="mixer-autopan-actions">
+              <button
+                type="button"
+                disabled={busy || !section}
+                onClick={applyAutoPan}
+              >
+                Apply
+              </button>
+              <button
+                type="button"
+                disabled={busy || !section}
+                onClick={removeAutoPan}
+              >
+                Remove
+              </button>
+            </div>
+          </fieldset>
         </div>
-      </fieldset>
+      </details>
       <div className="mixer-strips">
         {sources.map((ch) => {
           const sounding =
@@ -352,10 +354,12 @@ export function MixerPanel({
                 );
           const maxVel = sounding.reduce((m, n) => Math.max(m, n.velocity), 0);
           // SFM-080: 4-segment activity (idle / low / mid / peak).
-          const level =
-            maxVel <= 0 ? 0 : maxVel < 48 ? 1 : maxVel < 96 ? 2 : 3;
+          const level = maxVel <= 0 ? 0 : maxVel < 48 ? 1 : maxVel < 96 ? 2 : 3;
           return (
-            <div className="mixer-strip" key={ch}>
+            <div
+              className={`mixer-strip${ch === targetChannel ? " selected" : ""}`}
+              key={ch}
+            >
               <div
                 className="mixer-track-color"
                 style={{ background: colors[(ch - 9 + 16) % 8] }}
@@ -371,7 +375,15 @@ export function MixerPanel({
                       : "Source sounding at playhead"
                 }
               />
-              <strong>{role(ch)}</strong>
+              <button
+                type="button"
+                className="mixer-part-name"
+                aria-label={`Select ${role(ch)}`}
+                aria-pressed={ch === targetChannel}
+                onClick={() => onSelectChannel?.(ch)}
+              >
+                {role(ch)}
+              </button>
               <span>CH {ch}</span>
               <div className="mute-solo">
                 <button
@@ -408,72 +420,160 @@ export function MixerPanel({
                   </button>
                 )}
               </div>
-              <fieldset disabled={editingDisabled}>
-                <Slider
-                  label="Volume"
-                  ariaLabel={`Ch ${ch} volume`}
-                  value={valueAt(ch, 0xb0, 7, 100)}
-                  onCommit={(n) => onCc(ch, 7, n)}
-                />
-                <Slider
+              <fieldset disabled={editingDisabled} className="console-controls">
+                <ParameterControl
                   label="Pan"
                   ariaLabel={`Ch ${ch} pan`}
                   value={valueAt(ch, 0xb0, 10, 64)}
+                  resetValue={64}
+                  bipolar
+                  format={formatPan}
+                  disabled={editingDisabled}
                   onCommit={(n) => onCc(ch, 10, n)}
                 />
-                <Slider
-                  label="Expression"
-                  ariaLabel={`Ch ${ch} expression`}
-                  value={valueAt(ch, 0xb0, 11, 127)}
-                  onCommit={(n) => onCc(ch, 11, n)}
-                />
-                <Slider
-                  label="Sustain"
-                  ariaLabel={`Ch ${ch} sustain`}
-                  value={valueAt(ch, 0xb0, 64, 0)}
-                  onCommit={(n) => onCc(ch, 64, n)}
-                />
-                <Slider
-                  label="Reverb"
-                  ariaLabel={`Ch ${ch} reverb send`}
-                  value={valueAt(ch, 0xb0, 91, 40)}
-                  onCommit={(n) => onCc(ch, 91, n)}
-                />
-                <Slider
-                  label="Chorus"
-                  ariaLabel={`Ch ${ch} chorus send`}
-                  value={valueAt(ch, 0xb0, 93, 0)}
-                  onCommit={(n) => onCc(ch, 93, n)}
-                />
-                <Slider
-                  label="Resonance"
-                  ariaLabel={`Ch ${ch} resonance`}
-                  value={valueAt(ch, 0xb0, 71, 64)}
-                  onCommit={(n) => onCc(ch, 71, n)}
-                />
-                <Slider
-                  label="Cutoff"
-                  ariaLabel={`Ch ${ch} cutoff`}
-                  value={valueAt(ch, 0xb0, 74, 64)}
-                  onCommit={(n) => onCc(ch, 74, n)}
-                />
-                <Slider
-                  label="EQ Low"
-                  ariaLabel={`Ch ${ch} EQ Low`}
-                  value={eqValueAt(ch, "eqLow")}
-                  onCommit={(n) => onEq(ch, "eqLow", n)}
-                />
-                <Slider
-                  label="EQ High"
-                  ariaLabel={`Ch ${ch} EQ High`}
-                  value={eqValueAt(ch, "eqHigh")}
-                  onCommit={(n) => onEq(ch, "eqHigh", n)}
-                />
-                <BendRangeField
-                  channel={ch}
-                  value={pitchBendRangeAt(ch)}
+                <div className="mixer-bank-controls">
+                  {bank === "sends" && (
+                    <>
+                      <ParameterControl
+                        label="Reverb"
+                        ariaLabel={`Ch ${ch} reverb send`}
+                        value={valueAt(ch, 0xb0, 91, 40)}
+                        resetValue={40}
+                        disabled={editingDisabled}
+                        onCommit={(n) => onCc(ch, 91, n)}
+                      />
+                      <ParameterControl
+                        label="Chorus"
+                        ariaLabel={`Ch ${ch} chorus send`}
+                        value={valueAt(ch, 0xb0, 93, 0)}
+                        disabled={editingDisabled}
+                        onCommit={(n) => onCc(ch, 93, n)}
+                      />
+                    </>
+                  )}
+                  {bank === "tone" && (
+                    <>
+                      <ParameterControl
+                        label="Cutoff"
+                        ariaLabel={`Ch ${ch} cutoff`}
+                        value={valueAt(ch, 0xb0, 74, 64)}
+                        resetValue={64}
+                        bipolar
+                        format={formatBipolar}
+                        disabled={editingDisabled}
+                        onCommit={(n) => onCc(ch, 74, n)}
+                      />
+                      <ParameterControl
+                        label="Resonance"
+                        ariaLabel={`Ch ${ch} resonance`}
+                        value={valueAt(ch, 0xb0, 71, 64)}
+                        resetValue={64}
+                        bipolar
+                        format={formatBipolar}
+                        disabled={editingDisabled}
+                        onCommit={(n) => onCc(ch, 71, n)}
+                      />
+                      <ParameterControl
+                        label="EQ Low"
+                        ariaLabel={`Ch ${ch} EQ Low`}
+                        value={eqValueAt(ch, "eqLow")}
+                        resetValue={64}
+                        bipolar
+                        format={formatBipolar}
+                        disabled={editingDisabled}
+                        onCommit={(n) => onEq(ch, "eqLow", n)}
+                      />
+                      <ParameterControl
+                        label="EQ High"
+                        ariaLabel={`Ch ${ch} EQ High`}
+                        value={eqValueAt(ch, "eqHigh")}
+                        resetValue={64}
+                        bipolar
+                        format={formatBipolar}
+                        disabled={editingDisabled}
+                        onCommit={(n) => onEq(ch, "eqHigh", n)}
+                      />
+                    </>
+                  )}
+                  {bank === "performance" && (
+                    <>
+                      <ParameterControl
+                        label="Expression"
+                        ariaLabel={`Ch ${ch} expression`}
+                        value={valueAt(ch, 0xb0, 11, 127)}
+                        resetValue={127}
+                        disabled={editingDisabled}
+                        onCommit={(n) => onCc(ch, 11, n)}
+                      />
+                      <div className="sustain-control">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={valueAt(ch, 0xb0, 64, 0) >= 64}
+                          aria-label={`Ch ${ch} sustain`}
+                          disabled={editingDisabled}
+                          onClick={() =>
+                            onCc(
+                              ch,
+                              64,
+                              valueAt(ch, 0xb0, 64, 0) >= 64 ? 0 : 127,
+                            )
+                          }
+                        >
+                          Sustain{" "}
+                          <span>
+                            {valueAt(ch, 0xb0, 64, 0) >= 64 ? "On" : "Off"}
+                          </span>
+                        </button>
+                        <label>
+                          CC64
+                          <input
+                            aria-label={`Ch ${ch} sustain value`}
+                            type="number"
+                            min={0}
+                            max={127}
+                            key={valueAt(ch, 0xb0, 64, 0)}
+                            defaultValue={valueAt(ch, 0xb0, 64, 0)}
+                            disabled={editingDisabled}
+                            onBlur={(e) => {
+                              const v = Number(e.target.value);
+                              if (
+                                e.target.value.trim() &&
+                                Number.isInteger(v) &&
+                                v >= 0 &&
+                                v <= 127 &&
+                                v !== valueAt(ch, 0xb0, 64, 0)
+                              )
+                                onCc(ch, 64, v);
+                              else
+                                e.target.value = String(
+                                  valueAt(ch, 0xb0, 64, 0),
+                                );
+                            }}
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              if (e.key === "Enter") e.currentTarget.blur();
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <BendRangeField
+                        channel={ch}
+                        value={pitchBendRangeAt(ch)}
+                        disabled={editingDisabled}
+                        onCommit={(n) => onPitchBendRange(ch, n)}
+                      />
+                    </>
+                  )}
+                </div>
+                <ParameterControl
+                  variant="fader"
+                  label="Volume"
+                  ariaLabel={`Ch ${ch} volume`}
+                  value={valueAt(ch, 0xb0, 7, 100)}
+                  resetValue={100}
                   disabled={editingDisabled}
-                  onCommit={(n) => onPitchBendRange(ch, n)}
+                  onCommit={(n) => onCc(ch, 7, n)}
                 />
               </fieldset>
             </div>
@@ -511,10 +611,7 @@ export function pitchBendRangeSemitones(
   const status = 0xb0 | (channel - 1);
   const rows = events
     .filter(
-      (e) =>
-        e.tick <= atTick &&
-        e.data.length === 3 &&
-        e.data[0] === status,
+      (e) => e.tick <= atTick && e.data.length === 3 && e.data[0] === status,
     )
     .sort((a, b) => a.tick - b.tick || a.order - b.order || a.id - b.id);
   let selected: [number | null, number | null] = [null, null];

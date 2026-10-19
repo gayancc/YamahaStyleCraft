@@ -70,6 +70,8 @@ pub struct View {
     /// Editor workspace restored from `.gss` `uiState` (SFM-002).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_state: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantize_original: Option<serde_json::Value>,
 }
 #[derive(Clone)]
 pub struct Document {
@@ -314,6 +316,7 @@ impl Document {
             events,
             routes: self.routes.clone(),
             ui_state: None,
+            quantize_original: None,
             chunks: self
                 .style
                 .chunks

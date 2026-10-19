@@ -39,7 +39,9 @@ export function DetachedMixer() {
       // Skip system messages (0xF0+) which have no channel.
       if (e.data[0] < 0xf0) set.add((e.data[0] & 0x0f) + 1);
     }
-    const list = [...set].filter((c) => c >= 1 && c <= 16).sort((a, b) => a - b);
+    const list = [...set]
+      .filter((c) => c >= 1 && c <= 16)
+      .sort((a, b) => a - b);
     return list.length ? list : [9, 10, 11, 12, 13, 14, 15, 16];
   }, [view]);
 
@@ -198,8 +200,7 @@ export function DetachedMixer() {
         data: [0xb0 | (channel - 1), controller, value],
       });
     } else {
-      const track =
-        view.notes.find((n) => n.channel === channel)?.track ?? 0;
+      const track = view.notes.find((n) => n.channel === channel)?.track ?? 0;
       void state.edit({
         type: "addEvent",
         section: section.id,
@@ -231,7 +232,9 @@ export function DetachedMixer() {
     return (
       <div className="detached-piano empty">
         <p role="alert">{error}</p>
-        <p className="muted">Open a Style in the main window, then detach again.</p>
+        <p className="muted">
+          Open a Style in the main window, then detach again.
+        </p>
       </div>
     );
   }
@@ -286,6 +289,7 @@ export function DetachedMixer() {
         eqValueAt={eqValueAt}
         onCc={onCc}
         onEq={onEq}
+        onSelectChannel={state.setChannel}
         targetChannel={state.channel}
         onAutoPan={(ch, points, removeIds) => {
           void state.edit({
@@ -323,14 +327,18 @@ export function DetachedMixer() {
         }}
         onMuteToggle={(ch) => {
           setMuted((a) => {
-            const next = a.includes(ch) ? a.filter((x) => x !== ch) : [...a, ch];
+            const next = a.includes(ch)
+              ? a.filter((x) => x !== ch)
+              : [...a, ch];
             emitMixer({ muted: next });
             return next;
           });
         }}
         onSoloToggle={(ch) => {
           setSolo((a) => {
-            const next = a.includes(ch) ? a.filter((x) => x !== ch) : [...a, ch];
+            const next = a.includes(ch)
+              ? a.filter((x) => x !== ch)
+              : [...a, ch];
             emitMixer({ solo: next });
             return next;
           });

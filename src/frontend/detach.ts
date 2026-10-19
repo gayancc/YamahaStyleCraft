@@ -1,7 +1,8 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emit, listen } from "@tauri-apps/api/event";
-import { isTauri } from "@tauri-apps/api/core";
-import type { Note, View } from "./contracts";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import type { View } from "./contracts";
+import { isNoteClipboard, type NoteClipboard } from "./noteClipboard";
 
 export const PIANO_ROLL_LABEL = "piano-roll";
 export const MIXER_LABEL = "mixer";
@@ -42,9 +43,7 @@ export type MixerSyncPayload = {
   mixerApplyAll: boolean;
 };
 
-export type ClipboardSyncPayload = {
-  notes: Note[];
-};
+export type ClipboardSyncPayload = NoteClipboard;
 
 export function docLabelFromUrl(): string {
   if (typeof window === "undefined") return "main";
@@ -158,7 +157,9 @@ export async function openProjectWindow(): Promise<string> {
   throw new Error("Maximum of 7 additional project windows is open");
 }
 
-export async function broadcastViewSync(payload: ViewSyncPayload): Promise<void> {
+export async function broadcastViewSync(
+  payload: ViewSyncPayload,
+): Promise<void> {
   if (!tauriReady()) return;
   try {
     await emit(VIEW_SYNC_EVENT, payload);
@@ -233,11 +234,7 @@ export async function broadcastClipboardSync(
   payload: ClipboardSyncPayload,
 ): Promise<void> {
   if (!tauriReady()) return;
-  try {
-    await emit(CLIPBOARD_SYNC_EVENT, payload);
-  } catch {
-    /* best-effort */
-  }
+  await invoke("write_note_clipboard", { payload });
 }
 
 export async function listenClipboardSync(
@@ -245,9 +242,26 @@ export async function listenClipboardSync(
 ): Promise<() => void> {
   if (!tauriReady()) return () => undefined;
   try {
-    return await listen<ClipboardSyncPayload>(CLIPBOARD_SYNC_EVENT, (e) =>
-      handler(e.payload),
+    let received = false;
+    const unlisten = await listen<ClipboardSyncPayload>(
+      CLIPBOARD_SYNC_EVENT,
+      (e) => {
+        if (isNoteClipboard(e.payload)) {
+          received = true;
+          handler(e.payload);
+        }
+      },
     );
+    try {
+      const existing = await invoke<ClipboardSyncPayload | null>(
+        "read_note_clipboard",
+      );
+      // A newer event may arrive while the initial snapshot is in flight.
+      if (!received && isNoteClipboard(existing)) handler(existing);
+    } catch {
+      /* Existing live subscription remains usable. */
+    }
+    return unlisten;
   } catch {
     return () => undefined;
   }

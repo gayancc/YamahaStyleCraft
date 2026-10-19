@@ -51,7 +51,8 @@ const summary: CatalogSummary = {
   edition: "Genos v2.00",
   sourceName: "fixture.pdf",
   sourceSha256: "verified",
-  count: 1711,
+  count: 2456,
+  categories: ["Piano", "Guitar"],
 };
 const found: VoiceSearch = { total: 1, voices: [voice] };
 const initial = (command: string) =>
@@ -64,12 +65,24 @@ const initial = (command: string) =>
           ? null
           : command === "import_voice_catalog"
             ? summary
-            : { ...view, revision: 1, dirty: true, canUndo: true },
+          : command === "apply_catalog_voice" || command === "edit_document"
+            ? { ...view, revision: 1, dirty: true, canUndo: true }
+            : (() => { throw new Error(`Unexpected desktop command: ${command}`); })(),
   );
 const apply = () => screen.getByRole("button", { name: "Apply voice" });
+const openCatalogTools = () =>
+  fireEvent.click(screen.getByText("Catalog tools"));
 const choose = async () =>
   fireEvent.click(await screen.findByRole("button", { name: /Test Grand/ }));
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   vi.clearAllMocks();
   mocks.invoke.mockReset().mockImplementation(initial);
   mocks.open.mockResolvedValue("C:/DataList.pdf");
@@ -79,9 +92,30 @@ beforeEach(() => {
     channel: 11,
     busy: false,
     error: null,
+    expansionVoices: [],
   });
 });
 afterEach(cleanup);
+
+it("factory voices are searchable immediately without opening a PDF or catalog tools", async () => {
+  render(<VoiceBrowser section={section} channel={11} onClose={vi.fn()} />);
+  await choose();
+  expect(
+    screen.getByRole("status", { name: "Voice catalog" }).textContent,
+  ).toContain("2,456 factory voices");
+  expect(
+    document.querySelector(".voice-catalog-tools")?.hasAttribute("open"),
+  ).toBe(false);
+  expect(
+    screen
+      .getByRole("button", { name: "Import Data List PDF…" })
+      .closest("details:not([open])"),
+  ).toBeTruthy();
+  expect(mocks.open).not.toHaveBeenCalled();
+  expect(
+    mocks.invoke.mock.calls.some(([c]) => c === "import_voice_catalog"),
+  ).toBe(false);
+});
 
 it("selection previews a 1-based program and Cancel makes no Style changes", async () => {
   const close = vi.fn();
@@ -97,6 +131,135 @@ it("selection previews a 1-based program and Cancel makes no Style changes", asy
   expect(
     mocks.invoke.mock.calls.some(([c]) => c === "apply_catalog_voice"),
   ).toBe(false);
+});
+
+it("pages every match and resets paging and selection when bank or category changes", async () => {
+  mocks.invoke.mockImplementation((cmd, args) =>
+    cmd === "search_voice_catalog"
+      ? Promise.resolve({
+          total: 120,
+          voices: [{ ...voice, name: `Voice page ${args.offset}` }],
+          offset: args.offset,
+          hasMore: args.offset < 80,
+        })
+      : initial(cmd),
+  );
+  render(<VoiceBrowser section={section} channel={11} onClose={vi.fn()} />);
+  await screen.findByRole("button", { name: /Voice page 0/ });
+  fireEvent.click(screen.getByRole("button", { name: "Next voices" }));
+  await screen.findByRole("button", { name: /Voice page 40/ });
+  expect(mocks.invoke).toHaveBeenCalledWith("search_voice_catalog", {
+    query: "",
+    kind: "all",
+    category: "",
+    offset: 40,
+    limit: 40,
+  });
+  fireEvent.click(screen.getByRole("button", { name: /Voice page 40/ }));
+  fireEvent.change(screen.getByLabelText("Voice bank group"), {
+    target: { value: "xg" },
+  });
+  await screen.findByRole("button", { name: /Voice page 0/ });
+  expect((apply() as HTMLButtonElement).disabled).toBe(true);
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Previous voices",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  fireEvent.change(screen.getByLabelText("Voice category"), {
+    target: { value: "Piano" },
+  });
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("search_voice_catalog", {
+      query: "",
+      kind: "xg",
+      category: "Piano",
+      offset: 0,
+      limit: 40,
+    }),
+  );
+});
+
+it("uses a movable modeless utility and preserves the workspace keyboard focus", async () => {
+  render(<VoiceBrowser section={section} channel={11} onClose={vi.fn()} />);
+  await choose();
+  const utility = screen.getByRole("dialog", { name: "Genos voices" });
+  expect(utility.getAttribute("aria-modal")).toBe("false");
+  expect(utility.parentElement).toBe(document.body);
+  expect(document.querySelector(".modal-backdrop")).toBeNull();
+});
+
+it("applies a recovered expansion address through the existing MIDI edit transaction", async () => {
+  const expansion = {
+    ...voice,
+    msb: 63,
+    lsb: 1,
+    program: 12,
+    name: "Recovered strings",
+    category: "Expansion",
+    page: 0,
+  };
+  useStudio.setState({ expansionVoices: [expansion] });
+  const close = vi.fn();
+  render(<VoiceBrowser section={section} channel={11} onClose={close} />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: /Recovered strings/ }),
+  );
+  await screen.findByLabelText("Search voices");
+  // Search completion clears previous selection; choose the recovered address once results settle.
+  await screen.findByRole("button", { name: /Test Grand/ });
+  fireEvent.click(screen.getByRole("button", { name: /Recovered strings/ }));
+  fireEvent.click(apply());
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+    revision: 0,
+    docLabel: "main",
+    command: {
+      type: "setVoice",
+      section: 7,
+      channel: 11,
+      address: { msb: 63, lsb: 1, program: 12 },
+    },
+  });
+  expect(
+    mocks.invoke.mock.calls.some(([c]) => c === "apply_catalog_voice"),
+  ).toBe(false);
+});
+
+it("filters recovered expansion voices locally without asking the factory command to search them", async () => {
+  useStudio.setState({
+    expansionVoices: [
+      {
+        ...voice,
+        name: "Recovered Strings",
+        msb: 63,
+        category: "Expansion",
+        page: 0,
+      },
+    ],
+  });
+  render(<VoiceBrowser section={section} channel={11} onClose={vi.fn()} />);
+  await choose();
+  fireEvent.change(screen.getByLabelText("Voice bank group"), {
+    target: { value: "expansion" },
+  });
+  await screen.findByRole("button", { name: /Recovered Strings/ });
+  expect(screen.queryByRole("button", { name: /Test Grand/ })).toBeNull();
+  expect(
+    mocks.invoke.mock.calls.some(
+      ([cmd, args]) =>
+        cmd === "search_voice_catalog" && args.kind === "expansion",
+    ),
+  ).toBe(false);
+  fireEvent.change(screen.getByLabelText("Search voices"), {
+    target: { value: "not-present" },
+  });
+  await screen.findByText(/No voices match/);
+  expect(
+    screen.queryByRole("button", { name: /Recovered Strings/ }),
+  ).toBeNull();
 });
 it("Apply sends one atomic voice address with zero-based program only after confirmation", async () => {
   const close = vi.fn();
@@ -121,6 +284,7 @@ it("failed PDF import retains the existing searchable catalog and selected sourc
   );
   render(<VoiceBrowser section={section} channel={11} onClose={vi.fn()} />);
   await choose();
+  openCatalogTools();
   fireEvent.click(
     screen.getByRole("button", { name: "Import Data List PDF…" }),
   );
@@ -135,6 +299,7 @@ it("cancelled PDF chooser leaves catalog and document untouched", async () => {
   mocks.open.mockResolvedValue(null);
   render(<VoiceBrowser section={section} channel={11} onClose={vi.fn()} />);
   await choose();
+  openCatalogTools();
   fireEvent.click(
     screen.getByRole("button", { name: "Import Data List PDF…" }),
   );
@@ -166,7 +331,7 @@ it("pending native apply cannot be duplicated or dismissed with Escape", async (
   await choose();
   fireEvent.click(apply());
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-  fireEvent.pointerDown(document.querySelector(".modal-backdrop")!);
+  fireEvent.click(screen.getByRole("button", { name: "Close Genos voices" }));
   expect(close).not.toHaveBeenCalled();
   expect(
     mocks.invoke.mock.calls.filter(([c]) => c === "apply_catalog_voice"),
@@ -206,6 +371,7 @@ it("an old startup catalog read cannot overwrite a successfully imported catalog
       : initial(cmd),
   );
   render(<VoiceBrowser section={section} channel={11} onClose={vi.fn()} />);
+  openCatalogTools();
   fireEvent.click(
     screen.getByRole("button", { name: "Import Data List PDF…" }),
   );

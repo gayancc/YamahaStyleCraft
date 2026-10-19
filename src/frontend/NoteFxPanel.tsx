@@ -1,3 +1,4 @@
+import { ParameterControl } from "./ParameterControl";
 import { useState } from "react";
 import type { MidiEvent, Note, Section, View } from "./contracts";
 import {
@@ -119,30 +120,49 @@ export function NoteFxPanel({
           ))}
         </select>
       </label>
-      <label className="field">
-        <span>Start</span>
-        <input
-          aria-label="Note effect start value"
-          type="number"
-          min={0}
-          max={127}
-          value={startValue}
-          disabled={!enabled}
-          onChange={(e) => setStart(+e.target.value)}
-        />
-      </label>
-      <label className="field">
-        <span>End</span>
-        <input
-          aria-label="Note effect end value"
-          type="number"
-          min={0}
-          max={127}
-          value={endValue}
-          disabled={!enabled}
-          onChange={(e) => setEnd(+e.target.value)}
-        />
-      </label>
+      {isSwitch ? (
+        <div className="note-fx-switches">
+          <button
+            type="button"
+            role="switch"
+            aria-label="Note effect start sustain"
+            aria-checked={startValue >= 64}
+            disabled={!enabled}
+            onClick={() => setStart(startValue >= 64 ? 0 : 127)}
+          >
+            Start: {startValue >= 64 ? "On" : "Off"}
+          </button>
+          <button
+            type="button"
+            role="switch"
+            aria-label="Note effect end sustain"
+            aria-checked={endValue >= 64}
+            disabled={!enabled}
+            onClick={() => setEnd(endValue >= 64 ? 0 : 127)}
+          >
+            End: {endValue >= 64 ? "On" : "Off"}
+          </button>
+        </div>
+      ) : (
+        <div className="note-fx-knobs">
+          <ParameterControl
+            label="Start"
+            ariaLabel="Note effect start"
+            value={startValue}
+            resetValue={24}
+            disabled={!enabled}
+            onCommit={setStart}
+          />
+          <ParameterControl
+            label="End"
+            ariaLabel="Note effect end"
+            value={endValue}
+            resetValue={72}
+            disabled={!enabled}
+            onCommit={setEnd}
+          />
+        </div>
+      )}
       <label className="field">
         <span>Curve</span>
         <select

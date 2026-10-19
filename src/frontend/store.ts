@@ -8,15 +8,11 @@ import type {
   View,
 } from "./contracts";
 import { broadcastClipboardSync, broadcastViewSync } from "./detach";
+import { isNoteClipboard } from "./noteClipboard";
 
 /** Piano-roll edit tools (SFM-PR-TOOL-*): Select/Draw/Paint/Erase + Cursor(2)/Pan(3). */
 export type StudioTool =
-  | "select"
-  | "draw"
-  | "paint"
-  | "erase"
-  | "cursor"
-  | "pan";
+  "select" | "draw" | "paint" | "erase" | "cursor" | "pan";
 
 function applyUiState(
   view: View,
@@ -36,14 +32,7 @@ function applyUiState(
       channel: fallbackChannel,
     };
   }
-  const tools = new Set([
-    "select",
-    "draw",
-    "paint",
-    "erase",
-    "cursor",
-    "pan",
-  ]);
+  const tools = new Set(["select", "draw", "paint", "erase", "cursor", "pan"]);
   const sectionOk =
     typeof ui.sectionId === "number" &&
     view.sections.some((s) => s.id === ui.sectionId);
@@ -83,6 +72,7 @@ interface StudioState {
   error: string | null;
   message: string;
   clipboard: Note[];
+  clipboardPpq: number | null;
   snap: number;
   zoom: number;
   tool: StudioTool;
@@ -93,7 +83,7 @@ interface StudioState {
   setExpansionVoices: (voices: CatalogVoice[]) => void;
   setDocLabel: (label: string) => void;
   /** Copy/cut notes and broadcast to other Genos windows (SFM-009). */
-  setClipboard: (notes: Note[]) => void;
+  setClipboard: (notes: Note[]) => Promise<boolean>;
   load: (path: string) => Promise<void>;
   createBlank: (
     referencePath: string,
@@ -131,6 +121,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   error: null,
   message: "Open a Yamaha Style to begin",
   clipboard: [],
+  clipboardPpq: null,
   snap: 16,
   zoom: 1,
   tool: "select",
@@ -138,9 +129,31 @@ export const useStudio = create<StudioState>((set, get) => ({
   expansionVoices: [],
   setExpansionVoices: (voices) => set({ expansionVoices: voices }),
   setDocLabel: (docLabel) => set({ docLabel }),
-  setClipboard: (notes) => {
-    set({ clipboard: notes });
-    void broadcastClipboardSync({ notes });
+  setClipboard: async (notes) => {
+    if (!notes.length) {
+      set({ message: "Select one or more notes before copying." });
+      return false;
+    }
+    const payload = {
+      notes: notes.map((n) => ({ ...n })),
+      ppq: get().view?.ppq,
+    };
+    if (!isNoteClipboard(payload)) return false;
+    const previous = {
+      clipboard: get().clipboard,
+      clipboardPpq: get().clipboardPpq,
+    };
+    set({ clipboard: payload.notes, clipboardPpq: payload.ppq });
+    try {
+      await broadcastClipboardSync(payload);
+      return true;
+    } catch (e) {
+      set({
+        ...(get().clipboard === payload.notes ? previous : {}),
+        error: `Copy failed: ${String(e)}`,
+      });
+      return false;
+    }
   },
   load: async (path) => {
     if (get().busy) return;

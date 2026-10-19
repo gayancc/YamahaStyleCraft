@@ -1,5 +1,5 @@
-//! Local-only catalog extracted from the independently inspected Genos v2.00 Data List.
-//! No Yamaha voice catalog is bundled. Other editions require a verified extraction profile.
+//! Embedded Genos v2.00 factory voices with an optional, validated local catalog.
+//! Other editions require a verified extraction profile.
 use crate::{
     Error, Result,
     document::Document,
@@ -12,6 +12,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     path::Path,
+    sync::OnceLock,
 };
 
 pub const MAX_PDF_BYTES: usize = 32 * 1024 * 1024;
@@ -19,6 +20,7 @@ const MAX_CACHE_BYTES: u64 = 2 * 1024 * 1024;
 pub const SOURCE_SHA256: &str = "6022804163e4548abfd26db1889307d78f913297a3cc78b6cf6905bb3060a9bd";
 pub const EDITION: &str = "Genos v2.00 · English Data List · 11/2019";
 const SCHEMA: &str = "genos.voice-catalog.v1";
+const COMPLETE_SCHEMA: &str = "genos.voice-catalog.v2";
 /// Verified Data List category for kit program addresses (F019 kit picker scope).
 pub const DRUM_KIT_CATEGORY: &str = "DrumKit";
 /// Shell-observed Genos drum preview note bounds (findings/02); not a kit map.
@@ -76,12 +78,15 @@ pub struct Summary {
     pub source_name: String,
     pub source_sha256: String,
     pub count: usize,
+    pub categories: Vec<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Search {
     pub total: usize,
     pub voices: Vec<Voice>,
+    pub offset: usize,
+    pub has_more: bool,
 }
 fn bad(s: &str) -> Error {
     Error::Format(s.into())
@@ -93,6 +98,13 @@ impl Catalog {
             source_name: self.source_name.clone(),
             source_sha256: self.source_sha256.clone(),
             count: self.voices.len(),
+            categories: self
+                .voices
+                .iter()
+                .map(|v| v.category.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
         }
     }
     pub fn find(&self, address: Address) -> Option<&Voice> {
@@ -101,12 +113,38 @@ impl Catalog {
     pub fn search(&self, query: &str) -> Result<Search> {
         self.search_in(self.voices.iter(), query)
     }
+    pub fn browse(
+        &self,
+        query: &str,
+        kind: &str,
+        category: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Search> {
+        if !["all", "voices", "panel", "xg", "gm2", "drums"].contains(&kind)
+            || !(1..=100).contains(&limit)
+        {
+            return Err(bad("invalid voice browser filter or page size"));
+        }
+        let filtered = self.voices.iter().filter(|v| {
+            let matches_kind = match kind {
+                "voices" => v.category != DRUM_KIT_CATEGORY && v.msb != 120,
+                "panel" => v.page > 0,
+                "xg" => v.page == 0 && [0, 64].contains(&v.msb),
+                "gm2" => [120, 121].contains(&v.msb),
+                "drums" => v.category == DRUM_KIT_CATEGORY || v.msb == 120,
+                _ => true,
+            };
+            matches_kind && (category.is_empty() || v.category == category)
+        });
+        self.search_page(filtered, query, offset, limit)
+    }
     /// DrumKit category rows from the verified Data List (not SysEx Drum Setup).
     pub fn drum_kits(&self) -> Vec<Voice> {
         let mut kits: Vec<_> = self
             .voices
             .iter()
-            .filter(|v| v.category == DRUM_KIT_CATEGORY)
+            .filter(|v| v.category == DRUM_KIT_CATEGORY || v.msb == 120)
             .cloned()
             .collect();
         kits.sort_by_key(|a| a.name.to_lowercase());
@@ -120,6 +158,15 @@ impl Catalog {
         voices: impl Iterator<Item = &'a Voice>,
         query: &str,
     ) -> Result<Search> {
+        self.search_page(voices, query, 0, 100)
+    }
+    fn search_page<'a>(
+        &self,
+        voices: impl Iterator<Item = &'a Voice>,
+        query: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Search> {
         if query.chars().count() > 120 {
             return Err(bad("voice search is limited to 120 characters"));
         }
@@ -127,11 +174,14 @@ impl Catalog {
         let mut matches = Vec::new();
         for v in voices {
             let text = format!(
-                "{} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} {} {}:{}:{}",
                 v.name,
                 v.category,
                 v.subcategory,
                 v.voice_type,
+                v.msb,
+                v.lsb,
+                v.program + 1,
                 v.msb,
                 v.lsb,
                 v.program + 1
@@ -142,17 +192,19 @@ impl Catalog {
             }
         }
         let total = matches.len();
-        matches.truncate(100);
         Ok(Search {
             total,
-            voices: matches,
+            voices: matches.into_iter().skip(offset).take(limit).collect(),
+            offset,
+            has_more: offset.saturating_add(limit) < total,
         })
     }
     fn validate(&self) -> Result<()> {
-        if self.schema != SCHEMA
+        let complete = self.schema == COMPLETE_SCHEMA;
+        if (!complete && self.schema != SCHEMA)
             || self.edition != EDITION
             || self.source_sha256 != SOURCE_SHA256
-            || self.voices.len() != 1711
+            || self.voices.len() != if complete { 2456 } else { 1711 }
             || self.source_name.chars().count() > 160
         {
             return Err(bad(
@@ -161,11 +213,13 @@ impl Catalog {
         }
         let mut addresses = HashSet::new();
         let mut pages = [0usize; 12];
+        let mut compatibility = 0;
         for v in &self.voices {
             if v.msb > 127
                 || v.lsb > 127
                 || v.program > 127
-                || !(3..=14).contains(&v.page)
+                || (!(3..=14).contains(&v.page)
+                    && !(complete && v.page == 0 && [0, 64, 120, 121].contains(&v.msb)))
                 || !addresses.insert(v.address().id())
             {
                 return Err(bad("invalid or duplicate catalog voice address"));
@@ -178,9 +232,16 @@ impl Catalog {
                     return Err(bad("invalid voice catalog text"));
                 }
             }
-            pages[(v.page - 3) as usize] += 1;
+            if v.page == 0 {
+                compatibility += 1;
+            } else {
+                pages[(v.page - 3) as usize] += 1;
+            }
         }
-        if pages[..11].iter().any(|n| *n != 150) || pages[11] != 61 {
+        if pages[..11].iter().any(|n| *n != 150)
+            || pages[11] != 61
+            || compatibility != if complete { 745 } else { 0 }
+        {
             return Err(bad("voice list extraction is incomplete"));
         }
         if crate::project::hash(&serde_json::to_vec(&self.voices)?) != self.records_sha256 {
@@ -359,6 +420,61 @@ pub fn load(path: &Path) -> Result<Option<Catalog>> {
     Ok(Some(catalog))
 }
 
+/// The product's factory catalog is compiled into the executable, independently
+/// of the installation directory, PDF files, user data and network access.
+pub fn factory() -> &'static Catalog {
+    static FACTORY: OnceLock<Catalog> = OnceLock::new();
+    FACTORY.get_or_init(|| {
+        let catalog: Catalog =
+            serde_json::from_str(include_str!("../data/genos-factory-voices.json"))
+                .expect("embedded factory catalog must be valid JSON");
+        catalog
+            .validate()
+            .expect("embedded factory catalog must pass integrity validation");
+        complete_catalog(catalog)
+    })
+}
+
+/// Preserve valid imported catalogs; an absent, unreadable or damaged cache must
+/// never prevent normal factory voice selection. Leave the cache untouched.
+pub fn available(path: &Path) -> Catalog {
+    load(path)
+        .ok()
+        .flatten()
+        .map(complete_catalog)
+        .unwrap_or_else(|| factory().clone())
+}
+
+fn complete_catalog(mut catalog: Catalog) -> Catalog {
+    if catalog.schema == COMPLETE_SCHEMA {
+        return catalog;
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Compatibility {
+        schema: String,
+        source_sha256: String,
+        voices: Vec<Voice>,
+    }
+    let extra: Compatibility =
+        serde_json::from_str(include_str!("../data/genos-compatibility-voices.json"))
+            .expect("valid embedded compatibility catalog");
+    assert_eq!(extra.schema, "genos.compatibility-voices.v1");
+    assert_eq!(
+        extra.source_sha256,
+        "51e6586aa296ebb38f2366061f24793e303cbc1374fc4f024fa7150feec8fbc9"
+    );
+    catalog.voices.extend(extra.voices);
+    catalog.schema = COMPLETE_SCHEMA.into();
+    catalog.records_sha256 = crate::project::hash(
+        &serde_json::to_vec(&catalog.voices).expect("serializable voice entries"),
+    );
+    catalog
+        .validate()
+        .expect("complete embedded Genos catalog must pass validation");
+    catalog
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DrumChannelStatus {
@@ -369,7 +485,7 @@ pub struct DrumChannelStatus {
     pub late_program: bool,
     pub kit_category: bool,
 }
-/// Section-start kit addresses for rhythm channels 9/10 using the imported catalog.
+/// Section-start kit addresses for rhythm channels 9/10 using the available catalog.
 /// Does not decode Yamaha Drum Setup SysEx or note remaps (those remain gated).
 pub fn drum_channel_status(
     doc: &Document,

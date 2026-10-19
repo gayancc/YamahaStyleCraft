@@ -3,7 +3,10 @@ import type { RefObject } from "react";
 import type { Note, Section, View } from "./contracts";
 import { useStudio } from "./store";
 import { casmAdvisory, clamp, transformNotes } from "./pianoEditing";
-import type { QuantizeTarget, Transform } from "./pianoEditing";
+import type { Transform } from "./pianoEditing";
+import { FloatingToolWindow } from "./FloatingToolWindow";
+import { StudioMenu } from "./StudioMenu";
+import { AdvancedQuantize } from "./AdvancedQuantize";
 import { DEFAULT_NOTE_COLORS, sanitizeNoteColors } from "./noteColors";
 
 const operations: [Transform, string][] = [
@@ -70,18 +73,12 @@ export function PianoTools({
   const { selected, edit } = useStudio();
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const chosen = notes.filter((n) => selectedSet.has(n.id));
+  const [toolsOpen, setToolsOpen] = useState(false);
+  useEffect(() => {
+    setToolsOpen(false);
+  }, [section.id, channel]);
   const [operation, setOperation] = useState<Transform>("quantize"),
     [amount, setAmount] = useState(100),
-    [strength, setStrength] = useState(100),
-    [duration, setDuration] = useState(false),
-    [moveControllers, setMoveControllers] = useState(true),
-    [swing, setSwing] = useState(0),
-    [tuplet, setTuplet] = useState(0),
-    [quantizeTarget, setQuantizeTarget] =
-      useState<QuantizeTarget>("starts"),
-    [catchRange, setCatchRange] = useState(0),
-    [safeRange, setSafeRange] = useState(0),
-    [roughTicks, setRoughTicks] = useState(0),
     [low, setLow] = useState(36),
     [high, setHigh] = useState(84);
   const advisory = casmAdvisory(
@@ -152,15 +149,6 @@ export function PianoTools({
         transformNotes(operation, chosen, section, channel, {
           step: grid,
           amount,
-          strength,
-          quantizeDuration: duration,
-          moveControllers,
-          swing,
-          tuplet,
-          quantizeTarget,
-          catchRange,
-          safeRange,
-          roughTicks,
           low,
           high,
           seed: Date.now(),
@@ -204,38 +192,51 @@ export function PianoTools({
       >
         Fit notes
       </button>
-      <label>
-        Rows{" "}
-        <input
-          aria-label="Pitch row height"
-          type="range"
-          min="10"
-          max="30"
-          value={row}
-          onChange={(e) => onRow(+e.target.value)}
-        />
-      </label>
-      <label
-        title="Show all notes of the current source in the pitch view"
+      <StudioMenu label="View">
+        {" "}
+        <label>
+          Rows{" "}
+          <input
+            aria-label="Pitch row height"
+            type="range"
+            min="10"
+            max="30"
+            value={row}
+            onChange={(e) => onRow(+e.target.value)}
+          />
+        </label>
+        <label title="Show all notes of the current source in the pitch view">
+          <input
+            type="checkbox"
+            checked={ghosts}
+            onChange={(e) => onGhosts(e.target.checked)}
+          />{" "}
+          Ghosts
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={follow}
+            onChange={(e) => onFollow(e.target.checked)}
+          />{" "}
+          Follow playback
+        </label>
+      </StudioMenu>{" "}
+      <button
+        type="button"
+        aria-label="Piano tools"
+        title="Note transforms and Clear Part"
+        onClick={() => setToolsOpen((v) => !v)}
       >
-        <input
-          type="checkbox"
-          checked={ghosts}
-          onChange={(e) => onGhosts(e.target.checked)}
-        />{" "}
-        Ghosts
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          checked={follow}
-          onChange={(e) => onFollow(e.target.checked)}
-        />{" "}
-        Follow playback
-      </label>
-      <details className="piano-tool-menu">
-        <summary title="Note transforms and Clear Part">Tools</summary>
-        <div>
+        Tools
+      </button>
+      <FloatingToolWindow
+        open={toolsOpen}
+        title={operation === "quantize" ? "Quantize" : "Piano tools"}
+        context={`${section.label} · CH ${channel}`}
+        onClose={() => setToolsOpen(false)}
+      >
+        <div className="piano-tools-content">
           <select
             aria-label="Note transform"
             value={operation}
@@ -262,117 +263,14 @@ export function PianoTools({
             ))}
           </select>
           {operation === "quantize" ? (
-            <>
-              <label>
-                Target{" "}
-                <select
-                  aria-label="Quantize target"
-                  value={quantizeTarget}
-                  onChange={(e) =>
-                    setQuantizeTarget(e.target.value as QuantizeTarget)
-                  }
-                >
-                  <option value="starts">Note starts</option>
-                  <option value="ends">Note ends</option>
-                  <option value="both">Starts and ends</option>
-                </select>
-              </label>
-              <label>
-                Strength %{" "}
-                <input
-                  aria-label="Quantize strength"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={strength}
-                  onChange={(e) => setStrength(clamp(+e.target.value, 0, 100))}
-                />
-              </label>
-              <label>
-                Swing %{" "}
-                <input
-                  aria-label="Quantize swing"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={swing}
-                  onChange={(e) => setSwing(clamp(+e.target.value, 0, 100))}
-                />
-              </label>
-              <label>
-                Tuplet{" "}
-                <select
-                  aria-label="Quantize tuplet"
-                  value={tuplet}
-                  onChange={(e) => setTuplet(+e.target.value)}
-                >
-                  <option value={0}>Off</option>
-                  <option value={3}>3</option>
-                  <option value={5}>5</option>
-                  <option value={7}>7</option>
-                </select>
-              </label>
-              <label title="Only move notes within this many ticks of a grid point (0 = all)">
-                Catch ticks{" "}
-                <input
-                  aria-label="Quantize catch range"
-                  type="number"
-                  min="0"
-                  max="960"
-                  value={catchRange}
-                  onChange={(e) =>
-                    setCatchRange(clamp(+e.target.value, 0, 960))
-                  }
-                />
-              </label>
-              <label title="Skip notes already within this many ticks of the grid">
-                Safe ticks{" "}
-                <input
-                  aria-label="Quantize safe range"
-                  type="number"
-                  min="0"
-                  max="960"
-                  value={safeRange}
-                  onChange={(e) =>
-                    setSafeRange(clamp(+e.target.value, 0, 960))
-                  }
-                />
-              </label>
-              <label title="Add seeded ±jitter after snap (0 = exact)">
-                Rough ticks{" "}
-                <input
-                  aria-label="Quantize rough timing"
-                  type="number"
-                  min="0"
-                  max="240"
-                  value={roughTicks}
-                  onChange={(e) =>
-                    setRoughTicks(clamp(+e.target.value, 0, 240))
-                  }
-                />
-              </label>
-              {quantizeTarget === "starts" ? (
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={duration}
-                    onChange={(e) => setDuration(e.target.checked)}
-                  />{" "}
-                  Quantize lengths
-                </label>
-              ) : null}
-              <label
-                title="Move CC and pitch-bend timing with changed note starts (SFM Move controllers)"
-              >
-                <input
-                  type="checkbox"
-                  checked={moveControllers}
-                  onChange={(e) => setMoveControllers(e.target.checked)}
-                  aria-label="Move controllers with note starts"
-                />{" "}
-                Move controllers
-              </label>
-            </>
+            <AdvancedQuantize
+              section={section}
+              channel={channel}
+              notes={notes}
+              selected={selected}
+              view={view}
+              disabled={disabled || !toolsOpen}
+            />
           ) : ![
               "legato",
               "chop",
@@ -423,9 +321,11 @@ export function PianoTools({
               </label>
             </>
           )}
-          <button disabled={disabled || !chosen.length} onClick={apply}>
-            Apply to selection
-          </button>
+          {operation !== "quantize" && (
+            <button disabled={disabled || !chosen.length} onClick={apply}>
+              Apply to selection
+            </button>
+          )}
           <button
             disabled={disabled || !notes.length}
             title="Delete every note on this source in the current section (one undo)"
@@ -444,20 +344,27 @@ export function PianoTools({
           >
             Clear Part
           </button>
-          <small>{advisory.text}</small>
-          <small>Each tool commits once. CASM is preserved.</small>
-          <small>
-            Select: empty click adds; drag empty marquee-selects; drag notes
-            to move; edge-drag resizes; right-drag erases. Draw (P) · Paint
-            (B) · Erase (D) · Cursor (2) · Pan (3). Hold-right 1s for note
-            properties.
-          </small>
+          <details className="tool-window-help">
+            <summary>Workflow and compatibility</summary>
+            <small>{advisory.text}</small>
+            <small>Each tool commits once. CASM is preserved.</small>
+            <small>
+              Select: empty click adds; drag empty marquee-selects; drag notes
+              to move; edge-drag resizes; right-drag erases. Draw (P) · Paint
+              (B) · Erase (D) · Cursor (2) · Pan (3). Hold-right 1s for note
+              properties.
+            </small>
+          </details>
         </div>
-      </details>
+      </FloatingToolWindow>
       {onNoteColorsChange ? (
         <details className="piano-tool-menu note-colors-menu">
           <summary>Note colors</summary>
-          <div className="note-colors-grid" role="group" aria-label="Note colors">
+          <div
+            className="note-colors-grid"
+            role="group"
+            aria-label="Note colors"
+          >
             {colors.map((hex, i) => (
               <label key={i} title={`CH${i + 1} display color`}>
                 <span>CH{i + 1}</span>

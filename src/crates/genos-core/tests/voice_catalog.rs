@@ -105,6 +105,182 @@ fn official_pdf_all_1711_rows_match_independent_pdfplumber_cell_extraction() {
         .unwrap();
     assert_eq!(voice.name, "ActiveBassPickHmrOn");
 }
+
+#[test]
+fn embedded_factory_matches_every_verified_pdf_entry_and_searches_offline() {
+    let embedded = voice_catalog::factory();
+    assert_eq!(
+        embedded
+            .voices
+            .iter()
+            .filter(|v| v.page > 0)
+            .cloned()
+            .collect::<Vec<_>>(),
+        catalog().voices
+    );
+    assert_eq!(embedded.summary().count, 2456);
+    assert_eq!(
+        embedded.search("CFX ConcertGrand").unwrap().voices[0].name,
+        "CFX ConcertGrand"
+    );
+    let kits = embedded.search_drum_kits("").unwrap();
+    assert!(!kits.voices.is_empty());
+    assert_eq!(kits.total, 58);
+    assert!(
+        kits.voices
+            .iter()
+            .all(|v| v.category == "DrumKit" || v.msb == 120)
+    );
+}
+
+#[test]
+fn complete_catalog_matches_every_real_stylemagic_genos_address_and_omits_separators() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let text: String = include_bytes!("fixtures/genos-stylemagic.idl")
+        .iter()
+        .map(|b| char::from(*b))
+        .collect();
+    let mut sections: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut section = "";
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = name;
+        } else {
+            sections.entry(section).or_default().push(line);
+        }
+    }
+    let mut expected = BTreeMap::new();
+    let mut placeholders = BTreeSet::new();
+    for kind in [
+        "Normal Voice",
+        "Organ Flutes",
+        "SFX Voice",
+        "GM2 Normal",
+        "GM2 Rhythm",
+        "SFX Kit",
+        "Drum Kit",
+    ] {
+        for line in &sections[kind] {
+            let Some((bank, name)) = line.strip_prefix("Patch[").and_then(|s| s.split_once("]="))
+            else {
+                continue;
+            };
+            let bank: u16 = bank.parse().unwrap();
+            for row in &sections[name] {
+                let Some((program, label)) = row.split_once('=') else {
+                    continue;
+                };
+                let Ok(program) = program.parse::<u8>() else {
+                    continue;
+                };
+                let address = Address {
+                    msb: (bank >> 7) as u8,
+                    lsb: (bank & 127) as u8,
+                    program,
+                };
+                if label.starts_with("<---") {
+                    placeholders.insert(address.id());
+                    continue;
+                }
+                assert!(expected.insert(address.id(), label).is_none());
+            }
+        }
+    }
+    let factory = voice_catalog::factory();
+    let actual: BTreeSet<_> = factory.voices.iter().map(|v| v.address().id()).collect();
+    assert_eq!(actual, expected.keys().copied().collect());
+    assert_eq!(actual.len(), 2456);
+    assert_eq!(placeholders.len(), 10);
+    assert!(actual.is_disjoint(&placeholders));
+    for voice in factory.voices.iter().filter(|v| v.page == 0) {
+        assert_eq!(voice.name, expected[&voice.address().id()]);
+    }
+}
+
+#[test]
+fn browser_pages_reach_every_voice_once_and_filters_preserve_exact_addresses() {
+    use std::collections::BTreeSet;
+    let catalog = voice_catalog::factory();
+    let mut addresses = BTreeSet::new();
+    for offset in (0..catalog.voices.len()).step_by(40) {
+        let page = catalog.browse("", "all", "", offset, 40).unwrap();
+        assert_eq!(page.total, 2456);
+        assert_eq!(page.offset, offset);
+        assert_eq!(page.has_more, offset + 40 < 2456);
+        for voice in page.voices {
+            assert!(addresses.insert(voice.address().id()));
+        }
+    }
+    assert_eq!(addresses.len(), 2456);
+    assert_eq!(catalog.browse("", "panel", "", 0, 40).unwrap().total, 1711);
+    assert_eq!(catalog.browse("", "xg", "", 0, 40).unwrap().total, 480);
+    assert_eq!(catalog.browse("", "gm2", "", 0, 40).unwrap().total, 265);
+    assert_eq!(catalog.browse("", "drums", "", 0, 100).unwrap().total, 58);
+    assert_eq!(catalog.browse("", "voices", "", 0, 40).unwrap().total, 2398);
+    assert!(
+        catalog
+            .search("104:21:1")
+            .unwrap()
+            .voices
+            .iter()
+            .any(|v| v.name == "CFX ConcertGrand")
+    );
+    let piano = catalog.browse("", "xg", "Piano", 0, 100).unwrap();
+    assert!(piano.total > 0);
+    assert!(
+        piano
+            .voices
+            .iter()
+            .all(|v| v.page == 0 && v.category == "Piano")
+    );
+    assert!(catalog.browse("", "Genos2", "", 0, 40).is_err());
+    assert!(catalog.browse("", "all", "", 0, 0).is_err());
+    assert_eq!(
+        catalog
+            .browse("", "all", "", usize::MAX, 40)
+            .unwrap()
+            .voices
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn stock_voices_work_without_import_and_with_a_damaged_or_unreadable_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("voice-catalog.json");
+    assert_eq!(
+        voice_catalog::available(&path).voices,
+        voice_catalog::factory().voices
+    );
+    assert!(
+        !path.exists(),
+        "default lookup does not write or require a cache"
+    );
+    for bytes in [b"{broken".to_vec(), vec![b'x'; 2 * 1024 * 1024 + 1]] {
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            voice_catalog::available(&path).voices,
+            voice_catalog::factory().voices
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "preserve damaged local data"
+        );
+    }
+    assert_eq!(
+        voice_catalog::available(dir.path()).voices,
+        voice_catalog::factory().voices
+    );
+    let mut imported = catalog();
+    imported.source_name = "Previously imported Data List.pdf".into();
+    voice_catalog::save(&path, &imported).unwrap();
+    assert_eq!(
+        voice_catalog::available(&path).source_name,
+        imported.source_name
+    );
+}
 #[test]
 fn search_uses_category_name_and_type_terms_and_returns_bounded_results() {
     let c = catalog();

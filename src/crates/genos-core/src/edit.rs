@@ -136,6 +136,15 @@ pub enum Command {
         #[serde(default = "default_true")]
         move_controllers: bool,
     },
+    AdvancedQuantize {
+        section: u64,
+        channel: u8,
+        #[serde(default)]
+        ids: Vec<u64>,
+        options: crate::advanced_quantize::QuantizeOptions,
+        #[serde(default)]
+        reset: bool,
+    },
     Casm {
         route: usize,
         field: String,
@@ -264,13 +273,20 @@ pub enum Command {
         all_sections: bool,
     },
 }
+pub const QUANTIZE_STATE: &str = "advancedQuantizeV1";
+#[derive(Clone)]
+struct HistoryEntry {
+    style: Style,
+    quantize: Option<serde_json::Value>,
+}
 pub struct Session {
     pub document: Document,
     pub name: String,
     pub revision: u64,
-    undo: Vec<Style>,
-    redo: Vec<Style>,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
     saved: Vec<u8>,
+    saved_quantize: Option<serde_json::Value>,
     pub project_extensions: serde_json::Map<String, serde_json::Value>,
 }
 fn reject(s: &str) -> Error {
@@ -370,6 +386,7 @@ impl Session {
             undo: Vec::new(),
             redo: Vec::new(),
             saved: b.to_vec(),
+            saved_quantize: None,
             project_extensions: Default::default(),
         })
     }
@@ -377,11 +394,13 @@ impl Session {
         let mut view = self.document.view(
             self.name.clone(),
             self.revision,
-            self.document.style.bytes().is_ok_and(|b| b != self.saved),
+            self.document.style.bytes().is_ok_and(|b| b != self.saved)
+                || self.project_extensions.get(QUANTIZE_STATE) != self.saved_quantize.as_ref(),
             !self.undo.is_empty(),
             !self.redo.is_empty(),
         );
         view.ui_state = self.project_extensions.get("uiState").cloned();
+        view.quantize_original = self.project_extensions.get(QUANTIZE_STATE).cloned();
         view
     }
     /// Persist editor workspace fields into the `.gss` project extensions (SFM-002).
@@ -392,25 +411,41 @@ impl Session {
     }
     pub fn mark_saved(&mut self) -> Result<()> {
         self.saved = self.document.style.bytes()?;
+        self.saved_quantize = self.project_extensions.get(QUANTIZE_STATE).cloned();
         Ok(())
     }
     pub fn mark_unsaved(&mut self) {
         self.saved.clear();
     }
+    fn history_entry(&self) -> HistoryEntry {
+        HistoryEntry {
+            style: self.document.style.clone(),
+            quantize: self.project_extensions.get(QUANTIZE_STATE).cloned(),
+        }
+    }
+    fn set_quantize_state(&mut self, value: Option<serde_json::Value>) {
+        if let Some(value) = value {
+            self.project_extensions.insert(QUANTIZE_STATE.into(), value);
+        } else {
+            self.project_extensions.remove(QUANTIZE_STATE);
+        }
+    }
     pub fn undo(&mut self) -> Result<()> {
-        if let Some(style) = self.undo.pop() {
-            let d = Document::from_style(style)?;
-            self.redo.push(self.document.style.clone());
+        if let Some(entry) = self.undo.pop() {
+            let d = Document::from_style(entry.style)?;
+            self.redo.push(self.history_entry());
             self.document = d;
+            self.set_quantize_state(entry.quantize);
             self.revision += 1;
         }
         Ok(())
     }
     pub fn redo(&mut self) -> Result<()> {
-        if let Some(style) = self.redo.pop() {
-            let d = Document::from_style(style)?;
-            self.undo.push(self.document.style.clone());
+        if let Some(entry) = self.redo.pop() {
+            let d = Document::from_style(entry.style)?;
+            self.undo.push(self.history_entry());
             self.document = d;
+            self.set_quantize_state(entry.quantize);
             self.revision += 1;
         }
         Ok(())
@@ -420,6 +455,7 @@ impl Session {
             return Err(reject("stale revision; refresh the editor"));
         }
         let mut style = self.document.style.clone();
+        let mut quantize_state = self.project_extensions.get(QUANTIZE_STATE).cloned();
         let mut touched = HashSet::new();
         let mut expected_pairs: std::collections::HashMap<u64, u64> = self
             .document
@@ -473,6 +509,99 @@ impl Session {
                 Ok(())
             };
         match cmd {
+            Command::AdvancedQuantize {
+                section,
+                channel,
+                ids,
+                options,
+                reset,
+            } => {
+                use crate::advanced_quantize::{self, Baseline};
+                let mut states: std::collections::BTreeMap<String, Baseline> = quantize_state
+                    .clone()
+                    .map(serde_json::from_value)
+                    .transpose()?
+                    .unwrap_or_default();
+                let key = format!("{section}:{channel}");
+                let baseline = states.get(&key).cloned().unwrap_or_default();
+                let plan = if reset {
+                    advanced_quantize::reset(
+                        &self.document,
+                        section,
+                        channel,
+                        &ids,
+                        &baseline,
+                        options.source_filtered,
+                    )?
+                } else {
+                    advanced_quantize::plan(
+                        &self.document,
+                        section,
+                        channel,
+                        &ids,
+                        &options,
+                        Some(&baseline),
+                    )?
+                };
+                let sec = bounds(section)?;
+                for u in &plan.notes {
+                    let n = find_note(u.id)?;
+                    if n.channel != channel
+                        || u.pitch != n.pitch
+                        || u.velocity != n.velocity
+                        || u.duration == 0
+                        || u.start < sec.start
+                        || u.start
+                            .checked_add(u.duration)
+                            .is_none_or(|end| end > sec.end)
+                    {
+                        return Err(reject("invalid scoped quantize update"));
+                    }
+                    let &(on_track, on_index) = event_index
+                        .get(&n.id)
+                        .ok_or_else(|| reject("quantize note-on missing"))?;
+                    let &(off_track, off_index) = event_index
+                        .get(&n.off_id)
+                        .ok_or_else(|| reject("quantize note-off missing"))?;
+                    style.tracks[on_track][on_index].tick = u.start;
+                    let off = &mut style.tracks[off_track][off_index];
+                    off.tick = if u.duration == n.duration {
+                        off.tick
+                            .checked_add_signed(u.start as i64 - n.start as i64)
+                            .ok_or_else(|| reject("quantize note-off overflow"))?
+                    } else {
+                        u.start + u.duration
+                    };
+                    touched.insert(n.track);
+                }
+                for movement in &plan.events {
+                    if movement.tick < sec.start || movement.tick >= sec.end {
+                        return Err(reject("quantize controller outside section"));
+                    }
+                    let &(track, index) = event_index
+                        .get(&movement.id)
+                        .ok_or_else(|| reject("quantize controller not found"))?;
+                    let e = &mut style.tracks[track][index];
+                    if e.channel() != Some(channel)
+                        || e.data.len() != 3
+                        || !matches!(e.data[0] & 0xf0, 0xb0 | 0xe0)
+                    {
+                        return Err(reject("invalid quantize controller"));
+                    }
+                    e.tick = movement.tick;
+                    touched.insert(track);
+                }
+                if plan.baseline.notes.is_empty() && plan.baseline.events.is_empty() {
+                    states.remove(&key);
+                } else {
+                    states.insert(key, plan.baseline);
+                }
+                quantize_state = if states.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::to_value(states)?)
+                };
+            }
             Command::PianoNotes {
                 section,
                 channel,
@@ -1021,7 +1150,7 @@ impl Session {
                         }
                     }
                     style.tracks[n.track][event_index[&n.id].1].tick = start;
-                    style.tracks[n.track][event_index[&n.off_id].1].tick = start + dur;
+                    style.tracks[n.track][event_index[&n.off_id].1].tick = start + duration;
                     touched.insert(n.track);
                 }
                 move_controllers_with_note_starts(
@@ -1383,14 +1512,12 @@ impl Session {
                 remove,
             } => {
                 let s = bounds(section)?;
-                if points.len() + remove.len() > 50_000
-                    || (points.is_empty() && remove.is_empty())
+                if points.len() + remove.len() > 50_000 || (points.is_empty() && remove.is_empty())
                 {
                     return Err(reject("invalid tempo transaction"));
                 }
-                let matches = |e: &Event| {
-                    e.meta(0x51).is_some() && e.tick >= s.start && e.tick < s.end
-                };
+                let matches =
+                    |e: &Event| e.meta(0x51).is_some() && e.tick >= s.start && e.tick < s.end;
                 let mut ticks = HashSet::new();
                 for point in &points {
                     if !point.bpm.is_finite()
@@ -1528,7 +1655,11 @@ impl Session {
                 touched.insert(track);
             }
         }
-        if style.tracks == self.document.style.tracks && style.chunks == self.document.style.chunks
+        let metadata_changed =
+            quantize_state.as_ref() != self.project_extensions.get(QUANTIZE_STATE);
+        if !metadata_changed
+            && style.tracks == self.document.style.tracks
+            && style.chunks == self.document.style.chunks
         {
             return Ok(());
         }
@@ -1537,12 +1668,17 @@ impl Session {
             style.chunks[style.track_chunks[t]].data = smf::encode_track(&style.tracks[t])?;
         }
         let bytes = style.bytes()?;
-        if bytes == self.document.style.bytes()? {
+        if !metadata_changed && bytes == self.document.style.bytes()? {
             return Ok(());
         }
         // Validate the entire candidate before committing any change or history.
         Document::parse(&bytes)?;
         let candidate = Document::from_style(style)?;
+        if let Some(value) = quantize_state.as_ref() {
+            // Removing/moving notes or changing section bounds invalidates only
+            // their own originals. History retains the previous metadata atomically.
+            quantize_state = crate::advanced_quantize::project_state(value, &candidate, true)?;
+        }
         if candidate
             .notes
             .iter()
@@ -1553,12 +1689,13 @@ impl Session {
                 "edit would change FIFO pairing of overlapping notes; shorten or move the conflicting notes first",
             ));
         }
-        self.undo.push(self.document.style.clone());
+        self.undo.push(self.history_entry());
         if self.undo.len() > 32 {
             self.undo.remove(0);
         }
         self.redo.clear();
         self.document = candidate;
+        self.set_quantize_state(quantize_state);
         self.revision += 1;
         Ok(())
     }
@@ -1640,7 +1777,6 @@ fn replace_controller_lane(
     Ok(next)
 }
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn apply_pitch_bend_range(
     style: &mut Style,
     document: &Document,
@@ -1717,6 +1853,7 @@ fn apply_pitch_bend_range(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_mixer_ccs(
     style: &mut Style,
     document: &Document,

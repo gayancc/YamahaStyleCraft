@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import type { Note, Section, View } from "./contracts";
 import { useStudio } from "./store";
@@ -148,17 +148,19 @@ export function ControllerLane({
       0,
       section.end - section.start - 1,
     );
-  useEffect(() => {
+  useLayoutEffect(() => {
     const c = canvas.current;
     if (!c) return;
     const dpr = window.devicePixelRatio || 1;
-    c.width = Math.round(width * dpr);
-    c.height = Math.round(height * dpr);
+    const pixelWidth = Math.round(width * dpr),
+      pixelHeight = Math.round(height * dpr);
+    if (c.width !== pixelWidth) c.width = pixelWidth;
+    if (c.height !== pixelHeight) c.height = pixelHeight;
     c.style.width = `${width}px`;
     c.style.height = `${height}px`;
     const ctx = c.getContext("2d");
     if (!ctx) return;
-    ctx.scale(dpr, dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#26363e";
     ctx.fillRect(0, 0, width, height);
     ctx.font = "10px Segoe UI";
@@ -282,11 +284,13 @@ export function ControllerLane({
       ctx.fillRect(px(playheadTick), 0, 1.5, height);
     }
     // Live SFM help: “drag the yellow handle … to shape the curve”.
-    if (draft && isSpanCurve(mode) && Math.hypot(draft.lastX - draft.x, draft.lastY - draft.y) > 4) {
+    if (
+      draft &&
+      isSpanCurve(mode) &&
+      Math.hypot(draft.lastX - draft.x, draft.lastY - draft.y) > 4
+    ) {
       const midX = (draft.x + draft.lastX) / 2;
-      const midY =
-        draft.y +
-        (draft.lastY - draft.y) * curveT(mode, 0.5);
+      const midY = draft.y + (draft.lastY - draft.y) * curveT(mode, 0.5);
       ctx.fillStyle = "#e8c277";
       ctx.strokeStyle = "#1a2228";
       ctx.lineWidth = 1;
@@ -346,8 +350,7 @@ export function ControllerLane({
         Math.abs(x - from) < 1
           ? y
           : fromY +
-              (y - fromY) *
-                curveT(mode, clamp((p - from) / (x - from), 0, 1)),
+              (y - fromY) * curveT(mode, clamp((p - from) / (x - from), 0, 1)),
       );
     if (lane === -1) {
       const eligible = chosen.length ? chosen : notes;
@@ -554,9 +557,7 @@ export function ControllerLane({
       });
     else if (lane !== -1 && ids.length) {
       const ticks = [
-        ...new Set(
-          events.filter((e) => ids.includes(e.id)).map((e) => e.tick),
-        ),
+        ...new Set(events.filter((e) => ids.includes(e.id)).map((e) => e.tick)),
       ].map((tick) => ({ tick, value }));
       if (eqBand)
         void edit({
@@ -687,7 +688,7 @@ export function ControllerLane({
         onDoubleClick={() => setHeight(112)}
       />
       <div className="lane-toolbar">
-          <select
+        <select
           aria-label="Controller lane"
           value={lane}
           onChange={(e) => {
@@ -732,9 +733,7 @@ export function ControllerLane({
           min={laneMin}
           max={laneMax}
           value={value}
-          onChange={(e) =>
-            setValue(clamp(+e.target.value, laneMin, laneMax))
-          }
+          onChange={(e) => setValue(clamp(+e.target.value, laneMin, laneMax))}
         />
         <button
           disabled={disabled || !(lane === -1 ? chosen.length : ids.length)}

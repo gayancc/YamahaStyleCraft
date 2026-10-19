@@ -74,7 +74,10 @@ const canvasProto = HTMLCanvasElement.prototype as HTMLCanvasElement & {
 const origPointerCapture = {
   set: Object.getOwnPropertyDescriptor(canvasProto, "setPointerCapture"),
   has: Object.getOwnPropertyDescriptor(canvasProto, "hasPointerCapture"),
-  release: Object.getOwnPropertyDescriptor(canvasProto, "releasePointerCapture"),
+  release: Object.getOwnPropertyDescriptor(
+    canvasProto,
+    "releasePointerCapture",
+  ),
 };
 beforeEach(() => {
   useStudio.setState({
@@ -150,7 +153,7 @@ const gesture = (
 const command = () => mock.invoke.mock.calls[0]?.[1]?.command;
 it("previews continuously then sends exactly one scoped velocity command", async () => {
   mount();
-  const c = screen.getByLabelText(/^Velocity lane[.]/);
+  const c = screen.getByLabelText(/^Velocity lane(?:[.]|$)/);
   gesture(c, 60, 48, 60, 90);
   expect(mock.invoke).not.toHaveBeenCalled();
   fireEvent.pointerUp(c);
@@ -164,7 +167,7 @@ it("previews continuously then sends exactly one scoped velocity command", async
 });
 it("overlapping handles select by vertical distance rather than array order", async () => {
   mount();
-  const c = screen.getByLabelText(/^Velocity lane[.]/);
+  const c = screen.getByLabelText(/^Velocity lane(?:[.]|$)/);
   gesture(c, 60, 90, 60, 60);
   fireEvent.pointerUp(c);
   await waitFor(() => expect(mock.invoke).toHaveBeenCalledTimes(1));
@@ -173,7 +176,7 @@ it("overlapping handles select by vertical distance rather than array order", as
 });
 it("cancelled velocity drafts never invoke the backend", () => {
   mount();
-  const c = screen.getByLabelText(/^Velocity lane[.]/);
+  const c = screen.getByLabelText(/^Velocity lane(?:[.]|$)/);
   gesture(c, 60, 48, 100, 30);
   fireEvent.pointerCancel(c);
   fireEvent.pointerUp(c);
@@ -185,7 +188,7 @@ it("selection restricts a velocity ramp to selected note identities", async () =
   fireEvent.change(screen.getByLabelText("Controller gesture"), {
     target: { value: "ramp" },
   });
-  const c = screen.getByLabelText(/^Velocity lane[.]/);
+  const c = screen.getByLabelText(/^Velocity lane(?:[.]|$)/);
   gesture(c, 60, 90, 156, 16);
   fireEvent.pointerUp(c);
   await waitFor(() => expect(mock.invoke).toHaveBeenCalled());
@@ -219,7 +222,7 @@ it("EQ Low lane commits timed NRPN automation via mixerEqPoints", async () => {
   fireEvent.change(screen.getByLabelText("Controller gesture"), {
     target: { value: "ramp" },
   });
-  const c = screen.getByLabelText(/^EQ Low NRPN lane/);
+  const c = screen.getByLabelText(/^EQ Low(?: NRPN)? lane/);
   gesture(c, 60, 104, 156, 16);
   fireEvent.pointerUp(c);
   await waitFor(() => expect(mock.invoke).toHaveBeenCalledTimes(1));
@@ -240,7 +243,7 @@ it("CC7 creates explicit 0–127 samples and retains intermediate existing event
   fireEvent.change(screen.getByLabelText("Controller gesture"), {
     target: { value: "ramp" },
   });
-  const c = screen.getByLabelText(/^MIDI CC7 lane[.]/);
+  const c = screen.getByLabelText(/^MIDI CC7 lane(?:[.]|$)/);
   gesture(c, 60, 104, 156, 16);
   fireEvent.pointerUp(c);
   await waitFor(() => expect(mock.invoke).toHaveBeenCalledTimes(1));
@@ -262,7 +265,7 @@ it("controller selection supports select-all deletion without deleting notes", a
   fireEvent.change(screen.getByLabelText("Controller gesture"), {
     target: { value: "relative" },
   });
-  const c = screen.getByLabelText(/^MIDI CC7 lane[.]/);
+  const c = screen.getByLabelText(/^MIDI CC7 lane(?:[.]|$)/);
   fireEvent.keyDown(c, { key: "a", ctrlKey: true });
   fireEvent.keyDown(c, { key: "Delete" });
   await waitFor(() => expect(mock.invoke).toHaveBeenCalledTimes(1));
@@ -303,11 +306,11 @@ it("exposes Tempo lane and commits tempoPoints for selected meta", async () => {
   fireEvent.change(screen.getByLabelText("Controller lane"), {
     target: { value: "-5" },
   });
-  expect(screen.getByLabelText(/^Tempo lane[.]/)).toBeTruthy();
+  expect(screen.getByLabelText(/^Tempo lane(?:[.]|$)/)).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Controller gesture"), {
     target: { value: "relative" },
   });
-  const c = screen.getByLabelText(/^Tempo lane[.]/);
+  const c = screen.getByLabelText(/^Tempo lane(?:[.]|$)/);
   fireEvent.keyDown(c, { key: "a", ctrlKey: true });
   fireEvent.change(screen.getByLabelText("Lane selection value"), {
     target: { value: "140" },
@@ -322,7 +325,7 @@ it("exposes Tempo lane and commits tempoPoints for selected meta", async () => {
 });
 it("a revision change cancels the current gesture", async () => {
   const ui = mount();
-  const c = screen.getByLabelText(/^Velocity lane[.]/);
+  const c = screen.getByLabelText(/^Velocity lane(?:[.]|$)/);
   gesture(c, 60, 48, 60, 20);
   await act(async () =>
     ui.rerender(
@@ -343,4 +346,3 @@ it("a revision change cancels the current gesture", async () => {
   fireEvent.pointerUp(c);
   expect(mock.invoke).not.toHaveBeenCalled();
 });
-

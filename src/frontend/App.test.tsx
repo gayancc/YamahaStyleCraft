@@ -146,26 +146,28 @@ it("selects Cursor and Pan piano-roll tools (SFM keys 2/3)", () => {
 it("claims Use MIDI here when another window owns hardware", async () => {
   mocks.isTauri = true;
   let owner = "project-2";
-  mocks.invoke.mockImplementation(async (cmd: string, args?: { docLabel?: string }) => {
-    if (cmd === "midi_ownership")
-      return {
-        owner,
-        active: owner === (args?.docLabel ?? "main"),
-        windows: 2,
-      };
-    if (cmd === "claim_midi") {
-      owner = args?.docLabel ?? "main";
-      return { owner, active: true, windows: 2 };
-    }
-    if (cmd === "load_prefs")
-      return { schema: "genos.prefs.v1", snap: 16, zoom: 1, tool: "select" };
-    if (cmd === "list_recent") return [];
-    if (cmd === "recovery_status") return false;
-    if (cmd === "scan_devices") return { inputs: [], outputs: [] };
-    if (cmd === "transport_status")
-      return { playing: false, elapsedMs: 0, error: null };
-    return null;
-  });
+  mocks.invoke.mockImplementation(
+    async (cmd: string, args?: { docLabel?: string }) => {
+      if (cmd === "midi_ownership")
+        return {
+          owner,
+          active: owner === (args?.docLabel ?? "main"),
+          windows: 2,
+        };
+      if (cmd === "claim_midi") {
+        owner = args?.docLabel ?? "main";
+        return { owner, active: true, windows: 2 };
+      }
+      if (cmd === "load_prefs")
+        return { schema: "genos.prefs.v1", snap: 16, zoom: 1, tool: "select" };
+      if (cmd === "list_recent") return [];
+      if (cmd === "recovery_status") return false;
+      if (cmd === "scan_devices") return { inputs: [], outputs: [] };
+      if (cmd === "transport_status")
+        return { playing: false, elapsedMs: 0, error: null };
+      return null;
+    },
+  );
   useStudio.setState({ view, sectionId: 7, docLabel: "main" });
   render(<App />);
   const claim = await screen.findByRole("button", { name: "Use MIDI here" });
@@ -222,61 +224,57 @@ it("exposes Note colors pickers for all 16 channels", async () => {
   );
 });
 
-it(
-  "mutes and solos source channels from the track list and filters play",
-  async () => {
-    useStudio.setState({ view, sectionId: 7 });
-    mocks.invoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "scan_devices")
-        return { inputs: [], outputs: [{ index: 1, name: "Genos" }] };
-      if (cmd === "play" || cmd === "set_playback_channels") return undefined;
-      return null;
-    });
-    render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "MIDI device settings" }));
-    await screen.findByRole("option", { name: "Genos" });
-    fireEvent.change(screen.getByLabelText("MIDI output"), {
-      target: { value: "1:Genos" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+it("mutes and solos source channels from the track list and filters play", async () => {
+  useStudio.setState({ view, sectionId: 7 });
+  mocks.invoke.mockImplementation(async (cmd: string) => {
+    if (cmd === "scan_devices")
+      return { inputs: [], outputs: [{ index: 1, name: "Genos" }] };
+    if (cmd === "play" || cmd === "set_playback_channels") return undefined;
+    return null;
+  });
+  render(<App />);
+  fireEvent.click(screen.getByRole("button", { name: "MIDI device settings" }));
+  await screen.findByRole("option", { name: "Genos" });
+  fireEvent.change(screen.getByLabelText("MIDI output"), {
+    target: { value: "1:Genos" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Mute CH11" }));
-    expect(
-      screen
-        .getByRole("button", { name: "Mute CH11" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Solo CH10" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Play source notes (Space)" }),
-    );
-    await waitFor(() =>
-      expect(mocks.invoke).toHaveBeenCalledWith(
-        "play",
-        expect.objectContaining({ channels: [10] }),
-      ),
-    );
+  fireEvent.click(screen.getByRole("button", { name: "Mute CH11" }));
+  expect(
+    screen
+      .getByRole("button", { name: "Mute CH11" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Solo CH10" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Play source notes (Space)" }),
+  );
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      "play",
+      expect.objectContaining({ channels: [10] }),
+    ),
+  );
 
-    // Live mute while playing pushes set_playback_channels (no plan restart).
-    fireEvent.click(screen.getByRole("button", { name: "Mute CH10" }));
-    await waitFor(() =>
-      expect(mocks.invoke).toHaveBeenCalledWith(
-        "set_playback_channels",
-        expect.objectContaining({ channels: [], index: 1, name: "Genos" }),
-      ),
-    );
+  // Live mute while playing pushes set_playback_channels (no plan restart).
+  fireEvent.click(screen.getByRole("button", { name: "Mute CH10" }));
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      "set_playback_channels",
+      expect.objectContaining({ channels: [], index: 1, name: "Genos" }),
+    ),
+  );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Arm CH11 for recording" }),
-    );
-    expect(
-      screen
-        .getByRole("button", { name: "Arm CH11 for recording" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-  },
-  10_000,
-);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Arm CH11 for recording" }),
+  );
+  expect(
+    screen
+      .getByRole("button", { name: "Arm CH11 for recording" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+}, 10_000);
 
 it("requires arm and starts overdub play when capturing", async () => {
   mocks.isTauri = true;
@@ -335,7 +333,9 @@ it("requires arm and starts overdub play when capturing", async () => {
     expect.anything(),
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "Arm CH11 for recording" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Arm CH11 for recording" }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Start capture" }));
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith(
@@ -375,8 +375,7 @@ it("applies capture to the armed part channel", async () => {
         eventCount: 4,
         droppedEvents: 0,
       };
-    if (cmd === "apply_capture_to_section")
-      return { ...view, revision: 1 };
+    if (cmd === "apply_capture_to_section") return { ...view, revision: 1 };
     if (cmd === "load_prefs")
       return {
         schema: "genos.prefs.v1",
@@ -393,7 +392,9 @@ it("applies capture to the armed part channel", async () => {
     return null;
   });
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "Arm CH11 for recording" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Arm CH11 for recording" }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "MIDI device settings" }));
   await screen.findByRole("heading", { name: "MIDI capture" });
   await waitFor(() =>
@@ -401,7 +402,9 @@ it("applies capture to the armed part channel", async () => {
       screen.getByRole("button", { name: "Apply notes to section" }),
     ).not.toHaveProperty("disabled", true),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Apply notes to section" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Apply notes to section" }),
+  );
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith(
       "apply_capture_to_section",
@@ -437,8 +440,7 @@ it("applies controllers-only capture when Record data is Controllers + Voice", a
         eventCount: 2,
         droppedEvents: 0,
       };
-    if (cmd === "apply_capture_to_section")
-      return { ...view, revision: 1 };
+    if (cmd === "apply_capture_to_section") return { ...view, revision: 1 };
     if (cmd === "load_prefs")
       return {
         schema: "genos.prefs.v1",
@@ -457,7 +459,9 @@ it("applies controllers-only capture when Record data is Controllers + Voice", a
     return null;
   });
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "Arm CH11 for recording" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Arm CH11 for recording" }),
+  );
   fireEvent.click(
     screen.getByRole("button", { name: "Recording & MIDI settings" }),
   );
@@ -483,7 +487,9 @@ it("applies controllers-only capture when Record data is Controllers + Voice", a
       screen.getByRole("button", { name: "Apply notes to section" }),
     ).not.toHaveProperty("disabled", true),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Apply notes to section" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Apply notes to section" }),
+  );
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith(
       "apply_capture_to_section",
@@ -587,8 +593,8 @@ it("sends no initial effects by default, then includes the reviewed token only a
     (screen.getByLabelText("Preview initial Genos effects") as HTMLInputElement)
       .checked,
   ).toBe(false);
-// Raised from 5 000 ms: drives multiple play/stop cycles; runs more slowly
-// when the full suite loads extra modules (MixerPanel, DetachedMixer).
+  // Raised from 5 000 ms: drives multiple play/stop cycles; runs more slowly
+  // when the full suite loads extra modules (MixerPanel, DetachedMixer).
 }, 12_000);
 describe("real IPC wiring with isolated test mocks", () => {
   it("selects individual notes with keyboard-accessible inspector controls", () => {
@@ -596,20 +602,44 @@ describe("real IPC wiring with isolated test mocks", () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "Next note" }));
     expect(useStudio.getState().selected).toEqual([1]);
-    expect(screen.getByRole("spinbutton", { name: "Velocity" })).toBeTruthy();
+    expect(screen.getByRole("slider", { name: "Note velocity" })).toBeTruthy();
   });
-  it("keeps keyboard focus inside MIDI settings", async () => {
+  it("opens MIDI settings as a modeless desktop utility with device focus", async () => {
     mocks.invoke.mockResolvedValue({ inputs: [], outputs: [] });
     render(<App />);
     fireEvent.click(
       screen.getByRole("button", { name: "MIDI device settings" }),
     );
-    const close = screen.getByRole("button", { name: "Close MIDI settings" });
-    expect(document.activeElement).toBe(close);
-    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Done" }),
+    const frame = screen.getByRole("dialog", { name: "MIDI connections" });
+    expect(frame.getAttribute("aria-modal")).toBe("false");
+    expect(frame.parentElement).toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByLabelText("MIDI output"));
+    expect(fireEvent.keyDown(frame, { key: "Tab", shiftKey: true })).toBe(true);
+    fireEvent.keyDown(frame, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: "MIDI connections" }),
+    ).toBeNull();
+  });
+  it("returns to MIDI connections after closing detailed recording settings", () => {
+    mocks.invoke.mockResolvedValue({ inputs: [], outputs: [] });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "MIDI device settings" }),
     );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Recording & MIDI settings…" }),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "MIDI connections" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("dialog", { name: "Recording & MIDI" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Close$/ }));
+    expect(
+      screen.getByRole("dialog", { name: "MIDI connections" }),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByLabelText("MIDI output"));
   });
   it("opens through the native dialog and displays numeric meter", async () => {
     mocks.open.mockResolvedValue("C:/test.STY");
@@ -842,7 +872,12 @@ describe("real IPC wiring with isolated test mocks", () => {
     useStudio.setState({ view, sectionId: 7, selected: [1] });
     mocks.invoke.mockResolvedValue({ ...view, revision: 1, dirty: true });
     render(<App />);
-    const input = screen.getByRole("spinbutton", { name: "Velocity" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Enter Note velocity value" }),
+    );
+    const input = screen.getByRole("spinbutton", {
+      name: "Note velocity value",
+    });
     fireEvent.change(input, { target: { value: "73" } });
     fireEvent.blur(input);
     await waitFor(() =>
@@ -1087,18 +1122,16 @@ it("blocks applying, exporting and clearing a take while recording", async () =>
   fireEvent.change(screen.getByLabelText("MIDI input"), {
     target: { value: "Digital Workstation-1" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Arm CH11 for recording" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Arm CH11 for recording" }),
+  );
   fireEvent.click(screen.getByRole("button", { name: /Start capture/i }));
   await waitFor(() =>
     expect(
       screen.getByRole("button", { name: "Stop capture" }),
     ).not.toHaveProperty("disabled", true),
   );
-  for (const name of [
-    "Cancel take",
-    "Apply notes to section",
-    "Export MIDI…",
-  ])
+  for (const name of ["Cancel take", "Apply notes to section", "Export MIDI…"])
     expect(screen.getByRole("button", { name })).toHaveProperty(
       "disabled",
       true,
@@ -1153,7 +1186,9 @@ it("closing a retained capture asks before discarding even without a dirty Style
   fireEvent.change(screen.getByLabelText("MIDI input"), {
     target: { value: "Digital Workstation-1" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Arm CH11 for recording" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Arm CH11 for recording" }),
+  );
   fireEvent.click(screen.getByRole("button", { name: /Start capture/i }));
   await waitFor(() =>
     expect(

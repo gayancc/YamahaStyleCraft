@@ -1,9 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useStudio } from "./store";
-import type { Note } from "./contracts";
+import type { Command, Note, View } from "./contracts";
 import { ControllerLane } from "./ControllerLane";
 import { PianoTools } from "./PianoTools";
+import { quantizeGridForTicks } from "./quantizeGrid";
+import { planClipboardPaste } from "./noteClipboard";
+import { NoteProperties } from "./NoteProperties";
+import { pitchName } from "./notePropertiesDraft";
+export { pitchName } from "./notePropertiesDraft";
 import { drawPianoKeyboard, isBlackKey, pianoKeyAt } from "./pianoKeyboard";
 import {
   clamp,
@@ -14,13 +26,14 @@ import {
   segmentHitsRect,
   validateDraft,
 } from "./pianoEditing";
-import { DEFAULT_NOTE_COLORS, noteFill, sanitizeNoteColors } from "./noteColors";
+import {
+  DEFAULT_NOTE_COLORS,
+  noteFill,
+  sanitizeNoteColors,
+} from "./noteColors";
 
 const KEY = 60,
   RULER = 28;
-const names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
-export const pitchName = (n: number) =>
-  `${names[n % 12]}${Math.floor(n / 12) - 1}`;
 interface Gesture {
   mode:
     | "move"
@@ -87,10 +100,47 @@ export function PianoRoll({
   const [size, setSize] = useState({ w: 800, h: 500 });
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [gesture, setGesture] = useState<Gesture | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; id: number } | null>(
-    null,
+  const [pending, setPending] = useState<{
+    view: View;
+    sectionId: number;
+    channel: number;
+    gesture: Gesture;
+  } | null>(null);
+  // Keep the final gesture visible until the authoritative view replaces it.
+  // Never apply its delta a second time to an acknowledged or different scope.
+  const visibleGesture =
+    pending?.view === view &&
+    pending.sectionId === sectionId &&
+    pending.channel === channel
+      ? pending.gesture
+      : gesture;
+  const commitPreview = useCallback(
+    (preview: Gesture, command: Command) => {
+      if (!view || busy || disabled) return;
+      const transaction = { view, sectionId, channel, gesture: preview };
+      setPending(transaction);
+      setGesture(null);
+      void edit(command).finally(() =>
+        setPending((current) => (current === transaction ? null : current)),
+      );
+    },
+    [view, busy, disabled, sectionId, channel, edit],
   );
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    id: number | null;
+    canvasX?: number;
+    canvasY?: number;
+  } | null>(null);
   const [noteProps, setNoteProps] = useState<NotePropsPanel | null>(null);
+  useEffect(() => {
+    setNoteProps(null);
+  }, [sectionId, channel]);
+  useEffect(() => {
+    if (noteProps && !notes.some((n) => n.id === noteProps.id))
+      setNoteProps(null);
+  }, [view, noteProps]);
   const cursor = useRef(0);
   const anchor = useRef<Gesture | null>(null);
   const holdRightTimer = useRef<number | null>(null);
@@ -114,7 +164,10 @@ export function PianoRoll({
     [view, channel, section],
   );
   const selectedSet = useMemo(() => new Set(selected), [selected]);
-  const gestureSet = useMemo(() => new Set(gesture?.ids ?? []), [gesture]);
+  const gestureSet = useMemo(
+    () => new Set(visibleGesture?.ids ?? []),
+    [visibleGesture],
+  );
   useEffect(() => {
     if (!follow || playheadTick === null || !section || !scroll.current) return;
     const el = scroll.current,
@@ -134,11 +187,11 @@ export function PianoRoll({
   }, []);
   useEffect(() => {
     setMenu(null);
-    setNoteProps(null);
     setGesture(null);
     anchor.current = null;
     clearHoldRight();
   }, [sectionId, channel, view, disabled, clearHoldRight]);
+  useEffect(() => setNoteProps(null), [sectionId, channel, view]);
   useEffect(() => () => clearHoldRight(), [clearHoldRight]);
   useEffect(() => {
     const el = scroll.current;
@@ -214,10 +267,14 @@ export function PianoRoll({
   const rect = useCallback(
     (n: Note) => {
       const active = gestureSet.has(n.id);
-      const dt = active && gesture?.mode === "move" ? gesture.dx : 0;
-      const dp = active && gesture?.mode === "move" ? gesture.dy : 0;
-      const dd = active && gesture?.mode === "resize" ? gesture.dx : 0;
-      const left = active && gesture?.mode === "left" ? gesture.dx : 0;
+      const dt =
+        active && visibleGesture?.mode === "move" ? visibleGesture.dx : 0;
+      const dp =
+        active && visibleGesture?.mode === "move" ? visibleGesture.dy : 0;
+      const dd =
+        active && visibleGesture?.mode === "resize" ? visibleGesture.dx : 0;
+      const left =
+        active && visibleGesture?.mode === "left" ? visibleGesture.dx : 0;
       return {
         x:
           KEY +
@@ -228,19 +285,21 @@ export function PianoRoll({
         h: ROW - 2,
       };
     },
-    [gesture, gestureSet, section?.start, scale, offset, ROW],
+    [visibleGesture, gestureSet, section?.start, scale, offset, ROW],
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!canvas.current || !view || !section) return;
     const dpr = window.devicePixelRatio || 1;
     const c = canvas.current;
-    c.width = size.w * dpr;
-    c.height = size.h * dpr;
+    const pixelWidth = Math.round(size.w * dpr),
+      pixelHeight = Math.round(size.h * dpr);
+    if (c.width !== pixelWidth) c.width = pixelWidth;
+    if (c.height !== pixelHeight) c.height = pixelHeight;
     c.style.width = `${size.w}px`;
     c.style.height = `${size.h}px`;
     const ctx = c.getContext("2d");
     if (!ctx) return;
-    ctx.scale(dpr, dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#191c1f";
     ctx.fillRect(0, 0, size.w, size.h);
     ctx.font = "10px Segoe UI";
@@ -318,10 +377,10 @@ export function PianoRoll({
           );
         }
       }
-    const removed = new Set(gesture?.remove ?? []);
+    const removed = new Set(visibleGesture?.remove ?? []);
     const rendered = [
       ...notes.filter((n) => !removed.has(n.id)),
-      ...(gesture?.add ?? []).map((n, i) => ({
+      ...(visibleGesture?.add ?? []).map((n, i) => ({
         ...n,
         id: -1 - i,
         offId: -1 - i,
@@ -385,7 +444,7 @@ export function PianoRoll({
     section,
     notes,
     selected,
-    gesture,
+    visibleGesture,
     size,
     offset,
     scale,
@@ -402,13 +461,20 @@ export function PianoRoll({
     const r = e.currentTarget.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
-  const hit = (x: number, y: number) =>
-    [...notes].reverse().find((n) => {
+  const hit = (x: number, y: number) => {
+    for (let index = notes.length - 1; index >= 0; index--) {
+      const n = notes[index];
       const r = rect(n);
-      return (
-        x >= Math.max(KEY, r.x) && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
-      );
-    });
+      if (
+        x >= Math.max(KEY, r.x) &&
+        x <= r.x + r.w &&
+        y >= r.y &&
+        y <= r.y + r.h
+      )
+        return n;
+    }
+    return undefined;
+  };
   const tickAt = (x: number, bypass = false) =>
     Math.max(
       0,
@@ -514,9 +580,7 @@ export function PianoRoll({
     }
     if (e.button === 0 && tool === "cursor") {
       const tick = section.start + tickAt(x, e.altKey);
-      onParkCursor?.(
-        Math.max(section.start, Math.min(section.end - 1, tick)),
-      );
+      onParkCursor?.(Math.max(section.start, Math.min(section.end - 1, tick)));
       return;
     }
     if (e.button === 2 && !e.shiftKey && n && tool !== "erase") {
@@ -731,7 +795,8 @@ export function PianoRoll({
         : tickSnap((x - a.x) / scale, e.altKey || !snap ? 1 : grid);
     let dy = a.mode === "marquee" ? y - a.y : Math.round((a.y - y) / ROW);
     let dt = dx;
-    const ns = notes.filter((n) => a.ids.includes(n.id));
+    const movingIds = new Set(a.ids);
+    const ns = notes.filter((n) => movingIds.has(n.id));
     if (a.mode === "move" && section && ns.length) {
       const bounded = moveBounds(ns, section, dt, dy);
       dt = bounded.dt;
@@ -786,17 +851,20 @@ export function PianoRoll({
     if (g.mode === "holdRight") {
       // Quick right-click on a note deletes (SFM Smart Tool right-delete).
       if (wasHolding && g.remove?.length)
-        void edit({
-          type: "pianoNotes",
-          section: section.id,
-          channel,
-          remove: g.remove,
-        });
+        commitPreview(
+          { ...g, mode: "erase" },
+          {
+            type: "pianoNotes",
+            section: section.id,
+            channel,
+            remove: g.remove,
+          },
+        );
       return;
     }
     if (g.mode === "paint" || g.mode === "draw") {
       if (g.add?.length)
-        void edit({
+        commitPreview(g, {
           type: "pianoNotes",
           section: section.id,
           channel,
@@ -806,7 +874,7 @@ export function PianoRoll({
     }
     if (g.mode === "erase") {
       if (g.remove?.length)
-        void edit({
+        commitPreview(g, {
           type: "pianoNotes",
           section: section.id,
           channel,
@@ -819,18 +887,21 @@ export function PianoRoll({
       if (tool === "select" && Math.hypot(g.dx, g.dy) < 4 && !g.ids.length) {
         const note = paintNote(g.x, g.y, false);
         if (note)
-          void edit({
-            type: "pianoNotes",
-            section: section.id,
-            channel,
-            add: [note],
-          });
+          commitPreview(
+            { ...g, mode: "draw", add: [note] },
+            {
+              type: "pianoNotes",
+              section: section.id,
+              channel,
+              add: [note],
+            },
+          );
       }
       return;
     }
     if (!g.note) return;
     if (g.mode === "move" && (g.dx || g.dy))
-      void edit({
+      commitPreview(g, {
         type: "updateNotes",
         section: section.id,
         ids: g.ids,
@@ -838,14 +909,14 @@ export function PianoRoll({
         deltaPitch: g.dy,
       });
     if (g.mode === "resize" && g.dx)
-      void edit({
+      commitPreview(g, {
         type: "updateNotes",
         section: section.id,
         ids: g.ids,
         deltaDuration: g.dx,
       });
     if (g.mode === "left" && g.dx)
-      void edit({
+      commitPreview(g, {
         type: "updateNotes",
         section: section.id,
         ids: g.ids,
@@ -878,10 +949,11 @@ export function PianoRoll({
           : notes;
         if (ns.length)
           void edit({
-            type: "quantize",
+            type: "advancedQuantize",
             section: section.id,
+            channel,
             ids: ns.map((n) => n.id),
-            step: Math.max(1, Math.round(grid)),
+            options: { size: quantizeGridForTicks(grid, view.ppq) },
           });
       }
       if (e.key === "Escape") {
@@ -937,15 +1009,32 @@ export function PianoRoll({
       }
       if (ctrl && e.key.toLowerCase() === "x") {
         e.preventDefault();
-        useStudio
-          .getState()
-          .setClipboard(notes.filter((n) => selectedSet.has(n.id)));
-        if (selected.length)
-          void edit({
-            type: "pianoNotes",
-            section: section.id,
-            channel,
-            remove: notes.filter((n) => selectedSet.has(n.id)).map((n) => n.id),
+        const current = useStudio.getState(),
+          selection = current.selected.join(",");
+        const copied = notes.filter((n) => selectedSet.has(n.id));
+        if (copied.length)
+          void current.setClipboard(copied).then((success) => {
+            const latest = useStudio.getState();
+            if (!success) return;
+            if (
+              latest.view !== view ||
+              latest.sectionId !== section.id ||
+              latest.channel !== channel ||
+              latest.busy ||
+              latest.selected.join(",") !== selection
+            ) {
+              useStudio.setState({
+                message:
+                  "Cut canceled because the selection or destination changed while copying.",
+              });
+              return;
+            }
+            void edit({
+              type: "pianoNotes",
+              section: section.id,
+              channel,
+              remove: copied.map((n) => n.id),
+            });
           });
       }
       if (ctrl && e.key.toLowerCase() === "b") {
@@ -955,7 +1044,18 @@ export function PianoRoll({
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selected.length) {
           e.preventDefault();
-          void edit({ type: "deleteNotes", ids: selected });
+          commitPreview(
+            {
+              mode: "erase",
+              x: 0,
+              y: 0,
+              dx: 0,
+              dy: 0,
+              ids: [],
+              remove: selected,
+            },
+            { type: "deleteNotes", ids: selected },
+          );
         }
       }
       if (ctrl && e.key.toLowerCase() === "a") {
@@ -972,19 +1072,33 @@ export function PianoRoll({
         e.preventDefault();
         const copied = useStudio.getState().clipboard;
         if (copied.length) {
-          const first = Math.min(...copied.map((n) => n.start));
-          const add = copied.map((n) => ({
-            ...noteInput(n),
-            track: notes[0]?.track ?? 0,
-            channel,
-            start: section.start + cursor.current + n.start - first,
-          }));
           try {
-            validateDraft(add, section);
+            const plan = planClipboardPaste(
+              { notes: copied, ppq: useStudio.getState().clipboardPpq ?? 0 },
+              {
+                ppq: view.ppq,
+                section,
+                cursor: cursor.current,
+                channel,
+                track: notes[0]?.track ?? 0,
+              },
+            );
+            const label = useStudio.getState().docLabel;
             void edit({
               type: "addNotes",
               section: section.id,
-              notes: add,
+              notes: plan.notes,
+            }).then(() => {
+              const current = useStudio.getState();
+              if (
+                !current.error &&
+                current.docLabel === label &&
+                current.view?.revision === view.revision + 1
+              ) {
+                useStudio.setState({
+                  message: `Pasted ${plan.notes.length} note(s)${plan.shifted ? " · shifted left to fit" : ""}${plan.omitted ? ` · ${plan.omitted} beyond the section omitted` : ""}${plan.clipped ? ` · ${plan.clipped} shortened at section end` : ""}`,
+                });
+              }
             });
           } catch (e) {
             useStudio.setState({ error: String(e) });
@@ -1005,10 +1119,11 @@ export function PianoRoll({
     busy,
     disabled,
     grid,
+    commitPreview,
   ]);
   if (!view || !section) return null;
   return (
-    <div className="piano">
+    <div className="piano" onContextMenuCapture={(e) => e.preventDefault()}>
       <PianoTools
         notes={notes}
         section={section}
@@ -1057,7 +1172,7 @@ export function PianoRoll({
           }}
         >
           <canvas
-            aria-label="Piano roll. Double click to add notes. Drag notes to move, drag either edge to resize. Alt bypasses snap; middle drag pans."
+            aria-label="Piano roll. Double-click a note for properties or empty space to add notes. Drag notes to move, drag either edge to resize. Alt bypasses snap; middle drag pans."
             role="img"
             tabIndex={0}
             ref={canvas}
@@ -1085,11 +1200,7 @@ export function PianoRoll({
                 n = hit(e.clientX - r.left, e.clientY - r.top);
               if (n) {
                 select([n.id]);
-                document
-                  .querySelector<HTMLInputElement>(
-                    '.inspector input[type="number"]',
-                  )
-                  ?.focus();
+                setNoteProps({ x: e.clientX, y: e.clientY, id: n.id });
               } else if (tool === "select")
                 add(
                   e.clientX - e.currentTarget.getBoundingClientRect().left,
@@ -1098,12 +1209,23 @@ export function PianoRoll({
             }}
             onContextMenu={(e) => {
               e.preventDefault();
-              if (!e.shiftKey) return;
+              if (busy || disabled) return;
               const r = e.currentTarget.getBoundingClientRect(),
-                n = hit(e.clientX - r.left, e.clientY - r.top);
+                x = e.clientX - r.left,
+                y = e.clientY - r.top,
+                n = hit(x, y);
               if (n) {
+                if (!e.shiftKey) return;
                 select([n.id]);
                 setMenu({ x: e.clientX, y: e.clientY, id: n.id });
+              } else if (x >= KEY && y >= RULER) {
+                setMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  id: null,
+                  canvasX: x,
+                  canvasY: y,
+                });
               }
             }}
           />
@@ -1124,155 +1246,111 @@ export function PianoRoll({
       {menu && (
         <div
           className="context-menu"
+          role="menu"
+          aria-label="Piano actions"
           style={{
             left: Math.min(menu.x, window.innerWidth - 180),
-            top: Math.min(menu.y, window.innerHeight - 130),
+            top: Math.min(menu.y, window.innerHeight - 180),
           }}
           onMouseLeave={() => setMenu(null)}
         >
+          {menu.id === null && (
+            <>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  add(menu.canvasX!, menu.canvasY!);
+                  setMenu(null);
+                }}
+              >
+                Add note here
+              </button>
+              <button
+                role="menuitem"
+                disabled={!notes.length}
+                onClick={() => {
+                  select(notes.map((n) => n.id));
+                  setMenu(null);
+                }}
+              >
+                Select all notes
+              </button>
+            </>
+          )}
           <button
+            role="menuitem"
+            disabled={!notes.length}
             onClick={() => {
               void edit({
-                type: "quantize",
+                type: "advancedQuantize",
                 section: section.id,
-                ids: [menu.id],
-                step: grid,
+                channel,
+                ids: menu.id === null ? selected : [menu.id],
+                options: { size: quantizeGridForTicks(grid, view.ppq) },
               });
               setMenu(null);
             }}
           >
             Quantize to grid
           </button>
-          <button
-            onClick={() => {
-              void edit({ type: "deleteNotes", ids: [menu.id] });
-              setMenu(null);
-            }}
-          >
-            Delete note <kbd>Del</kbd>
-          </button>
-          <button
-            onClick={() => {
-              setNoteProps({ x: menu.x, y: menu.y, id: menu.id });
-              setMenu(null);
-            }}
-          >
-            Note properties…
-          </button>
+          {menu.id !== null && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                if (menu.id === null) return;
+                commitPreview(
+                  {
+                    mode: "erase",
+                    x: 0,
+                    y: 0,
+                    dx: 0,
+                    dy: 0,
+                    ids: [],
+                    remove: [menu.id],
+                  },
+                  { type: "deleteNotes", ids: [menu.id] },
+                );
+                setMenu(null);
+              }}
+            >
+              Delete note <kbd>Del</kbd>
+            </button>
+          )}
+          {menu.id !== null && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                if (menu.id === null) return;
+                setNoteProps({ x: menu.x, y: menu.y, id: menu.id });
+                setMenu(null);
+              }}
+            >
+              Note properties…
+            </button>
+          )}
         </div>
       )}
       {noteProps &&
         (() => {
           const note = notes.find((n) => n.id === noteProps.id);
-          if (!note || !section) return null;
-          return (
-            <div
-              className="note-props-panel"
-              style={{
-                left: Math.min(noteProps.x, window.innerWidth - 200),
-                top: Math.min(noteProps.y, window.innerHeight - 200),
+          return note ? (
+            <NoteProperties
+              key={note.id}
+              note={note}
+              view={view}
+              section={section}
+              channel={channel}
+              position={noteProps}
+              disabled={disabled || busy}
+              onClose={() => {
+                const ownedFocus = document.activeElement?.closest(
+                  ".note-utility-window",
+                );
+                setNoteProps(null);
+                if (ownedFocus) canvas.current?.focus();
               }}
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              <header>
-                <strong>{pitchName(note.pitch)}</strong>
-                <button
-                  type="button"
-                  className="ghost"
-                  aria-label="Close note properties"
-                  onClick={() => setNoteProps(null)}
-                >
-                  ×
-                </button>
-              </header>
-              <label>
-                Start
-                <input
-                  type="number"
-                  value={note.start - section.start}
-                  min={0}
-                  max={Math.max(0, section.end - section.start - 1)}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (!Number.isFinite(n)) return;
-                    void edit({
-                      type: "updateNotes",
-                      section: section.id,
-                      ids: [note.id],
-                      deltaTick: section.start + n - note.start,
-                    });
-                  }}
-                />
-              </label>
-              <label>
-                Duration
-                <input
-                  type="number"
-                  value={note.duration}
-                  min={1}
-                  max={Math.max(1, section.end - note.start)}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (!Number.isFinite(n) || n < 1) return;
-                    void edit({
-                      type: "updateNotes",
-                      section: section.id,
-                      ids: [note.id],
-                      duration: n,
-                    });
-                  }}
-                />
-              </label>
-              <label>
-                Pitch
-                <input
-                  type="number"
-                  value={note.pitch}
-                  min={0}
-                  max={127}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (!Number.isFinite(n)) return;
-                    void edit({
-                      type: "updateNotes",
-                      section: section.id,
-                      ids: [note.id],
-                      deltaPitch: Math.max(0, Math.min(127, n)) - note.pitch,
-                    });
-                  }}
-                />
-              </label>
-              <label>
-                Velocity
-                <input
-                  type="number"
-                  value={note.velocity}
-                  min={1}
-                  max={127}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (!Number.isFinite(n)) return;
-                    void edit({
-                      type: "updateNotes",
-                      section: section.id,
-                      ids: [note.id],
-                      velocity: Math.max(1, Math.min(127, n)),
-                    });
-                  }}
-                />
-              </label>
-              <button
-                type="button"
-                className="danger-link"
-                onClick={() => {
-                  void edit({ type: "deleteNotes", ids: [note.id] });
-                  setNoteProps(null);
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          );
+            />
+          ) : null;
         })()}
     </div>
   );

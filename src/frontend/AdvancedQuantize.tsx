@@ -1,0 +1,272 @@
+import { useEffect, useRef, useState } from "react";
+import type {
+  Note,
+  QuantizeGrid,
+  QuantizeOptions,
+  Section,
+  View,
+} from "./contracts";
+import { ParameterControl } from "./ParameterControl";
+import { useStudio } from "./store";
+
+export const quantizeGrids: [QuantizeGrid, string][] = [
+  ["480", "1/4"],
+  ["320", "1/4 Triplet"],
+  ["240", "1/8"],
+  ["160", "1/8 Triplet"],
+  ["120", "1/16"],
+  ["80", "1/16 Triplet"],
+  ["mixed8", "1/8 + 1/8 Triplet"],
+  ["mixed16", "1/16 + 1/16 Triplet"],
+  ["60", "1/32"],
+  ["40", "1/32 Triplet"],
+];
+const initial: QuantizeOptions = {
+  target: "starts",
+  mode: "yamaha",
+  size: "120",
+  soft: true,
+  strength: 100,
+  tuplet: 0,
+  swing: 0,
+  catchEnabled: false,
+  catchPercent: 100,
+  safeRange: 0,
+  rough: 0,
+  moveControllers: true,
+  fromOriginal: false,
+  sourceFiltered: false,
+};
+export function AdvancedQuantize({
+  section,
+  channel,
+  notes,
+  selected,
+  view,
+  disabled,
+}: {
+  section: Section;
+  channel: number;
+  notes: Note[];
+  selected: number[];
+  view: View;
+  disabled: boolean;
+}) {
+  const [options, setOptions] = useState(initial),
+    [auto, setAuto] = useState(false);
+  const chosen = notes.filter((n) => selected.includes(n.id));
+  const ids = chosen.map((n) => n.id),
+    selectionKey = ids.join(",");
+  const scopeKey = `${section.id}:${channel}`;
+  const current = useRef({ section, channel, ids, disabled });
+  current.current = { section, channel, ids, disabled };
+  const patch = (next: Partial<QuantizeOptions>) =>
+    setOptions((old) => ({ ...old, ...next }));
+  useEffect(() => {
+    if (!auto) return;
+    let cancelled = false;
+    const apply = () => {
+      if (cancelled) return;
+      const state = useStudio.getState(),
+        c = current.current;
+      if (state.busy) {
+        timer = setTimeout(apply, 40);
+        return;
+      }
+      if (c.disabled) return;
+      void state.edit({
+        type: "advancedQuantize",
+        section: c.section.id,
+        channel: c.channel,
+        ids: c.ids,
+        options: { ...options, fromOriginal: true },
+      });
+    };
+    let timer = setTimeout(apply, 140);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [options, auto, scopeKey, selectionKey]);
+  const execute = (reset = false) => {
+    void useStudio.getState().edit({
+      type: "advancedQuantize",
+      section: section.id,
+      channel,
+      ids,
+      options: { ...options, fromOriginal: false },
+      reset,
+    });
+  };
+  const baseline = view.quantizeOriginal?.[scopeKey];
+  const mixed = options.size.startsWith("mixed");
+  const number = (
+    label: string,
+    field: "strength" | "swing" | "catchPercent" | "safeRange" | "rough",
+    max: number,
+    inactive = false,
+    min = 0,
+  ) => (
+    <ParameterControl
+      label={label.replace(" percent", "").replace(" ticks", "")}
+      ariaLabel={`Quantize ${label}`}
+      min={min}
+      max={max}
+      value={Number(options[field])}
+      disabled={disabled || inactive}
+      resetValue={Number(initial[field])}
+      format={(n) => `${n}${label.includes("ticks") ? " t" : "%"}`}
+      onCommit={(n) => patch({ [field]: n })}
+    />
+  );
+  return (
+    <div
+      className="advanced-quantize"
+      role="group"
+      aria-label="Advanced quantize"
+    >
+      <label>
+        Target
+        <select
+          aria-label="Quantize target"
+          value={options.target}
+          disabled={disabled}
+          onChange={(e) =>
+            patch({
+              target: e.target.value as QuantizeOptions["target"],
+              ...(e.target.value !== "starts"
+                ? { mode: "yamaha" as const }
+                : {}),
+            })
+          }
+        >
+          <option value="starts">Note starts</option>
+          <option value="ends">Note ends</option>
+          <option value="lengths">Note lengths</option>
+          <option value="both">Starts and ends</option>
+        </select>
+      </label>
+      <label>
+        Mode
+        <select
+          aria-label="Quantize mode"
+          disabled={disabled || options.target !== "starts"}
+          value={options.mode}
+          onChange={(e) =>
+            patch({ mode: e.target.value as QuantizeOptions["mode"] })
+          }
+        >
+          <option value="yamaha">Yamaha events · keep pattern</option>
+          <option value="relative">Group offset</option>
+        </select>
+      </label>
+      <label>
+        Size
+        <select
+          aria-label="Quantize size"
+          value={options.size}
+          disabled={disabled}
+          onChange={(e) => {
+            const size = e.target.value as QuantizeGrid;
+            patch({ size });
+            if (!size.startsWith("mixed")) {
+              useStudio.setState({ snap: 1920 / Number(size) });
+            }
+          }}
+        >
+          {quantizeGrids.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="Quantize soft strength"
+          checked={options.soft}
+          disabled={disabled}
+          onChange={(e) => patch({ soft: e.target.checked })}
+        />
+        Soft / Strength
+      </label>
+      <label>
+        Tuplet
+        <select
+          aria-label="Quantize tuplet"
+          value={options.tuplet}
+          disabled={disabled || mixed}
+          onChange={(e) => patch({ tuplet: Number(e.target.value) })}
+        >
+          {[0, 3, 5, 7].map((n) => (
+            <option key={n} value={n}>
+              {n || "Off"}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="Quantize catch enabled"
+          checked={options.catchEnabled}
+          disabled={disabled}
+          onChange={(e) => patch({ catchEnabled: e.target.checked })}
+        />
+        Catch range
+      </label>
+      <div className="quantize-knobs">
+        {number("strength", "strength", 100, !options.soft)}{" "}
+        {number(
+          "swing",
+          "swing",
+          100,
+          mixed || options.tuplet > 0 || options.target === "lengths",
+        )}
+        {number("catch percent", "catchPercent", 100, !options.catchEnabled, 1)}
+        {number("safe ticks", "safeRange", 960)}
+        {number("rough ticks", "rough", 120)}
+      </div>{" "}
+      <label>
+        <input
+          type="checkbox"
+          aria-label="Move controllers with note starts"
+          checked={options.moveControllers}
+          disabled={
+            disabled ||
+            options.target === "ends" ||
+            options.target === "lengths"
+          }
+          onChange={(e) => patch({ moveControllers: e.target.checked })}
+        />
+        Move controllers
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="Quantize auto apply"
+          checked={auto}
+          disabled={disabled}
+          onChange={(e) => setAuto(e.target.checked)}
+        />
+        Auto apply
+      </label>
+      <button disabled={disabled || !notes.length} onClick={() => execute()}>
+        {ids.length ? "Quantize selection" : "Quantize whole part"}
+      </button>
+      <button
+        disabled={
+          disabled || !(baseline?.notes.length || baseline?.events.length)
+        }
+        onClick={() => execute(true)}
+      >
+        Reset original
+      </button>
+      <small>
+        Timing changes keep pitch and velocity. Reset restores original timing,
+        including moved CC and pitch bend.
+      </small>
+    </div>
+  );
+}

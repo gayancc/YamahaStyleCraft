@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { FloatingToolWindow } from "./FloatingToolWindow";
+import { StudioMenu } from "./StudioMenu";
+import { ParameterControl, formatPan } from "./ParameterControl";
+import { quantizeGridForTicks } from "./quantizeGrid";
 import {
   estimateMidiLevel,
   holdMidiPeak,
@@ -46,6 +50,8 @@ import {
   Hand,
   AppWindow,
   PictureInPicture2,
+  Paintbrush,
+  Eraser,
 } from "lucide-react";
 import { currentUiState, useStudio } from "./store";
 import type { StudioTool } from "./store";
@@ -77,10 +83,7 @@ import { InitialEffects, type EffectSelection } from "./InitialEffects";
 import { LivePreview } from "./LivePreview";
 import { ChordPreview } from "./ChordPreview";
 import { ChordStrip } from "./ChordStrip";
-import {
-  RecordingMidiDialog,
-  type RecDataMode,
-} from "./RecordingMidiDialog";
+import { RecordingMidiDialog, type RecDataMode } from "./RecordingMidiDialog";
 import { sortSections } from "./sectionOrder";
 import {
   broadcastMidiOwnership,
@@ -99,11 +102,7 @@ import {
 } from "./MixerPanel";
 import { NoteFxPanel } from "./NoteFxPanel";
 import { ExpansionRecovery } from "./ExpansionRecovery";
-import {
-  metronomeAtTick,
-  playCountIn,
-  resetMetronome,
-} from "./metronome";
+import { metronomeAtTick, playCountIn, resetMetronome } from "./metronome";
 
 const roles = [
   "Rhythm 1",
@@ -228,10 +227,10 @@ export function App() {
     [devices, setDevices] = useState<Devices>({ inputs: [], outputs: [] }),
     [output, setOutput] = useState<Port | null>(null);
   const [transport, setTransport] = useState<TransportStatus>({
-    playing: false,
-    elapsedMs: 0,
-    error: null,
-  }),
+      playing: false,
+      elapsedMs: 0,
+      error: null,
+    }),
     [loop, setLoop] = useState(false),
     [returnOnStop, setReturnOnStop] = useState(true),
     [mixerApplyAll, setMixerApplyAll] = useState(false),
@@ -333,8 +332,7 @@ export function App() {
       if (!ctx.playing || !ctx.output) return;
       const channels = ctx.sources.filter(
         (ch) =>
-          !p.muted.includes(ch) &&
-          (!p.solo.length || p.solo.includes(ch)),
+          !p.muted.includes(ch) && (!p.solo.length || p.solo.includes(ch)),
       );
       void invoke("set_playback_channels", {
         channels,
@@ -569,14 +567,8 @@ export function App() {
       });
       const destCh = armedChannel ?? channel;
       // SFM Voice change is part of Notes+controllers / Controllers modes.
-      if (
-        recordVoice &&
-        includeControllers &&
-        destCh >= 1 &&
-        destCh <= 16
-      ) {
-        const track =
-          next.notes.find((n) => n.channel === destCh)?.track ?? 0;
+      if (recordVoice && includeControllers && destCh >= 1 && destCh <= 16) {
+        const track = next.notes.find((n) => n.channel === destCh)?.track ?? 0;
         const status = 0xb0 | (destCh - 1);
         for (const data of [
           [status, 0, recordBankMsb & 127],
@@ -848,7 +840,7 @@ export function App() {
               : (current.recQuantize ?? recQuantize),
           recData:
             "recData" in next
-              ? (next.recData as RecDataMode) ?? "all"
+              ? ((next.recData as RecDataMode) ?? "all")
               : ((current.recData as RecDataMode | undefined) ?? recData),
           recInputChannel:
             "recInputChannel" in next
@@ -899,7 +891,8 @@ export function App() {
   };
   const audibleFrom = (muteList: number[], soloList: number[]) =>
     sources.filter(
-      (ch) => !muteList.includes(ch) && (!soloList.length || soloList.includes(ch)),
+      (ch) =>
+        !muteList.includes(ch) && (!soloList.length || soloList.includes(ch)),
     );
   const pushLiveAudible = (channels: number[]) => {
     if (!output || !transport.playing) return;
@@ -1094,7 +1087,10 @@ export function App() {
   };
   const bumpUiScale = (delta: number) => {
     setUiScale((s) => {
-      const next = Math.min(1.25, Math.max(0.85, Math.round((s + delta) * 20) / 20));
+      const next = Math.min(
+        1.25,
+        Math.max(0.85, Math.round((s + delta) * 20) / 20),
+      );
       void persistPrefs({ uiScale: next });
       return next;
     });
@@ -1112,13 +1108,7 @@ export function App() {
       view.numerator,
       view.denominator,
     );
-  }, [
-    metronome,
-    transport.playing,
-    transport.elapsedMs,
-    view,
-    section,
-  ]);
+  }, [metronome, transport.playing, transport.elapsedMs, view, section]);
   useEffect(() => {
     if (!monitoring || !isTauri()) return;
     const timer = setInterval(() => {
@@ -1298,7 +1288,13 @@ export function App() {
       void play();
     }
     // SFM-VIEW-TRANSPORT-W: park yellow cursor at section start (plain W).
-    if (!input && !ctrl && !e.metaKey && !e.altKey && e.key.toLowerCase() === "w") {
+    if (
+      !input &&
+      !ctrl &&
+      !e.metaKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === "w"
+    ) {
       e.preventDefault();
       if (section) {
         setParkedTick(section.start);
@@ -1477,8 +1473,23 @@ export function App() {
   const channelNotes = sectionNotes.filter((n) => n.channel === channel);
   const noteIndex = channelNotes.findIndex((n) => n.id === note?.id);
   const editingDisabled = busy || transport.playing;
+  const [controlHint, setControlHint] = useState("");
   return (
-    <div className="app" style={{ zoom: uiScale }}>
+    <div
+      className="app"
+      style={{ zoom: uiScale }}
+      onPointerOver={(e) => {
+        const el = (e.target as HTMLElement).closest<HTMLElement>(
+          "[title],button[aria-label],input[aria-label],select[aria-label],[role=slider]",
+        );
+        setControlHint(el?.title || el?.getAttribute("aria-label") || "");
+      }}
+      onFocusCapture={(e) => {
+        const el = e.target as HTMLElement;
+        setControlHint(el.title || el.getAttribute("aria-label") || "");
+      }}
+      onPointerLeave={() => setControlHint("")}
+    >
       <header className="titlebar">
         <div className="brand" title="Genos Style Studio">
           <AudioLines size={18} />
@@ -1487,51 +1498,53 @@ export function App() {
           </span>
         </div>
         <div className="file-actions">
-          <button onClick={() => void openFile()} disabled={busy}>
-            <FolderOpen size={14} /> Open
-          </button>
-          <button onClick={() => void openComposer()} disabled={busy}>
-            <FilePlus2 size={14} /> New
-          </button>
-          <IconButton
-            label="Open another independent project window"
-            disabled={busy}
-            onClick={() => {
-              void openProjectWindow().catch((e) =>
-                useStudio.setState({ error: String(e) }),
-              );
-            }}
-          >
-            <AppWindow size={14} />
-          </IconButton>
-          <IconButton
-            label="Save project (Ctrl+S)"
-            onClick={() => void saveFile(true)}
-            disabled={!view || busy}
-          >
-            <Save size={14} />
-          </IconButton>
-          <IconButton
-            label="Export Style (Ctrl+Shift+S)"
-            onClick={() => void saveFile(false)}
-            disabled={!view || busy}
-          >
-            <Download size={14} />
-          </IconButton>
-          <IconButton
-            label="Export section notes CSV"
-            onClick={() => void exportCsv()}
-            disabled={!view || busy}
-          >
-            <FileDown size={14} />
-          </IconButton>
-          <IconButton
-            label="Export section JSON snapshot"
-            onClick={() => void exportJson()}
-            disabled={!view || busy}
-          >
-            <FileJson size={14} />
-          </IconButton>
+          <StudioMenu label="File">
+            <button onClick={() => void openFile()} disabled={busy}>
+              <FolderOpen size={14} /> Open
+            </button>
+            <button onClick={() => void openComposer()} disabled={busy}>
+              <FilePlus2 size={14} /> New
+            </button>
+            <IconButton
+              label="Open another independent project window"
+              disabled={busy}
+              onClick={() => {
+                void openProjectWindow().catch((e) =>
+                  useStudio.setState({ error: String(e) }),
+                );
+              }}
+            >
+              <AppWindow size={14} />
+            </IconButton>
+            <IconButton
+              label="Save project (Ctrl+S)"
+              onClick={() => void saveFile(true)}
+              disabled={!view || busy}
+            >
+              <Save size={14} />
+            </IconButton>
+            <IconButton
+              label="Export Style (Ctrl+Shift+S)"
+              onClick={() => void saveFile(false)}
+              disabled={!view || busy}
+            >
+              <Download size={14} />
+            </IconButton>
+            <IconButton
+              label="Export section notes CSV"
+              onClick={() => void exportCsv()}
+              disabled={!view || busy}
+            >
+              <FileDown size={14} />
+            </IconButton>
+            <IconButton
+              label="Export section JSON snapshot"
+              onClick={() => void exportJson()}
+              disabled={!view || busy}
+            >
+              <FileJson size={14} />
+            </IconButton>
+          </StudioMenu>
           <span className="divider" />
           <IconButton
             label="Undo (Ctrl+Z)"
@@ -1551,7 +1564,7 @@ export function App() {
         <div className="project-title">
           {view ? (
             <>
-              {view.name}
+              <span className="project-name">{view.name}</span>
               {docLabel !== "main" && (
                 <span className="muted"> · {docLabel}</span>
               )}
@@ -1582,200 +1595,141 @@ export function App() {
           <ChevronRight size={12} />
         </button>
         <div className="titlebar-tools">
-          <IconButton
-            label="Expansion Pack Recovery"
-            onClick={() => setExpansionOpen(true)}
-          >
-            <PackageOpen size={15} />
-          </IconButton>
-          <IconButton
-            label="Feature inventory / limits"
-            onClick={() => setLimitsOpen(true)}
-          >
-            <ListTree size={15} />
-          </IconButton>
-          <IconButton
-            label="Recording & MIDI settings"
-            onClick={() => setRecordingMidiOpen(true)}
-          >
-            <AudioLines size={15} />
-          </IconButton>
-          <IconButton label="Help" onClick={() => setHelpOpen(true)}>
-            <CircleHelp size={15} />
-          </IconButton>
-          <IconButton
-            label="MIDI device settings"
-            onClick={() => {
-              setDeviceOpen(true);
-              void scan();
-            }}
-          >
-            <Settings2 size={15} />
-          </IconButton>
+          <StudioMenu label="Studio">
+            {" "}
+            <span
+              className={`midi-in-light${midiInFlash ? " on" : ""}${
+                monitoring || capturing ? " armed" : ""
+              }`}
+              title={
+                midiInFlash
+                  ? "MIDI IN activity"
+                  : monitoring || capturing
+                    ? "MIDI IN (waiting)"
+                    : "MIDI IN (idle)"
+              }
+              aria-label={midiInFlash ? "MIDI IN active" : "MIDI IN inactive"}
+              role="status"
+            />
+            <button
+              type="button"
+              className={`midi-owner-btn${midiActive ? " active" : ""}`}
+              title={
+                midiActive
+                  ? "MIDI active here — only this project window drives hardware"
+                  : "Use MIDI here — stop play/record in the other window first"
+              }
+              aria-label={midiActive ? "MIDI active here" : "Use MIDI here"}
+              aria-pressed={midiActive}
+              onClick={() => {
+                if (midiActive) return;
+                void claimMidiHere();
+              }}
+            >
+              {midiActive
+                ? "MIDI control: this project"
+                : "Use MIDI in this project"}
+            </button>
+            <IconButton
+              label="Expansion Pack Recovery"
+              onClick={() => setExpansionOpen(true)}
+            >
+              <PackageOpen size={15} />
+            </IconButton>
+            <IconButton
+              label="Feature inventory / limits"
+              onClick={() => setLimitsOpen(true)}
+            >
+              <ListTree size={15} />
+            </IconButton>
+            <IconButton
+              label="Recording & MIDI settings"
+              onClick={() => setRecordingMidiOpen(true)}
+            >
+              <AudioLines size={15} />
+            </IconButton>
+            <IconButton label="Help" onClick={() => setHelpOpen(true)}>
+              <CircleHelp size={15} />
+            </IconButton>
+            <IconButton
+              label="MIDI device settings"
+              onClick={() => {
+                setDeviceOpen(true);
+                void scan();
+              }}
+            >
+              <Settings2 size={15} />
+            </IconButton>
+          </StudioMenu>
         </div>
       </header>
       <div className="toolbar">
         <div className="transport">
-          {view && section && (
-            <ChordStrip
-              midiInputName={monitorName || undefined}
-              monitoring={monitoring}
-              onMonitoringChange={setMonitoring}
-              onOpenDetails={() => setChordPreviewOpen(true)}
-            />
-          )}
-          <button
-            type="button"
-            className="ghost transport-live"
-            disabled={!section || capturing || busy || transport.playing}
-            title="Live Style preview"
-            onClick={() => setLivePreviewOpen(true)}
-          >
-            Live
-          </button>
-          <IconButton
-            label="Stop / release notes (Escape)"
-            onClick={() => void stop()}
-            disabled={!transport.playing}
-          >
-            <Square size={14} />
-          </IconButton>
-          <IconButton
-            label="Move cursor to section start (W)"
-            onClick={() => {
-              if (!section) return;
-              setParkedTick(section.start);
-              useStudio.setState({ message: "Cursor at section start" });
-            }}
-            disabled={!section || transport.playing}
-          >
-            <SkipBack size={15} />
-          </IconButton>
-          <IconButton
-            label={
-              parkedTick != null &&
-              section &&
-              parkedTick > section.start &&
-              parkedTick < section.end
-                ? "Play from parked cursor (Space)"
-                : "Play source notes (Space)"
-            }
-            onClick={() => void play()}
-            disabled={!view || busy}
-            active={transport.playing}
-          >
-            <Play size={18} fill="currentColor" />
-          </IconButton>
-          <IconButton
-            label="Move cursor to section end (End)"
-            onClick={() => {
-              if (!section) return;
-              setParkedTick(Math.max(section.start, section.end - 1));
-              useStudio.setState({ message: "Cursor at section end" });
-            }}
-            disabled={!section || transport.playing}
-          >
-            <SkipForward size={15} />
-          </IconButton>
-          <IconButton
-            label="Record / capture (arm R first)"
-            onClick={() => {
-              if (capturing) return;
-              if (!monitorName || armedChannel == null) {
-                setDeviceOpen(true);
-                void scan();
-                useStudio.setState({
-                  message:
-                    armedChannel == null
-                      ? "Arm a part with R, then Start capture"
-                      : "Select MIDI input, then Start capture",
-                });
-                return;
+          <div className="transport-primary" aria-label="Playback controls">
+            {" "}
+            <IconButton
+              label="Move cursor to section start (W)"
+              onClick={() => {
+                if (!section) return;
+                setParkedTick(section.start);
+                useStudio.setState({ message: "Cursor at section start" });
+              }}
+              disabled={!section || transport.playing}
+            >
+              <SkipBack size={15} />
+            </IconButton>{" "}
+            <IconButton
+              label="Stop / release notes (Escape)"
+              onClick={() => void stop()}
+              disabled={!transport.playing}
+            >
+              <Square size={14} />
+            </IconButton>{" "}
+            <IconButton
+              label={
+                parkedTick != null &&
+                section &&
+                parkedTick > section.start &&
+                parkedTick < section.end
+                  ? "Play from parked cursor (Space)"
+                  : "Play source notes (Space)"
               }
-              void startCapture();
-            }}
-            disabled={!view || busy || transport.playing}
-            active={capturing}
-          >
-            <CircleDot size={15} />
-          </IconButton>
-          <span
-            className={`midi-in-light${midiInFlash ? " on" : ""}${
-              monitoring || capturing ? " armed" : ""
-            }`}
-            title={
-              midiInFlash
-                ? "MIDI IN activity"
-                : monitoring || capturing
-                  ? "MIDI IN (waiting)"
-                  : "MIDI IN (idle)"
-            }
-            aria-label={
-              midiInFlash ? "MIDI IN active" : "MIDI IN inactive"
-            }
-            role="status"
-          />
-          <button
-            type="button"
-            className={`midi-owner-btn${midiActive ? " active" : ""}`}
-            title={
-              midiActive
-                ? "MIDI active here — only this project window drives hardware"
-                : "Use MIDI here — stop play/record in the other window first"
-            }
-            aria-label={midiActive ? "MIDI active here" : "Use MIDI here"}
-            aria-pressed={midiActive}
-            onClick={() => {
-              if (midiActive) return;
-              void claimMidiHere();
-            }}
-          >
-            {midiActive ? "MIDI here" : "Use MIDI"}
-          </button>
-          <IconButton
-            label="Test note (audition)"
-            onClick={() => void audition()}
-            disabled={busy}
-          >
-            <Bell size={15} />
-          </IconButton>
-          <IconButton
-            label="MIDI panic / all notes off"
-            onClick={() => void panic()}
-            disabled={busy}
-          >
-            <OctagonAlert size={15} />
-          </IconButton>
-          <IconButton
-            label="Loop section"
-            onClick={() => setLoop(!loop)}
-            active={loop}
-          >
-            <Repeat2 size={16} />
-          </IconButton>
-          <IconButton
-            label="Return on stop (Ctrl+W)"
-            onClick={() => {
-              const next = !returnOnStop;
-              setReturnOnStop(next);
-              void persistPrefs({ returnOnStop: next });
-            }}
-            active={returnOnStop}
-          >
-            <RefreshCw size={16} />
-          </IconButton>
-          <IconButton
-            label="Metronome during playback"
-            onClick={() => {
-              const next = !metronome;
-              setMetronome(next);
-              resetMetronome();
-              void persistPrefs({ metronomeDuringPlayback: next });
-            }}
-            active={metronome}
-          >
-            <Bell size={16} />
-          </IconButton>
+              onClick={() => void play()}
+              disabled={!view || busy}
+              active={transport.playing}
+            >
+              <Play size={18} fill="currentColor" />
+            </IconButton>{" "}
+            <IconButton
+              label="Record / capture (arm R first)"
+              onClick={() => {
+                if (capturing) return;
+                if (!monitorName || armedChannel == null) {
+                  setDeviceOpen(true);
+                  void scan();
+                  useStudio.setState({
+                    message:
+                      armedChannel == null
+                        ? "Arm a part with R, then Start capture"
+                        : "Select MIDI input, then Start capture",
+                  });
+                  return;
+                }
+                void startCapture();
+              }}
+              disabled={!view || busy || transport.playing}
+              active={capturing}
+            >
+              <CircleDot size={15} />
+            </IconButton>{" "}
+            <IconButton
+              label="Loop section"
+              onClick={() => setLoop(!loop)}
+              active={loop}
+            >
+              <Repeat2 size={16} />
+            </IconButton>
+          </div>{" "}
           <div className="time-readout">
             {Math.floor(transport.elapsedMs / 60000)
               .toString()
@@ -1789,105 +1743,181 @@ export function App() {
               {(transport.elapsedMs % 1000).toString().padStart(3, "0")}
             </span>
           </div>
-          <div
-            className="midi-level"
-            title="Estimated MIDI activity (velocity × volume) — not audio dB"
-            aria-label="MIDI level guide"
-          >
-            <span className="midi-level-label">MIDI LEVEL</span>
-            <strong className={`midi-level-pct ${midiLevelBand(midiLevel)}`}>
-              {Math.round(midiLevel * 100)}%
-            </strong>
-            <div
-              className="midi-level-track"
-              role="meter"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(midiLevel * 100)}
-              aria-label="Estimated MIDI level"
-            >
-              {midiLevelSegments(midiLevel, midiPeak).map((seg, i) => (
-                <i
-                  key={i}
-                  className={`midi-level-led ${seg.zone}${seg.lit ? " lit" : ""}${
-                    seg.peak ? " peak" : ""
-                  }`}
-                  aria-hidden
-                />
-              ))}
+          <div className="transport-timing">
+            {" "}
+            <label className="tempo" title="Edit tempo">
+              <input
+                aria-label="Tempo BPM"
+                type="number"
+                min={20}
+                max={400}
+                step={0.01}
+                disabled={!view || editingDisabled}
+                key={view ? `t-${view.revision}-${view.tempo}` : "t"}
+                defaultValue={view ? Number(view.tempo.toFixed(2)) : undefined}
+                onBlur={(e) => {
+                  if (!view) return;
+                  const n = Number(e.target.value);
+                  if (
+                    Number.isFinite(n) &&
+                    n >= 20 &&
+                    n <= 400 &&
+                    Math.abs(n - view.tempo) > 0.001
+                  ) {
+                    void applyTempoMeter(n, view.numerator, view.denominator);
+                  } else {
+                    e.target.value = String(Number(view.tempo.toFixed(2)));
+                  }
+                }}
+              />
+              <span>BPM</span>
+            </label>
+            <div className="meter meter-edit">
+              <input
+                aria-label="Meter numerator"
+                type="number"
+                min={1}
+                max={16}
+                disabled={!view || editingDisabled}
+                key={view ? `n-${view.revision}-${view.numerator}` : "n"}
+                defaultValue={view?.numerator}
+                onBlur={(e) => {
+                  if (!view) return;
+                  const n = Number(e.target.value);
+                  if (
+                    Number.isSafeInteger(n) &&
+                    n >= 1 &&
+                    n <= 16 &&
+                    n !== view.numerator
+                  ) {
+                    void applyTempoMeter(view.tempo, n, view.denominator);
+                  } else {
+                    e.target.value = String(view.numerator);
+                  }
+                }}
+              />
+              <span>/</span>
+              <select
+                aria-label="Meter denominator"
+                disabled={!view || editingDisabled}
+                value={view?.denominator ?? 4}
+                onChange={(e) => {
+                  if (!view) return;
+                  const d = Number(e.target.value);
+                  if (d !== view.denominator) {
+                    void applyTempoMeter(view.tempo, view.numerator, d);
+                  }
+                }}
+              >
+                {[1, 2, 4, 8, 16].map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
-          <label className="tempo" title="Edit tempo">
-            <input
-              aria-label="Tempo BPM"
-              type="number"
-              min={20}
-              max={400}
-              step={0.01}
-              disabled={!view || editingDisabled}
-              key={view ? `t-${view.revision}-${view.tempo}` : "t"}
-              defaultValue={view ? Number(view.tempo.toFixed(2)) : undefined}
-              onBlur={(e) => {
-                if (!view) return;
-                const n = Number(e.target.value);
-                if (
-                  Number.isFinite(n) &&
-                  n >= 20 &&
-                  n <= 400 &&
-                  Math.abs(n - view.tempo) > 0.001
-                ) {
-                  void applyTempoMeter(n, view.numerator, view.denominator);
-                } else {
-                  e.target.value = String(Number(view.tempo.toFixed(2)));
-                }
-              }}
-            />
-            <span>BPM</span>
-          </label>
-          <div className="meter meter-edit">
-            <input
-              aria-label="Meter numerator"
-              type="number"
-              min={1}
-              max={16}
-              disabled={!view || editingDisabled}
-              key={view ? `n-${view.revision}-${view.numerator}` : "n"}
-              defaultValue={view?.numerator}
-              onBlur={(e) => {
-                if (!view) return;
-                const n = Number(e.target.value);
-                if (
-                  Number.isSafeInteger(n) &&
-                  n >= 1 &&
-                  n <= 16 &&
-                  n !== view.numerator
-                ) {
-                  void applyTempoMeter(view.tempo, n, view.denominator);
-                } else {
-                  e.target.value = String(view.numerator);
-                }
-              }}
-            />
-            <span>/</span>
-            <select
-              aria-label="Meter denominator"
-              disabled={!view || editingDisabled}
-              value={view?.denominator ?? 4}
-              onChange={(e) => {
-                if (!view) return;
-                const d = Number(e.target.value);
-                if (d !== view.denominator) {
-                  void applyTempoMeter(view.tempo, view.numerator, d);
-                }
-              }}
-            >
-              {[1, 2, 4, 8, 16].map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
+          <div className="transport-preview">
+            <StudioMenu label="Chord preview">
+              {" "}
+              {view && section && (
+                <ChordStrip
+                  midiInputName={monitorName || undefined}
+                  monitoring={monitoring}
+                  onMonitoringChange={setMonitoring}
+                  onOpenDetails={() => setChordPreviewOpen(true)}
+                />
+              )}
+            </StudioMenu>
           </div>
+          <StudioMenu label="Playback options">
+            {" "}
+            <button
+              type="button"
+              className="ghost transport-live"
+              disabled={!section || capturing || busy || transport.playing}
+              title="Live Style preview"
+              onClick={() => setLivePreviewOpen(true)}
+            >
+              Live
+            </button>
+            <IconButton
+              label="Move cursor to section end (End)"
+              onClick={() => {
+                if (!section) return;
+                setParkedTick(Math.max(section.start, section.end - 1));
+                useStudio.setState({ message: "Cursor at section end" });
+              }}
+              disabled={!section || transport.playing}
+            >
+              <SkipForward size={15} />
+            </IconButton>{" "}
+            <IconButton
+              label="Return on stop (Ctrl+W)"
+              onClick={() => {
+                const next = !returnOnStop;
+                setReturnOnStop(next);
+                void persistPrefs({ returnOnStop: next });
+              }}
+              active={returnOnStop}
+            >
+              <RefreshCw size={16} />
+            </IconButton>{" "}
+            <IconButton
+              label="Metronome during playback"
+              onClick={() => {
+                const next = !metronome;
+                setMetronome(next);
+                resetMetronome();
+                void persistPrefs({ metronomeDuringPlayback: next });
+              }}
+              active={metronome}
+            >
+              <Bell size={16} />
+            </IconButton>{" "}
+            <IconButton
+              label="Test note (audition)"
+              onClick={() => void audition()}
+              disabled={busy}
+            >
+              <Bell size={15} />
+            </IconButton>{" "}
+            <IconButton
+              label="MIDI panic / all notes off"
+              onClick={() => void panic()}
+              disabled={busy}
+            >
+              <OctagonAlert size={15} />
+            </IconButton>{" "}
+            <div
+              className="midi-level"
+              title="Estimated MIDI activity (velocity × volume) — not audio dB"
+              aria-label="MIDI level guide"
+            >
+              <span className="midi-level-label">MIDI LEVEL</span>
+              <strong className={`midi-level-pct ${midiLevelBand(midiLevel)}`}>
+                {Math.round(midiLevel * 100)}%
+              </strong>
+              <div
+                className="midi-level-track"
+                role="meter"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(midiLevel * 100)}
+                aria-label="Estimated MIDI level"
+              >
+                {midiLevelSegments(midiLevel, midiPeak).map((seg, i) => (
+                  <i
+                    key={i}
+                    className={`midi-level-led ${seg.zone}${seg.lit ? " lit" : ""}${
+                      seg.peak ? " peak" : ""
+                    }`}
+                    aria-hidden
+                  />
+                ))}
+              </div>
+            </div>
+          </StudioMenu>
         </div>
       </div>
       {error && (
@@ -1904,8 +1934,8 @@ export function App() {
             <Music2 size={45} />
             <div className="empty-staff" />
           </div>
-          <p className="eyebrow">YOUR NEXT ARRANGEMENT</p>
-          <h1>Give every part its place.</h1>
+          <p className="eyebrow">GENOS STYLE STUDIO</p>
+          <h1>Create your next Style.</h1>
           <p>
             Open a Yamaha Style, or compose a blank project from a reference
             scaffold with cleared notes.
@@ -2039,7 +2069,7 @@ export function App() {
           >
             <aside className="tracks">
               <div className="panel-heading">
-                <span>SOURCE CHANNELS</span>
+                <span>STYLE PARTS</span>
                 <small>{sources.length}</small>
               </div>
               <div className="track-list">
@@ -2074,7 +2104,10 @@ export function App() {
                         <span className="track-content">
                           <strong>{role(ch)}</strong>
                           <small>
-                            {sectionNotes.filter((n) => n.channel === ch).length}{" "}
+                            {
+                              sectionNotes.filter((n) => n.channel === ch)
+                                .length
+                            }{" "}
                             notes
                             {route ? ` · → ch ${route.destination}` : ""}
                             {isArmed ? " · armed" : ""}
@@ -2118,6 +2151,61 @@ export function App() {
                   );
                 })}
               </div>
+              <section
+                className="part-sound"
+                aria-label="Selected part sound"
+                key={`${sectionId}:${channel}`}
+              >
+                <div className="part-sound-heading">
+                  <span>PART SOUND</span>
+                  <strong>{role(channel)}</strong>
+                </div>
+                <button
+                  className="part-voice"
+                  type="button"
+                  title="Choose the selected part's voice"
+                  onClick={() => setVoiceOpen(true)}
+                  disabled={editingDisabled}
+                >
+                  Voice <ChevronRight size={13} />
+                </button>
+                <div className="part-sound-knobs">
+                  <ParameterControl
+                    label="Pan"
+                    ariaLabel="Selected part pan"
+                    value={valueAt(channel, 0xb0, 10, 64)}
+                    resetValue={64}
+                    bipolar
+                    format={formatPan}
+                    disabled={editingDisabled}
+                    onCommit={(n) =>
+                      setDiscrete(channel, [0xb0 | (channel - 1), 10, n])
+                    }
+                  />
+                  <ParameterControl
+                    label="Reverb"
+                    ariaLabel="Selected part reverb"
+                    value={valueAt(channel, 0xb0, 91, 40)}
+                    resetValue={40}
+                    disabled={editingDisabled}
+                    onCommit={(n) =>
+                      setDiscrete(channel, [0xb0 | (channel - 1), 91, n])
+                    }
+                  />
+                  <ParameterControl
+                    label="Chorus"
+                    ariaLabel="Selected part chorus"
+                    value={valueAt(channel, 0xb0, 93, 0)}
+                    disabled={editingDisabled}
+                    onCommit={(n) =>
+                      setDiscrete(channel, [0xb0 | (channel - 1), 93, n])
+                    }
+                  />
+                </div>
+                <span className="part-sound-scope">
+                  {section?.label} · CH {channel}
+                </span>
+              </section>
               <div className="track-summary">
                 <span>
                   {sectionNotes.length.toLocaleString()} notes in section
@@ -2177,9 +2265,7 @@ export function App() {
                             mixerApplyAll,
                           });
                         })
-                        .catch((e) =>
-                          useStudio.setState({ error: String(e) }),
-                        );
+                        .catch((e) => useStudio.setState({ error: String(e) }));
                     }}
                   >
                     <PictureInPicture2 size={14} />
@@ -2212,6 +2298,7 @@ export function App() {
                       </IconButton>
                       <button
                         title="Paint notes · B"
+                        aria-label="Paint notes"
                         aria-pressed={tool === "paint"}
                         className={tool === "paint" ? "active" : ""}
                         onClick={() => {
@@ -2219,10 +2306,12 @@ export function App() {
                           void persistPrefs({ tool: "paint" });
                         }}
                       >
-                        Paint
+                        <Paintbrush size={15} />
+                        <span className="sr-only">Paint</span>
                       </button>
                       <button
                         title="Erase notes · D"
+                        aria-label="Erase notes"
                         aria-pressed={tool === "erase"}
                         className={tool === "erase" ? "active" : ""}
                         onClick={() => {
@@ -2230,7 +2319,8 @@ export function App() {
                           void persistPrefs({ tool: "erase" });
                         }}
                       >
-                        Erase
+                        <Eraser size={15} />
+                        <span className="sr-only">Erase</span>
                       </button>
                       <IconButton
                         label="Park play cursor (2)"
@@ -2264,11 +2354,11 @@ export function App() {
                           void persistPrefs({ snap: next });
                         }}
                       >
-                        {[0, 4, 8, 12, 16, 24, 32, 48, 64].map((n) => (
+                        {[0, 4, 6, 8, 12, 16, 24, 32, 48, 64].map((n) => (
                           <option key={n} value={n}>
                             {n === 0
                               ? "None"
-                              : `1/${n}${[12, 24, 48].includes(n) ? " · triplet" : ""}`}
+                              : `1/${n}${[6, 12, 24, 48].includes(n) ? " · triplet" : ""}`}
                           </option>
                         ))}
                       </select>
@@ -2277,13 +2367,16 @@ export function App() {
                       disabled={!selected.length || editingDisabled}
                       onClick={() =>
                         void state.edit({
-                          type: "quantize",
+                          type: "advancedQuantize",
                           section: sectionId,
+                          channel,
                           ids: selected,
-                          step: Math.max(
-                            1,
-                            Math.round((view.ppq * 4) / (snap || 16)),
-                          ),
+                          options: {
+                            size: quantizeGridForTicks(
+                              (view.ppq * 4) / (snap || 16),
+                              view.ppq,
+                            ),
+                          },
                         })
                       }
                     >
@@ -2330,7 +2423,7 @@ export function App() {
                           ? tickFromElapsed(view, section, transport.elapsedMs)
                           : section
                             ? (parkedTick ?? section.start)
-                          : null
+                            : null
                       }
                       onParkCursor={(tick) => {
                         setParkedTick(tick);
@@ -2397,6 +2490,7 @@ export function App() {
                   onCc={cc}
                   onEq={eq}
                   targetChannel={channel}
+                  onSelectChannel={state.setChannel}
                   onAutoPan={(ch, points, removeIds) => {
                     if (!section) return;
                     void state.edit({
@@ -2420,11 +2514,7 @@ export function App() {
                   }}
                   pitchBendRangeAt={(ch) =>
                     section
-                      ? pitchBendRangeSemitones(
-                          view.events,
-                          ch,
-                          section.start,
-                        )
+                      ? pitchBendRangeSemitones(view.events, ch, section.start)
                       : null
                   }
                   onPitchBendRange={(ch, semitones) => {
@@ -2467,285 +2557,306 @@ export function App() {
                 </button>
               </aside>
             ) : (
-            <aside className="inspector">
-              <div className="panel-heading">
-                <span>INSPECTOR</span>
-                <button
-                  type="button"
-                  className="ghost inspector-hide"
-                  title="Hide inspector"
-                  aria-label="Hide inspector"
-                  onClick={() => setInspectorHidden(true)}
-                >
-                  Hide
-                </button>
-              </div>
-              <div className="inspector-tabs">
-                {(["note", "casm", "events"] as const).map((t) => (
+              <aside className="inspector">
+                <div className="panel-heading">
+                  <span>INSPECTOR</span>
                   <button
-                    key={t}
-                    className={inspector === t ? "active" : ""}
-                    onClick={() => setInspector(t)}
+                    type="button"
+                    className="ghost inspector-hide"
+                    title="Hide inspector"
+                    aria-label="Hide inspector"
+                    onClick={() => setInspectorHidden(true)}
                   >
-                    {t === "casm" ? "CASM" : t === "note" ? "Notes" : "Events"}
+                    Hide
                   </button>
-                ))}
-              </div>
-              <fieldset disabled={editingDisabled} className="inspector-body">
-                {inspector === "note" ? (
-                  <>
-                    <div className="note-navigation">
-                      <IconButton
-                        label="Previous note"
-                        disabled={noteIndex <= 0}
-                        onClick={() =>
-                          state.select([channelNotes[noteIndex - 1].id])
-                        }
-                      >
-                        <ChevronLeft size={14} />
-                      </IconButton>
-                      <span>
-                        {noteIndex < 0
-                          ? "No selection"
-                          : `${noteIndex + 1} of ${channelNotes.length}`}
-                      </span>
-                      <IconButton
-                        label="Next note"
-                        disabled={
-                          !channelNotes.length ||
-                          noteIndex >= channelNotes.length - 1
-                        }
-                        onClick={() =>
-                          state.select([channelNotes[noteIndex + 1].id])
-                        }
-                      >
-                        <ChevronRight size={14} />
-                      </IconButton>
-                    </div>
-                    <h3>{note ? pitchName(note.pitch) : "Note selection"}</h3>
-                    <p className="muted">
-                      {selected.length
-                        ? `${selected.length} selected · source ch ${channel}`
-                        : "Select a note in the piano roll to inspect its timing and velocity."}
-                    </p>
-                    {note && section && (
-                      <>
-                        <NumberField
-                          label="Pitch"
-                          value={note.pitch}
-                          onCommit={(n) =>
-                            void state.edit({
-                              type: "updateNotes",
-                              section: sectionId,
-                              ids: selected,
-                              deltaPitch: n - note.pitch,
-                            })
-                          }
-                        />
-                        <NumberField
-                          label="Start tick (section)"
-                          value={note.start - section.start}
-                          max={section.end - section.start - 1}
-                          onCommit={(n) =>
-                            void state.edit({
-                              type: "updateNotes",
-                              section: sectionId,
-                              ids: selected,
-                              deltaTick: n - (note.start - section.start),
-                            })
-                          }
-                        />
-                        <NumberField
-                          label="Duration ticks"
-                          value={note.duration}
-                          min={1}
-                          max={section.end - section.start}
-                          onCommit={(n) =>
-                            void state.edit({
-                              type: "updateNotes",
-                              section: sectionId,
-                              ids: selected,
-                              duration: n,
-                            })
-                          }
-                        />
-                        <NumberField
-                          label="Velocity"
-                          value={note.velocity}
-                          min={1}
-                          onCommit={(n) =>
-                            void state.edit({
-                              type: "updateNotes",
-                              section: sectionId,
-                              ids: selected,
-                              velocity: n,
-                            })
-                          }
-                        />
-                        <button
-                          className="danger-link"
+                </div>
+                <div className="inspector-tabs">
+                  {(["note", "casm", "events"] as const).map((t) => (
+                    <button
+                      key={t}
+                      className={inspector === t ? "active" : ""}
+                      onClick={() => setInspector(t)}
+                    >
+                      {t === "casm"
+                        ? "CASM"
+                        : t === "note"
+                          ? "Notes"
+                          : "Events"}
+                    </button>
+                  ))}
+                </div>
+                <fieldset disabled={editingDisabled} className="inspector-body">
+                  {inspector === "note" ? (
+                    <>
+                      <div className="note-navigation">
+                        <IconButton
+                          label="Previous note"
+                          disabled={noteIndex <= 0}
                           onClick={() =>
-                            void state.edit({
-                              type: "deleteNotes",
-                              ids: selected,
-                            })
+                            state.select([channelNotes[noteIndex - 1].id])
                           }
                         >
-                          Delete {selected.length === 1 ? "note" : "selection"}
-                        </button>
-                        {view && (
-                          <>
-                            <div className="inspector-divider" />
-                            <NoteFxPanel
-                              view={view}
-                              section={section}
-                              channel={channel}
-                              notes={sectionNotes.filter((n) =>
-                                selected.includes(n.id),
-                              )}
-                              disabled={editingDisabled || busy || capturing}
-                              onApply={({ controller, points, remove }) =>
+                          <ChevronLeft size={14} />
+                        </IconButton>
+                        <span>
+                          {noteIndex < 0
+                            ? "No selection"
+                            : `${noteIndex + 1} of ${channelNotes.length}`}
+                        </span>
+                        <IconButton
+                          label="Next note"
+                          disabled={
+                            !channelNotes.length ||
+                            noteIndex >= channelNotes.length - 1
+                          }
+                          onClick={() =>
+                            state.select([channelNotes[noteIndex + 1].id])
+                          }
+                        >
+                          <ChevronRight size={14} />
+                        </IconButton>
+                      </div>
+                      <h3>{note ? pitchName(note.pitch) : "Note selection"}</h3>
+                      <p className="muted">
+                        {selected.length
+                          ? `${selected.length} selected · source ch ${channel}`
+                          : "Select a note in the piano roll to inspect its timing and velocity."}
+                      </p>
+                      {note && section && (
+                        <>
+                          <div
+                            className="note-attributes"
+                            key={`${sectionId}:${selected.join(",")}`}
+                          >
+                            <NumberField
+                              label="Pitch"
+                              value={note.pitch}
+                              onCommit={(n) =>
                                 void state.edit({
-                                  type: "controllerPoints",
-                                  section: section.id,
-                                  channel,
-                                  controller,
-                                  points,
-                                  remove,
-                                })
-                              }
-                              onClear={({ controller, remove }) =>
-                                void state.edit({
-                                  type: "controllerPoints",
-                                  section: section.id,
-                                  channel,
-                                  controller,
-                                  remove,
+                                  type: "updateNotes",
+                                  section: sectionId,
+                                  ids: selected,
+                                  deltaPitch: n - note.pitch,
                                 })
                               }
                             />
-                          </>
-                        )}
-                      </>
-                    )}
-                    <div className="inspector-divider" />
-                    <h3>Voice bank</h3>
-                    {section && (
-                      <VoiceName
-                        section={section}
-                        channel={channel}
-                        onOpen={() => setVoiceOpen(true)}
-                      />
-                    )}
-                    {section && (channel === 9 || channel === 10) && (
+                            <NumberField
+                              label="Start tick (section)"
+                              value={note.start - section.start}
+                              max={section.end - section.start - 1}
+                              onCommit={(n) =>
+                                void state.edit({
+                                  type: "updateNotes",
+                                  section: sectionId,
+                                  ids: selected,
+                                  deltaTick: n - (note.start - section.start),
+                                })
+                              }
+                            />
+                            <NumberField
+                              label="Duration ticks"
+                              value={note.duration}
+                              min={1}
+                              max={section.end - section.start}
+                              onCommit={(n) =>
+                                void state.edit({
+                                  type: "updateNotes",
+                                  section: sectionId,
+                                  ids: selected,
+                                  duration: n,
+                                })
+                              }
+                            />
+                            <ParameterControl
+                              label="Velocity"
+                              ariaLabel="Note velocity"
+                              value={note.velocity}
+                              min={1}
+                              resetValue={100}
+                              disabled={editingDisabled}
+                              onCommit={(n) =>
+                                void state.edit({
+                                  type: "updateNotes",
+                                  section: sectionId,
+                                  ids: selected,
+                                  velocity: n,
+                                })
+                              }
+                            />
+                          </div>
+                          <button
+                            className="danger-link"
+                            onClick={() =>
+                              void state.edit({
+                                type: "deleteNotes",
+                                ids: selected,
+                              })
+                            }
+                          >
+                            Delete{" "}
+                            {selected.length === 1 ? "note" : "selection"}
+                          </button>
+                          {view && (
+                            <>
+                              <div className="inspector-divider" />
+                              <details className="note-effects-disclosure">
+                                <summary>Note effects</summary>{" "}
+                                <NoteFxPanel
+                                  view={view}
+                                  section={section}
+                                  channel={channel}
+                                  notes={sectionNotes.filter((n) =>
+                                    selected.includes(n.id),
+                                  )}
+                                  disabled={
+                                    editingDisabled || busy || capturing
+                                  }
+                                  onApply={({ controller, points, remove }) =>
+                                    void state.edit({
+                                      type: "controllerPoints",
+                                      section: section.id,
+                                      channel,
+                                      controller,
+                                      points,
+                                      remove,
+                                    })
+                                  }
+                                  onClear={({ controller, remove }) =>
+                                    void state.edit({
+                                      type: "controllerPoints",
+                                      section: section.id,
+                                      channel,
+                                      controller,
+                                      remove,
+                                    })
+                                  }
+                                />
+                              </details>
+                            </>
+                          )}
+                        </>
+                      )}
+                      <div className="inspector-divider" />
+                      <h3>Voice bank</h3>
+                      {section && (
+                        <VoiceName
+                          section={section}
+                          channel={channel}
+                          onOpen={() => setVoiceOpen(true)}
+                        />
+                      )}
+                      {section && (channel === 9 || channel === 10) && (
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => setDrumsOpen(true)}
+                        >
+                          Drum kits (Ch 9–10)
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="secondary"
-                        onClick={() => setDrumsOpen(true)}
+                        onClick={() => setEffectsOpen(true)}
                       >
-                        Drum kits (Ch 9–10)
+                        Effect types
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => setEffectsOpen(true)}
-                    >
-                      Effect types
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => setExchangeOpen(true)}
-                      disabled={!section}
-                    >
-                      MIDI exchange
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => setChordPreviewOpen(true)}
-                      disabled={!section}
-                    >
-                      Chord preview
-                    </button>
-                    <p className="muted">
-                      Numeric MIDI address at section start. Drum kits use the
-                      imported Data List DrumKit category — not SysEx Drum
-                      Setup. Reverb/chorus Apply sends verified system-effect
-                      SysEx.
-                    </p>
-                    <NumberField
-                      label="Bank MSB · CC 0"
-                      value={valueAt(channel, 0xb0, 0)}
-                      onCommit={(n) => cc(channel, 0, n)}
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => setExchangeOpen(true)}
+                        disabled={!section}
+                      >
+                        MIDI exchange
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => setChordPreviewOpen(true)}
+                        disabled={!section}
+                      >
+                        Chord preview
+                      </button>
+                      <details className="midi-bank-details">
+                        <summary>MIDI voice address</summary>{" "}
+                        <p className="muted">
+                          Numeric MIDI address at section start. Drum kits use
+                          the factory DrumKit category — not SysEx
+                          Drum Setup. Reverb/chorus Apply sends verified
+                          system-effect SysEx.
+                        </p>
+                        <NumberField
+                          label="Bank MSB · CC 0"
+                          value={valueAt(channel, 0xb0, 0)}
+                          onCommit={(n) => cc(channel, 0, n)}
+                        />
+                        <NumberField
+                          label="Bank LSB · CC 32"
+                          value={valueAt(channel, 0xb0, 32)}
+                          onCommit={(n) => cc(channel, 32, n)}
+                        />
+                        <NumberField
+                          label="Program · 1-128"
+                          value={valueAt(channel, 0xc0, undefined, 0) + 1}
+                          min={1}
+                          max={128}
+                          onCommit={(n) =>
+                            setDiscrete(channel, [0xc0 | (channel - 1), n - 1])
+                          }
+                        />
+                      </details>
+                    </>
+                  ) : inspector === "casm" ? (
+                    <CasmInspector
+                      routes={view.routes.filter(
+                        (r) =>
+                          r.source === channel &&
+                          r.sections.includes(section?.label ?? ""),
+                      )}
+                      onEditSources={setSourcesRoute}
                     />
-                    <NumberField
-                      label="Bank LSB · CC 32"
-                      value={valueAt(channel, 0xb0, 32)}
-                      onCommit={(n) => cc(channel, 32, n)}
+                  ) : (
+                    <EventInspector
+                      events={view.events.filter(
+                        (e) =>
+                          section &&
+                          e.tick >= section.start &&
+                          e.tick < section.end &&
+                          (e.data[0] & 15) + 1 === channel &&
+                          e.data[0] >= 0xb0 &&
+                          e.data[0] < 0xf0,
+                      )}
+                      systemEvents={view.events.filter(
+                        (e) =>
+                          section &&
+                          e.tick >= section.start &&
+                          e.tick < section.end &&
+                          (e.data[0] === 0xf0 ||
+                            e.data[0] === 0xf7 ||
+                            e.data[0] === 0xff),
+                      )}
+                      notes={view.notes.filter(
+                        (n) =>
+                          section &&
+                          n.channel === channel &&
+                          n.start >= section.start &&
+                          n.start < section.end,
+                      )}
+                      sectionId={sectionId}
+                      channel={channel}
+                      start={section?.start ?? 0}
+                      end={section?.end ?? 1}
                     />
-                    <NumberField
-                      label="Program · 1-128"
-                      value={valueAt(channel, 0xc0, undefined, 0) + 1}
-                      min={1}
-                      max={128}
-                      onCommit={(n) =>
-                        setDiscrete(channel, [0xc0 | (channel - 1), n - 1])
-                      }
-                    />
-                  </>
-                ) : inspector === "casm" ? (
-                  <CasmInspector
-                    routes={view.routes.filter(
-                      (r) =>
-                        r.source === channel &&
-                        r.sections.includes(section?.label ?? ""),
-                    )}
-                    onEditSources={setSourcesRoute}
-                  />
-                ) : (
-                  <EventInspector
-                    events={view.events.filter(
-                      (e) =>
-                        section &&
-                        e.tick >= section.start &&
-                        e.tick < section.end &&
-                        (e.data[0] & 15) + 1 === channel &&
-                        e.data[0] >= 0xb0 &&
-                        e.data[0] < 0xf0,
-                    )}
-                    systemEvents={view.events.filter(
-                      (e) =>
-                        section &&
-                        e.tick >= section.start &&
-                        e.tick < section.end &&
-                        (e.data[0] === 0xf0 ||
-                          e.data[0] === 0xf7 ||
-                          e.data[0] === 0xff),
-                    )}
-                    notes={view.notes.filter(
-                      (n) =>
-                        section &&
-                        n.channel === channel &&
-                        n.start >= section.start &&
-                        n.start < section.end,
-                    )}
-                    sectionId={sectionId}
-                    channel={channel}
-                    start={section?.start ?? 0}
-                    end={section?.end ?? 1}
-                  />
-                )}
-              </fieldset>
-              <div className="integrity">
-                <span className="connection-dot connected" />
-                <div>
-                  Source precision
-                  <small>{view.ppq} ticks per quarter note</small>
+                  )}
+                </fieldset>
+                <div className="integrity">
+                  <span className="connection-dot connected" />
+                  <div>
+                    Source precision
+                    <small>{view.ppq} ticks per quarter note</small>
+                  </div>
                 </div>
-              </div>
-            </aside>
+              </aside>
             )}
           </main>
         </>
@@ -2757,7 +2868,7 @@ export function App() {
             ? "Processing..."
             : transport.playing
               ? "Playing source notes"
-              : state.message}
+              : controlHint || state.message}
         </span>
         {initialEffects?.view === view &&
           initialEffects?.output === output &&
@@ -2783,7 +2894,9 @@ export function App() {
             </span>
           </>
         )}
-        <span className="native-label">RUST ENGINE</span>
+        <span className="native-label">
+          {view?.format ?? "GENOS STYLE STUDIO"}
+        </span>
       </footer>
       {recovery && (
         <div className="modal-backdrop">
@@ -3168,23 +3281,15 @@ export function App() {
         </div>
       )}
       {deviceOpen && (
-        <div className="modal-backdrop" onClick={() => setDeviceOpen(false)}>
-          <section
-            className="modal midi-connections"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="device-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-title">
-              <h2 id="device-title">MIDI connections</h2>
-              <IconButton
-                label="Close MIDI settings"
-                onClick={() => setDeviceOpen(false)}
-              >
-                <X size={18} />
-              </IconButton>
-            </div>
+        <FloatingToolWindow
+          open={!recordingMidiOpen}
+          title="MIDI connections"
+          context="Devices · Monitor · Capture"
+          className="midi-connections"
+          closeLabel="Close MIDI settings"
+          onClose={() => setDeviceOpen(false)}
+        >
+          <div className="midi-connection-content">
             <label className="field">
               <span className="field-label">
                 MIDI output
@@ -3226,7 +3331,7 @@ export function App() {
               onChange={setInitialEffects}
               disabled={busy || transport.playing || capturing}
             />
-            <div className="section-with-help">
+            <div className="section-with-help midi-monitor-heading">
               <h3>MIDI input monitor</h3>
               <HelpTip
                 label="MIDI input monitor help"
@@ -3248,7 +3353,7 @@ export function App() {
                 ))}
               </select>
             </label>
-            <div className="monitor-actions">
+            <div className="monitor-actions midi-monitor-actions">
               <button
                 type="button"
                 disabled={!monitorName || monitoring}
@@ -3303,14 +3408,12 @@ export function App() {
                 </p>
               )}
             </div>
-            <div className="section-with-help">
+            <div className="section-with-help midi-capture-heading">
               <h3>MIDI capture</h3>
               <HelpTip
                 label="MIDI capture help"
                 tip="Arm a part with R on Source Channels or Mixer, then Start capture. Existing parts overdub under Mute/Solo while you record into the armed part; Apply commits the take. Count-in, thru, quantize, offset, and Record Voice live in Recording & MIDI settings. Export Type-0 MIDI only — no Style/CASM builder."
               />
-            </div>
-            <div className="capture-options">
               <button
                 type="button"
                 className="ghost"
@@ -3319,6 +3422,8 @@ export function App() {
               >
                 Recording &amp; MIDI settings…
               </button>
+            </div>
+            <div className="capture-options">
               <span className="muted">
                 Count-in {countInBars || "off"} · quantize{" "}
                 {recQuantize || "off"} · offset {recordingOffsetMs}ms
@@ -3329,16 +3434,14 @@ export function App() {
                   : recData === "controllers"
                     ? " · CC+voice"
                     : ""}
-                {recInputChannel > 0
-                  ? ` · in CH${recInputChannel}`
-                  : " · OMNI"}
+                {recInputChannel > 0 ? ` · in CH${recInputChannel}` : " · OMNI"}
                 {" · "}
                 {armedChannel
                   ? `armed ${role(armedChannel)} CH${armedChannel}`
                   : "no part armed (applies to selected channel)"}
               </span>
             </div>
-            <div className="monitor-actions">
+            <div className="monitor-actions midi-capture-actions">
               <button
                 type="button"
                 disabled={!monitorName || capturing || busy}
@@ -3377,7 +3480,10 @@ export function App() {
                 Add marker
               </button>
               {capturing && (
-                <div className="capture-options" title="SFM Controller to record">
+                <div
+                  className="capture-options"
+                  title="SFM Controller to record"
+                >
                   <label>
                     <span>Controller to record</span>
                     <select
@@ -3540,12 +3646,15 @@ export function App() {
                 </p>
               )}
             </div>
-            <p className="muted">
-              Playback uses source channels. Monitor and capture share the input
-              port (one at a time). Live Style preview applies supported Ctb2
-              routes and a chord progression; its coverage report lists excluded
-              settings.
-            </p>
+            <details className="midi-routing-help">
+              <summary>Routing and capture notes</summary>
+              <p className="muted">
+                Playback uses source channels. Monitor and capture share the
+                input port (one at a time). Live Style preview applies supported
+                Ctb2 routes and a chord progression; its coverage report lists
+                excluded settings.
+              </p>
+            </details>
             <div className="modal-actions">
               <button onClick={() => void scan()}>
                 <RefreshCw size={15} />
@@ -3561,8 +3670,8 @@ export function App() {
                 Done
               </button>
             </div>
-          </section>
-        </div>
+          </div>
+        </FloatingToolWindow>
       )}
       {expansionOpen && (
         <ExpansionRecovery onClose={() => setExpansionOpen(false)} />
@@ -3598,8 +3707,8 @@ export function App() {
                 Play/Stop when a section is open
               </li>
               <li>
-                Piano: right-click deletes · hold right ~1s for note properties ·
-                Shift+right for menu · Ghosts = all pitches of the source
+                Piano: right-click deletes · hold right ~1s for note properties
+                · Shift+right for menu · Ghosts = all pitches of the source
               </li>
               <li>
                 Controller lane: Linear/Ease/Step drag shows a yellow mid-handle
@@ -3610,9 +3719,9 @@ export function App() {
             <ul className="help-list">
               <li>
                 Arm a part with <kbd>R</kbd>, then Rec/capture. Mute/Solo filter
-                overdub playback. Cancel take discards a retained capture.
-                While recording, Controller to record writes CC into the take
-                (mouse). Test click checks PC-audio metronome (not MIDI out).
+                overdub playback. Cancel take discards a retained capture. While
+                recording, Controller to record writes CC into the take (mouse).
+                Test click checks PC-audio metronome (not MIDI out).
               </li>
               <li>
                 Chord preview MIDI LH uses the monitor input with optional MIDI
@@ -3630,13 +3739,14 @@ export function App() {
               <li>
                 Live Style preview adds supported Ctb2 routing and a chord
                 progression. Full Yamaha arranger chord playback, SFF1
-                conversion, and Auto-fix CASM (SFM JSON role presets) are out
-                of scope. Voice/effect catalogs need the supported Genos v2.00
-                Data List.
+                conversion, and Auto-fix CASM (SFM JSON role presets) are out of
+                scope. Voice/effect catalogs need the supported Genos v2.00 Data
+                List.
               </li>
               <li>
                 Hardware Genos LH split confirmation, drum sound remap, pitch
-                bend range uses Genos RPN 0,0 (Mixer); section Tempo (BPM) lane uses SMF meta FF 51.
+                bend range uses Genos RPN 0,0 (Mixer); section Tempo (BPM) lane
+                uses SMF meta FF 51.
               </li>
             </ul>
             <div className="modal-actions">
@@ -3694,11 +3804,11 @@ export function App() {
                 <strong>Gated - no invent:</strong> F019 sound remaps / advanced
                 fields / Genos2 / native setup MIDI preview and hardware
                 acceptance, F021 variation apply + Parameter List /
-                detailed/later effect replay, F024 full
-                Yamaha-equivalent playback / hardware retarget / expansion
-                qualification, F027 Style/analyze-build from capture (no Style
-                builder oracle), F029 DAW session round-trip, F030 SFF1
-                conversion (EV-0171 scaffold / conversion blocked).
+                detailed/later effect replay, F024 full Yamaha-equivalent
+                playback / hardware retarget / expansion qualification, F027
+                Style/analyze-build from capture (no Style builder oracle), F029
+                DAW session round-trip, F030 SFF1 conversion (EV-0171 scaffold /
+                conversion blocked).
               </li>
               <li>
                 <strong>Excluded:</strong> F034 proprietary licensing.
@@ -3715,7 +3825,11 @@ export function App() {
                 and latency qualification remain open.
               </li>
             </ul>
-            <div className="ui-scale-row" role="group" aria-label="Interface size">
+            <div
+              className="ui-scale-row"
+              role="group"
+              aria-label="Interface size"
+            >
               <span>Interface size</span>
               <button
                 type="button"
@@ -3979,7 +4093,7 @@ function EventInspector({
     ? viewEvents.filter((e) => {
         if (e.tick < start || e.tick >= end) return false;
         const st = e.data[0] ?? 0;
-        return st < 0xf0 && (st >> 4) >= 0x8 && (st >> 4) <= 0xe;
+        return st < 0xf0 && st >> 4 >= 0x8 && st >> 4 <= 0xe;
       })
     : events;
   const rows: Row[] = [
@@ -4002,11 +4116,11 @@ function EventInspector({
         channel: ch,
         label:
           (allChannels ? `Ch${ch} ` : "") +
-          ((e.data[0] >> 4) === 0xb
+          (e.data[0] >> 4 === 0xb
             ? `CC ${e.data[1]}`
-            : (e.data[0] >> 4) === 0xc
+            : e.data[0] >> 4 === 0xc
               ? "Program"
-              : (e.data[0] >> 4) === 0xe
+              : e.data[0] >> 4 === 0xe
                 ? "Bend"
                 : "Pressure"),
         detail: e.data.slice(1).join(" / "),
@@ -4073,10 +4187,12 @@ function EventInspector({
             onClick={() => {
               if (row.kind === "note") {
                 setId(null);
-                if (allChannels && row.channel !== channel) setChannel(row.channel);
+                if (allChannels && row.channel !== channel)
+                  setChannel(row.channel);
                 select([row.noteId]);
               } else if (row.kind === "cc") {
-                if (allChannels && row.channel !== channel) setChannel(row.channel);
+                if (allChannels && row.channel !== channel)
+                  setChannel(row.channel);
                 setId(row.id);
                 select([]);
               } else {

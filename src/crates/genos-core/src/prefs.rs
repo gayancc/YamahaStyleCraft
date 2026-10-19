@@ -118,7 +118,7 @@ pub fn load(path: &Path) -> Result<Prefs> {
 }
 
 fn sanitize(mut p: Prefs) -> Prefs {
-    if ![0, 1, 2, 4, 8, 12, 16, 24, 32, 48, 64].contains(&p.snap) {
+    if ![0, 1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64].contains(&p.snap) {
         p.snap = default_snap();
     }
     if !p.zoom.is_finite() || !(0.125..=8.0).contains(&p.zoom) {

@@ -220,6 +220,84 @@ fn validate_baseline(b: &Baseline) -> Result<()> {
     }
     Ok(())
 }
+
+/// Reserved project metadata is validated before it reaches the UI or planner.
+/// A scope key binds its originals to one section and Yamaha source channel.
+pub(crate) fn project_state(
+    value: &serde_json::Value,
+    doc: &Document,
+    prune: bool,
+) -> Result<Option<serde_json::Value>> {
+    let mut states: std::collections::BTreeMap<String, Baseline> =
+        serde_json::from_value(value.clone())?;
+    if states.len() > doc.sections.len().saturating_mul(8) {
+        return fail("too many original-timing scopes");
+    }
+    let notes: HashMap<_, _> = doc.notes.iter().map(|n| (n.id, n)).collect();
+    let events: HashMap<_, _> = doc
+        .style
+        .tracks
+        .iter()
+        .flatten()
+        .map(|e| (e.id, e))
+        .collect();
+    for (key, baseline) in &mut states {
+        validate_baseline(baseline)?;
+        let (section, channel) = key
+            .split_once(':')
+            .ok_or_else(|| Error::Edit("invalid quantize scope".into()))?;
+        let section: u64 = section
+            .parse()
+            .map_err(|_| Error::Edit("invalid quantize section".into()))?;
+        let channel: u8 = channel
+            .parse()
+            .map_err(|_| Error::Edit("invalid quantize channel".into()))?;
+        if *key != format!("{section}:{channel}") || !(9..=16).contains(&channel) {
+            return fail("invalid original-timing scope");
+        }
+        let sec = doc.sections.iter().find(|s| s.id == section);
+        let note_in_scope = |id: u64| {
+            notes.get(&id).is_some_and(|n| {
+                n.channel == channel && sec.is_some_and(|s| n.start >= s.start && n.start < s.end)
+            })
+        };
+        let valid_note = |n: &NoteOriginal| {
+            note_in_scope(n.id)
+                && sec.is_some_and(|s| {
+                    n.start >= s.start
+                        && n.start
+                            .checked_add(n.duration)
+                            .is_some_and(|end| end <= s.end)
+                })
+        };
+        let valid_event = |e: &EventOriginal| {
+            note_in_scope(e.owner_note_id)
+                && sec.is_some_and(|s| {
+                    e.tick >= s.start
+                        && e.tick < s.end
+                        && events.get(&e.id).is_some_and(|current| {
+                            movable(current, channel)
+                                && current.tick >= s.start
+                                && current.tick < s.end
+                        })
+                })
+        };
+        if prune {
+            baseline.notes.retain(valid_note);
+            baseline.events.retain(valid_event);
+        } else if baseline.notes.iter().any(|n| !valid_note(n))
+            || baseline.events.iter().any(|e| !valid_event(e))
+        {
+            return fail("original timing is not bound to its section/part");
+        }
+    }
+    states.retain(|_, b| !b.notes.is_empty() || !b.events.is_empty());
+    Ok(if states.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_value(states)?)
+    })
+}
 fn steps(doc: &Document, o: &QuantizeOptions) -> Vec<u64> {
     let refs: &[u64] = match o.size {
         Grid::Quarter => &[480],
@@ -613,6 +691,7 @@ pub fn plan(
         }
     }
     if o.move_controllers && moves_starts && !o.source_filtered {
+        let eq_ids = eq_packet_ids(doc, channel);
         let mut ordered: Vec<_> = work.iter().collect();
         ordered.sort_by_key(|n| (n.from, n.note.pitch));
         let first = ordered[0].from;
@@ -628,13 +707,12 @@ pub fn plan(
             .enumerate()
             .map(|(i, e)| (e.id, i))
             .collect();
-        for e in doc
-            .style
-            .tracks
-            .iter()
-            .flatten()
-            .filter(|e| movable(e, channel) && e.tick >= sec.start && e.tick < sec.end)
-        {
+        for e in doc.style.tracks.iter().flatten().filter(|e| {
+            movable(e, channel)
+                && !eq_ids.contains(&e.id)
+                && e.tick >= sec.start
+                && e.tick < sec.end
+        }) {
             let saved = old_events.get(&e.id).map(|i| &prior.events[*i]);
             let tick = if o.from_original {
                 saved
@@ -701,6 +779,35 @@ fn movable(e: &crate::smf::Event, channel: u8) -> bool {
     }
 }
 
+// EQ automation uses CC transport bytes but is a separate typed operation.
+// Decode only complete recognized packets; unrelated interleaved CCs stay
+// eligible. Group first so packet recognition never rescans a whole track
+// for every event tick on a dense automation lane.
+fn eq_packet_ids(doc: &Document, channel: u8) -> HashSet<u64> {
+    use crate::channel_eq::{self, EqBand};
+    let mut ids = HashSet::new();
+    for track in &doc.style.tracks {
+        let mut groups: BTreeMap<u64, Vec<crate::smf::Event>> = BTreeMap::new();
+        for e in track.iter().filter(|e| {
+            e.channel() == Some(channel)
+                && e.data.len() == 3
+                && e.data[0] & 0xf0 == 0xb0
+                && matches!(e.data[1], 99 | 98 | 6 | 101 | 100)
+        }) {
+            groups.entry(e.tick).or_default().push(e.clone());
+        }
+        for (tick, mut events) in groups {
+            events.sort_by_key(|e| (e.order, e.id));
+            for band in [EqBand::EqLow, EqBand::EqHigh] {
+                for i in channel_eq::packet_indices(&events, channel, tick, band) {
+                    ids.insert(events[i].id);
+                }
+            }
+        }
+    }
+    ids
+}
+
 /// Restore selected originals, preserving all baselines outside this operation.
 pub fn reset(
     doc: &Document,
@@ -736,6 +843,7 @@ pub fn reset(
     }
     result.baseline.notes.retain(|n| !selected.contains(&n.id));
     if !source_filtered {
+        let eq_ids = eq_packet_ids(doc, channel);
         let events: HashMap<_, _> = doc
             .style
             .tracks
@@ -748,6 +856,7 @@ pub fn reset(
             if (ids.is_empty() || selected.contains(&b.owner_note_id))
                 && let Some(e) = events.get(&b.id)
                 && movable(e, channel)
+                && !eq_ids.contains(&e.id)
                 && e.tick >= sec.start
                 && e.tick < sec.end
             {
