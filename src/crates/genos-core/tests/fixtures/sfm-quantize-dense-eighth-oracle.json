@@ -1,0 +1,784 @@
+{
+  "reference": "SFM Style Studio2.0.44",
+  "observation": "SFM-R020/SFM-R021",
+  "sourceStyleSha256": "887a9bed7195feb018e660d9bad34c30237a3d11395b673b43a485c6ccbe759d",
+  "snapshotSha256": "0f7a51186b372943d5b448aed1599e2d689aac6cce4857c1d64a38e56cc26fca",
+  "ppq": 480,
+  "sectionLength": 11520,
+  "channel": 9,
+  "target": "starts",
+  "mode": "yamaha",
+  "grid": 240,
+  "strength": 100,
+  "notes": [
+    {
+      "pitch": 51,
+      "velocity": 98,
+      "beforeStart": 0,
+      "beforeDuration": 70,
+      "afterStart": 0,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 120,
+      "beforeDuration": 72,
+      "afterStart": 1,
+      "afterDuration": 72
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 240,
+      "beforeDuration": 62,
+      "afterStart": 240,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 71,
+      "beforeStart": 360,
+      "beforeDuration": 70,
+      "afterStart": 241,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 66,
+      "beforeStart": 600,
+      "beforeDuration": 92,
+      "afterStart": 480,
+      "afterDuration": 92
+    },
+    {
+      "pitch": 53,
+      "velocity": 91,
+      "beforeStart": 480,
+      "beforeDuration": 64,
+      "afterStart": 480,
+      "afterDuration": 64
+    },
+    {
+      "pitch": 51,
+      "velocity": 79,
+      "beforeStart": 720,
+      "beforeDuration": 58,
+      "afterStart": 720,
+      "afterDuration": 58
+    },
+    {
+      "pitch": 51,
+      "velocity": 70,
+      "beforeStart": 840,
+      "beforeDuration": 74,
+      "afterStart": 721,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 59,
+      "beforeStart": 1080,
+      "beforeDuration": 96,
+      "afterStart": 960,
+      "afterDuration": 96
+    },
+    {
+      "pitch": 53,
+      "velocity": 89,
+      "beforeStart": 960,
+      "beforeDuration": 74,
+      "afterStart": 960,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 74,
+      "beforeStart": 1200,
+      "beforeDuration": 70,
+      "afterStart": 1200,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 69,
+      "beforeStart": 1320,
+      "beforeDuration": 82,
+      "afterStart": 1201,
+      "afterDuration": 82
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 1440,
+      "beforeDuration": 62,
+      "afterStart": 1440,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 69,
+      "beforeStart": 1560,
+      "beforeDuration": 78,
+      "afterStart": 1441,
+      "afterDuration": 78
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 1680,
+      "beforeDuration": 58,
+      "afterStart": 1680,
+      "afterDuration": 58
+    },
+    {
+      "pitch": 51,
+      "velocity": 55,
+      "beforeStart": 1800,
+      "beforeDuration": 90,
+      "afterStart": 1681,
+      "afterDuration": 90
+    },
+    {
+      "pitch": 51,
+      "velocity": 57,
+      "beforeStart": 2040,
+      "beforeDuration": 90,
+      "afterStart": 1920,
+      "afterDuration": 90
+    },
+    {
+      "pitch": 53,
+      "velocity": 86,
+      "beforeStart": 1920,
+      "beforeDuration": 74,
+      "afterStart": 1920,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 2160,
+      "beforeDuration": 60,
+      "afterStart": 2160,
+      "afterDuration": 60
+    },
+    {
+      "pitch": 51,
+      "velocity": 61,
+      "beforeStart": 2280,
+      "beforeDuration": 76,
+      "afterStart": 2161,
+      "afterDuration": 76
+    },
+    {
+      "pitch": 51,
+      "velocity": 62,
+      "beforeStart": 2520,
+      "beforeDuration": 84,
+      "afterStart": 2400,
+      "afterDuration": 84
+    },
+    {
+      "pitch": 53,
+      "velocity": 90,
+      "beforeStart": 2400,
+      "beforeDuration": 80,
+      "afterStart": 2400,
+      "afterDuration": 80
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 2640,
+      "beforeDuration": 60,
+      "afterStart": 2640,
+      "afterDuration": 60
+    },
+    {
+      "pitch": 51,
+      "velocity": 66,
+      "beforeStart": 2760,
+      "beforeDuration": 62,
+      "afterStart": 2641,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 98,
+      "beforeStart": 2880,
+      "beforeDuration": 70,
+      "afterStart": 2880,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 3000,
+      "beforeDuration": 72,
+      "afterStart": 2881,
+      "afterDuration": 72
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 3120,
+      "beforeDuration": 62,
+      "afterStart": 3120,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 71,
+      "beforeStart": 3240,
+      "beforeDuration": 70,
+      "afterStart": 3121,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 66,
+      "beforeStart": 3480,
+      "beforeDuration": 92,
+      "afterStart": 3360,
+      "afterDuration": 92
+    },
+    {
+      "pitch": 53,
+      "velocity": 91,
+      "beforeStart": 3360,
+      "beforeDuration": 64,
+      "afterStart": 3360,
+      "afterDuration": 64
+    },
+    {
+      "pitch": 51,
+      "velocity": 79,
+      "beforeStart": 3600,
+      "beforeDuration": 58,
+      "afterStart": 3600,
+      "afterDuration": 58
+    },
+    {
+      "pitch": 51,
+      "velocity": 70,
+      "beforeStart": 3720,
+      "beforeDuration": 74,
+      "afterStart": 3601,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 59,
+      "beforeStart": 3960,
+      "beforeDuration": 96,
+      "afterStart": 3840,
+      "afterDuration": 96
+    },
+    {
+      "pitch": 53,
+      "velocity": 89,
+      "beforeStart": 3840,
+      "beforeDuration": 74,
+      "afterStart": 3840,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 74,
+      "beforeStart": 4080,
+      "beforeDuration": 70,
+      "afterStart": 4080,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 69,
+      "beforeStart": 4200,
+      "beforeDuration": 82,
+      "afterStart": 4081,
+      "afterDuration": 82
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 4320,
+      "beforeDuration": 62,
+      "afterStart": 4320,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 69,
+      "beforeStart": 4440,
+      "beforeDuration": 78,
+      "afterStart": 4321,
+      "afterDuration": 78
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 4560,
+      "beforeDuration": 58,
+      "afterStart": 4560,
+      "afterDuration": 58
+    },
+    {
+      "pitch": 51,
+      "velocity": 55,
+      "beforeStart": 4680,
+      "beforeDuration": 90,
+      "afterStart": 4561,
+      "afterDuration": 90
+    },
+    {
+      "pitch": 51,
+      "velocity": 57,
+      "beforeStart": 4920,
+      "beforeDuration": 90,
+      "afterStart": 4800,
+      "afterDuration": 90
+    },
+    {
+      "pitch": 53,
+      "velocity": 86,
+      "beforeStart": 4800,
+      "beforeDuration": 74,
+      "afterStart": 4800,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 5040,
+      "beforeDuration": 60,
+      "afterStart": 5040,
+      "afterDuration": 60
+    },
+    {
+      "pitch": 51,
+      "velocity": 61,
+      "beforeStart": 5160,
+      "beforeDuration": 76,
+      "afterStart": 5041,
+      "afterDuration": 76
+    },
+    {
+      "pitch": 51,
+      "velocity": 62,
+      "beforeStart": 5400,
+      "beforeDuration": 84,
+      "afterStart": 5280,
+      "afterDuration": 84
+    },
+    {
+      "pitch": 53,
+      "velocity": 90,
+      "beforeStart": 5280,
+      "beforeDuration": 80,
+      "afterStart": 5280,
+      "afterDuration": 80
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 5520,
+      "beforeDuration": 60,
+      "afterStart": 5520,
+      "afterDuration": 60
+    },
+    {
+      "pitch": 51,
+      "velocity": 66,
+      "beforeStart": 5640,
+      "beforeDuration": 62,
+      "afterStart": 5521,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 98,
+      "beforeStart": 5760,
+      "beforeDuration": 70,
+      "afterStart": 5760,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 5880,
+      "beforeDuration": 72,
+      "afterStart": 5761,
+      "afterDuration": 72
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 6000,
+      "beforeDuration": 62,
+      "afterStart": 6000,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 71,
+      "beforeStart": 6120,
+      "beforeDuration": 70,
+      "afterStart": 6001,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 66,
+      "beforeStart": 6360,
+      "beforeDuration": 92,
+      "afterStart": 6240,
+      "afterDuration": 92
+    },
+    {
+      "pitch": 53,
+      "velocity": 91,
+      "beforeStart": 6240,
+      "beforeDuration": 64,
+      "afterStart": 6240,
+      "afterDuration": 64
+    },
+    {
+      "pitch": 51,
+      "velocity": 79,
+      "beforeStart": 6480,
+      "beforeDuration": 58,
+      "afterStart": 6480,
+      "afterDuration": 58
+    },
+    {
+      "pitch": 51,
+      "velocity": 70,
+      "beforeStart": 6600,
+      "beforeDuration": 74,
+      "afterStart": 6481,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 59,
+      "beforeStart": 6840,
+      "beforeDuration": 96,
+      "afterStart": 6720,
+      "afterDuration": 96
+    },
+    {
+      "pitch": 53,
+      "velocity": 89,
+      "beforeStart": 6720,
+      "beforeDuration": 74,
+      "afterStart": 6720,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 74,
+      "beforeStart": 6960,
+      "beforeDuration": 70,
+      "afterStart": 6960,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 69,
+      "beforeStart": 7080,
+      "beforeDuration": 82,
+      "afterStart": 6961,
+      "afterDuration": 82
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 7200,
+      "beforeDuration": 62,
+      "afterStart": 7200,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 69,
+      "beforeStart": 7320,
+      "beforeDuration": 78,
+      "afterStart": 7201,
+      "afterDuration": 78
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 7440,
+      "beforeDuration": 58,
+      "afterStart": 7440,
+      "afterDuration": 58
+    },
+    {
+      "pitch": 51,
+      "velocity": 55,
+      "beforeStart": 7560,
+      "beforeDuration": 90,
+      "afterStart": 7441,
+      "afterDuration": 90
+    },
+    {
+      "pitch": 51,
+      "velocity": 57,
+      "beforeStart": 7800,
+      "beforeDuration": 90,
+      "afterStart": 7680,
+      "afterDuration": 90
+    },
+    {
+      "pitch": 53,
+      "velocity": 86,
+      "beforeStart": 7680,
+      "beforeDuration": 74,
+      "afterStart": 7680,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 7920,
+      "beforeDuration": 60,
+      "afterStart": 7920,
+      "afterDuration": 60
+    },
+    {
+      "pitch": 51,
+      "velocity": 61,
+      "beforeStart": 8040,
+      "beforeDuration": 76,
+      "afterStart": 7921,
+      "afterDuration": 76
+    },
+    {
+      "pitch": 51,
+      "velocity": 62,
+      "beforeStart": 8280,
+      "beforeDuration": 84,
+      "afterStart": 8160,
+      "afterDuration": 84
+    },
+    {
+      "pitch": 53,
+      "velocity": 90,
+      "beforeStart": 8160,
+      "beforeDuration": 80,
+      "afterStart": 8160,
+      "afterDuration": 80
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 8400,
+      "beforeDuration": 60,
+      "afterStart": 8400,
+      "afterDuration": 60
+    },
+    {
+      "pitch": 51,
+      "velocity": 66,
+      "beforeStart": 8520,
+      "beforeDuration": 62,
+      "afterStart": 8401,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 98,
+      "beforeStart": 8640,
+      "beforeDuration": 70,
+      "afterStart": 8640,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 8760,
+      "beforeDuration": 72,
+      "afterStart": 8641,
+      "afterDuration": 72
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 8880,
+      "beforeDuration": 62,
+      "afterStart": 8880,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 71,
+      "beforeStart": 9000,
+      "beforeDuration": 70,
+      "afterStart": 8881,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 66,
+      "beforeStart": 9240,
+      "beforeDuration": 92,
+      "afterStart": 9120,
+      "afterDuration": 92
+    },
+    {
+      "pitch": 53,
+      "velocity": 91,
+      "beforeStart": 9120,
+      "beforeDuration": 64,
+      "afterStart": 9120,
+      "afterDuration": 64
+    },
+    {
+      "pitch": 51,
+      "velocity": 79,
+      "beforeStart": 9360,
+      "beforeDuration": 58,
+      "afterStart": 9360,
+      "afterDuration": 58
+    },
+    {
+      "pitch": 51,
+      "velocity": 70,
+      "beforeStart": 9480,
+      "beforeDuration": 74,
+      "afterStart": 9361,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 59,
+      "beforeStart": 9720,
+      "beforeDuration": 96,
+      "afterStart": 9600,
+      "afterDuration": 96
+    },
+    {
+      "pitch": 53,
+      "velocity": 89,
+      "beforeStart": 9600,
+      "beforeDuration": 74,
+      "afterStart": 9600,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 74,
+      "beforeStart": 9840,
+      "beforeDuration": 70,
+      "afterStart": 9840,
+      "afterDuration": 70
+    },
+    {
+      "pitch": 51,
+      "velocity": 69,
+      "beforeStart": 9960,
+      "beforeDuration": 82,
+      "afterStart": 9841,
+      "afterDuration": 82
+    },
+    {
+      "pitch": 51,
+      "velocity": 86,
+      "beforeStart": 10080,
+      "beforeDuration": 62,
+      "afterStart": 10080,
+      "afterDuration": 62
+    },
+    {
+      "pitch": 51,
+      "velocity": 69,
+      "beforeStart": 10200,
+      "beforeDuration": 78,
+      "afterStart": 10081,
+      "afterDuration": 78
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 10320,
+      "beforeDuration": 58,
+      "afterStart": 10320,
+      "afterDuration": 58
+    },
+    {
+      "pitch": 51,
+      "velocity": 55,
+      "beforeStart": 10440,
+      "beforeDuration": 90,
+      "afterStart": 10321,
+      "afterDuration": 90
+    },
+    {
+      "pitch": 51,
+      "velocity": 57,
+      "beforeStart": 10680,
+      "beforeDuration": 90,
+      "afterStart": 10560,
+      "afterDuration": 90
+    },
+    {
+      "pitch": 53,
+      "velocity": 86,
+      "beforeStart": 10560,
+      "beforeDuration": 74,
+      "afterStart": 10560,
+      "afterDuration": 74
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 10800,
+      "beforeDuration": 60,
+      "afterStart": 10800,
+      "afterDuration": 60
+    },
+    {
+      "pitch": 51,
+      "velocity": 61,
+      "beforeStart": 10920,
+      "beforeDuration": 76,
+      "afterStart": 10801,
+      "afterDuration": 76
+    },
+    {
+      "pitch": 51,
+      "velocity": 62,
+      "beforeStart": 11160,
+      "beforeDuration": 84,
+      "afterStart": 11040,
+      "afterDuration": 84
+    },
+    {
+      "pitch": 53,
+      "velocity": 90,
+      "beforeStart": 11040,
+      "beforeDuration": 80,
+      "afterStart": 11040,
+      "afterDuration": 80
+    },
+    {
+      "pitch": 51,
+      "velocity": 75,
+      "beforeStart": 11280,
+      "beforeDuration": 60,
+      "afterStart": 11280,
+      "afterDuration": 60
+    },
+    {
+      "pitch": 51,
+      "velocity": 66,
+      "beforeStart": 11400,
+      "beforeDuration": 62,
+      "afterStart": 11281,
+      "afterDuration": 62
+    }
+  ],
+  "qualification": "Before timing comes from original-baseline fields actually saved by SFM; original source MIDI is separately available for independent scale-normalized verification."
+}

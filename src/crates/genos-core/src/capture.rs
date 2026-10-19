@@ -5,7 +5,7 @@ use crate::{
     midi::{self, MonitorEvent},
     smf::{self, Chunk, Event},
 };
-use midir::MidiInput;
+use midir::{MidiInput, MidiOutput};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,6 +38,8 @@ pub struct CaptureSnapshot {
 
 pub struct MidiCapture {
     connection: Option<midir::MidiInputConnection<()>>,
+    /// Optional live MIDI thru while capturing (SFM-044). Not persisted to Style.
+    thru: Option<Arc<Mutex<midir::MidiOutputConnection>>>,
     events: Arc<Mutex<Vec<MonitorEvent>>>,
     markers: Arc<Mutex<Vec<CaptureMarker>>>,
     started: Option<Instant>,
@@ -50,6 +52,7 @@ impl Default for MidiCapture {
     fn default() -> Self {
         Self {
             connection: None,
+            thru: None,
             events: Arc::new(Mutex::new(Vec::new())),
             markers: Arc::new(Mutex::new(Vec::new())),
             started: None,
@@ -64,7 +67,8 @@ impl MidiCapture {
     pub fn is_recording(&self) -> bool {
         self.connection.is_some()
     }
-    pub fn start(&mut self, name: &str) -> Result<()> {
+    /// Start capture on an exact input. Optional `thru` forwards channel messages to an output.
+    pub fn start(&mut self, name: &str, thru: Option<(usize, &str)>) -> Result<()> {
         if self.connection.is_some() {
             return Err(Error::Midi(
                 "Stop capture before starting a new take".into(),
@@ -82,12 +86,31 @@ impl MidiCapture {
                 "exactly one matching MIDI input is required".into(),
             ));
         }
+        let thru_arc = if let Some((index, out_name)) = thru {
+            let output = MidiOutput::new("GenosStyleStudio capture thru").map_err(midi::map_err)?;
+            let ports = output.ports();
+            let port = ports
+                .get(index)
+                .ok_or_else(|| Error::Midi("thru output disconnected; refresh devices".into()))?;
+            if output.port_name(port).map_err(midi::map_err)? != out_name {
+                return Err(Error::Midi(
+                    "thru device list changed; select the output again".into(),
+                ));
+            }
+            let connection = output
+                .connect(port, "GenosStyleStudio capture thru")
+                .map_err(midi::map_err)?;
+            Some(Arc::new(Mutex::new(connection)))
+        } else {
+            None
+        };
         let events = Arc::new(Mutex::new(Vec::new()));
         let callback_events = events.clone();
         let dropped = Arc::new(AtomicUsize::new(0));
         let callback_dropped = dropped.clone();
         let data_bytes = Arc::new(AtomicUsize::new(0));
         let callback_bytes = data_bytes.clone();
+        let callback_thru = thru_arc.clone();
         let started = Instant::now();
         let connection = input
             .connect(
@@ -97,6 +120,11 @@ impl MidiCapture {
                     // Skip active sensing / clock for musical capture log size.
                     if matches!(data.first(), Some(0xf8 | 0xfe)) {
                         return;
+                    }
+                    if let Some(thru) = callback_thru.as_ref()
+                        && let Ok(mut conn) = thru.lock()
+                    {
+                        let _ = conn.send(data);
                     }
                     let mut q = callback_events.lock().unwrap_or_else(|p| p.into_inner());
                     if q.len() >= MAX_EVENTS
@@ -120,6 +148,7 @@ impl MidiCapture {
             )
             .map_err(midi::map_err)?;
         self.connection = Some(connection);
+        self.thru = thru_arc;
         self.events = events;
         self.dropped = dropped;
         self.data_bytes = data_bytes;
@@ -138,6 +167,7 @@ impl MidiCapture {
 
     fn stop_connection_only(&mut self) {
         self.connection = None;
+        self.thru = None;
         self.started = None;
     }
 
@@ -158,6 +188,55 @@ impl MidiCapture {
             .unwrap_or_else(|p| p.into_inner())
             .push(marker.clone());
         Ok(marker)
+    }
+
+    /// Mouse/app CC into the live take (SFM “Controller to record”).
+    /// Channel 1..=16; applies to armed part on Apply when remapped.
+    pub fn inject_cc(&self, channel: u8, controller: u8, value: u8) -> Result<MonitorEvent> {
+        let started = self
+            .started
+            .ok_or_else(|| Error::Midi("start capture before injecting controllers".into()))?;
+        if !(1..=16).contains(&channel) {
+            return Err(Error::Midi("inject channel must be 1..16".into()));
+        }
+        if controller > 127 || value > 127 {
+            return Err(Error::Midi("controller/value must be 0..127".into()));
+        }
+        // Match SFM panel: common Yamaha-safe CCs (not bank/NRPN).
+        const ALLOWED: &[u8] = &[1, 7, 10, 11, 64, 71, 72, 73, 74, 91, 93];
+        if !ALLOWED.contains(&controller) {
+            return Err(Error::Midi(
+                "controller not available for mouse recording".into(),
+            ));
+        }
+        let data = vec![0xb0 | (channel - 1), controller, value];
+        if let Some(thru) = self.thru.as_ref()
+            && let Ok(mut conn) = thru.lock()
+        {
+            let _ = conn.send(&data);
+        }
+        let mut q = self.events.lock().unwrap_or_else(|p| p.into_inner());
+        if q.len() >= MAX_EVENTS
+            || self
+                .data_bytes
+                .load(Ordering::Relaxed)
+                .saturating_add(data.len())
+                > MAX_CAPTURE_BYTES
+        {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return Err(Error::Midi(
+                "Capture overflowed; events were dropped".into(),
+            ));
+        }
+        self.data_bytes
+            .fetch_add(data.len(), Ordering::Relaxed);
+        let ev = MonitorEvent {
+            stamp_ms: started.elapsed().as_millis() as u64,
+            data: data.clone(),
+            summary: midi::summarize_public(&data),
+        };
+        q.push(ev.clone());
+        Ok(ev)
     }
 
     pub fn clear(&self) -> Result<()> {
@@ -299,9 +378,30 @@ impl MidiCapture {
         tempo_bpm: f64,
         track: usize,
     ) -> Result<Vec<NoteInput>> {
+        self.to_note_inputs_quantized(section_start, section_end, ppq, tempo_bpm, track, 0, 0)
+    }
+
+    /// Like `to_note_inputs`, optionally snapping note starts to `quantize_step` ticks (0 = off).
+    /// `offset_ms`: SFM recording offset — positive pulls notes earlier (latency compensation).
+    #[allow(clippy::too_many_arguments)]
+    pub fn to_note_inputs_quantized(
+        &self,
+        section_start: u64,
+        section_end: u64,
+        ppq: u16,
+        tempo_bpm: f64,
+        track: usize,
+        quantize_step: u64,
+        offset_ms: i32,
+    ) -> Result<Vec<NoteInput>> {
         self.require_complete_take()?;
         if !tempo_bpm.is_finite() || !(20.0..=400.0).contains(&tempo_bpm) {
             return Err(Error::Edit("tempo must be 20..400 BPM".into()));
+        }
+        if !(-2000..=2000).contains(&offset_ms) {
+            return Err(Error::Edit(
+                "recording offset must be -2000..2000 ms".into(),
+            ));
         }
         if section_end <= section_start || section_end > smf::MAX_TICK || ppq == 0 {
             return Err(Error::Edit("invalid section window".into()));
@@ -327,15 +427,20 @@ impl MidiCapture {
             let ch = (st & 0x0f) + 1;
             let pitch = ev.data[1];
             let vel = ev.data[2];
-            let delta = ((ev.stamp_ms as f64) * ticks_per_ms).round();
-            if delta > smf::MAX_TICK as f64 {
+            let adjusted_ms = ev.stamp_ms as i64 - offset_ms as i64;
+            let delta = (adjusted_ms as f64) * ticks_per_ms;
+            if !delta.is_finite() || delta.abs() > smf::MAX_TICK as f64 {
                 return Err(Error::Edit(
                     "Capture extends beyond the selected section".into(),
                 ));
             }
-            let tick = section_start
-                .checked_add(delta as u64)
-                .ok_or_else(|| Error::Edit("Capture tick overflow".into()))?;
+            let tick_i = section_start as i64 + delta.round() as i64;
+            if tick_i < 0 {
+                return Err(Error::Edit(
+                    "Recording offset moved notes before tick 0".into(),
+                ));
+            }
+            let tick = tick_i as u64;
             if kind == 0x90 && vel > 0 {
                 open.entry((ch, pitch)).or_default().push_back((tick, vel));
             } else {
@@ -367,8 +472,106 @@ impl MidiCapture {
                 "capture has no complete note on/off pairs to apply".into(),
             ));
         }
+        let len = section_end - section_start;
+        for n in &mut notes {
+            let rel = n.start - section_start;
+            let Some(q) = rel
+                .saturating_add(quantize_step / 2)
+                .checked_div(quantize_step)
+            else {
+                continue;
+            };
+            let snapped = q * quantize_step;
+            let start = section_start + snapped.min(len.saturating_sub(1));
+            let duration = n.duration.min(section_end.saturating_sub(start)).max(1);
+            if start + duration > section_end {
+                return Err(Error::Edit(
+                    "Quantized capture extends beyond the selected section".into(),
+                ));
+            }
+            n.start = start;
+            n.duration = duration;
+        }
         Ok(notes)
     }
+
+    /// Extract CC/PC/pressure/bend from the take into absolute section ticks (SFM-044).
+    #[allow(clippy::too_many_arguments)]
+    pub fn to_channel_events_quantized(
+        &self,
+        section_start: u64,
+        section_end: u64,
+        ppq: u16,
+        tempo_bpm: f64,
+        track: usize,
+        quantize_step: u64,
+        offset_ms: i32,
+    ) -> Result<Vec<crate::edit::ChannelEventInput>> {
+        self.require_complete_take()?;
+        if !tempo_bpm.is_finite() || !(20.0..=400.0).contains(&tempo_bpm) {
+            return Err(Error::Edit("tempo must be 20..400 BPM".into()));
+        }
+        if !(-2000..=2000).contains(&offset_ms) {
+            return Err(Error::Edit(
+                "recording offset must be -2000..2000 ms".into(),
+            ));
+        }
+        if section_end <= section_start || section_end > smf::MAX_TICK || ppq == 0 {
+            return Err(Error::Edit("invalid section window".into()));
+        }
+        let ticks_per_ms = (ppq as f64) * tempo_bpm / 60_000.0;
+        let events = self
+            .events
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let len = section_end - section_start;
+        let mut out = Vec::new();
+        for ev in &events {
+            if ev.data.is_empty() {
+                continue;
+            }
+            let st = ev.data[0];
+            let kind = st & 0xf0;
+            if !matches!(kind, 0xb0 | 0xc0 | 0xd0 | 0xe0) {
+                continue;
+            }
+            validate_message(&ev.data)?;
+            let adjusted_ms = ev.stamp_ms as i64 - offset_ms as i64;
+            let delta = (adjusted_ms as f64) * ticks_per_ms;
+            if !delta.is_finite() || delta.abs() > smf::MAX_TICK as f64 {
+                return Err(Error::Edit(
+                    "Capture extends beyond the selected section".into(),
+                ));
+            }
+            let mut tick = if delta >= 0.0 {
+                section_start.saturating_add(delta.round() as u64)
+            } else {
+                section_start.saturating_sub((-delta).round() as u64)
+            };
+            if quantize_step > 0 {
+                let rel = tick.saturating_sub(section_start);
+                if let Some(q) = rel
+                    .saturating_add(quantize_step / 2)
+                    .checked_div(quantize_step)
+                {
+                    tick = section_start + (q * quantize_step).min(len.saturating_sub(1));
+                }
+            }
+            if tick < section_start || tick >= section_end {
+                return Err(Error::Edit(
+                    "Capture extends beyond the selected section; choose a longer section".into(),
+                ));
+            }
+            out.push(crate::edit::ChannelEventInput {
+                track,
+                tick,
+                data: ev.data.clone(),
+            });
+        }
+        Ok(out)
+    }
+
     fn require_complete_take(&self) -> Result<()> {
         if self.connection.is_some() {
             return Err(Error::Midi(
@@ -383,6 +586,22 @@ impl MidiCapture {
         Ok(())
     }
 }
+/// SFM Recording Channel: keep only events on `channel` (1..=16).
+/// `None` / out-of-range = OMNI (no filter). Applied before arm remap.
+pub fn retain_input_channel(
+    notes: &mut Vec<crate::edit::NoteInput>,
+    channel_events: &mut Vec<crate::edit::ChannelEventInput>,
+    channel: Option<u8>,
+) {
+    let Some(filter) = channel.filter(|c| (1..=16).contains(c)) else {
+        return;
+    };
+    notes.retain(|n| n.channel == filter);
+    channel_events.retain(|ev| {
+        !ev.data.is_empty() && ev.data[0] < 0xf0 && (ev.data[0] & 0x0f) + 1 == filter
+    });
+}
+
 fn validate_message(data: &[u8]) -> Result<()> {
     if data.is_empty()
         || !(0x80..=0xef).contains(&data[0])
@@ -419,6 +638,35 @@ mod tests {
             })
             .collect();
         cap
+    }
+
+    #[test]
+    fn apply_quantize_snaps_starts_to_grid() {
+        // 120 BPM, PPQ 480 → 0.96 tick/ms; onset ~106 snaps to 120 with step 120.
+        let cap = take(&[(110, &[0x90, 60, 90]), (200, &[0x80, 60, 0])]);
+        let notes = cap
+            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 120, 0)
+            .unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].start, 120);
+        assert!(notes[0].duration >= 1);
+        assert!(notes[0].start + notes[0].duration <= 480);
+    }
+
+    #[test]
+    fn recording_offset_pulls_notes_earlier() {
+        // 120 BPM, PPQ 480 → 0.96 tick/ms. Onset at 100ms ≈ 96 ticks;
+        // +50ms offset → 50ms ≈ 48 ticks.
+        let cap = take(&[(100, &[0x90, 60, 90]), (200, &[0x80, 60, 0])]);
+        let notes = cap
+            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 0, 50)
+            .unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].start, 48);
+        let late = cap
+            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 0, -50)
+            .unwrap();
+        assert_eq!(late[0].start, 144);
     }
 
     #[test]
@@ -502,7 +750,7 @@ mod tests {
         let mut cap = take(&[(0, &[0x90, 60, 90]), (100, &[0x80, 60, 0])]);
         cap.port_name = Some("previous input".into());
         assert!(
-            cap.start("GenosStyleStudio deliberately missing test port")
+            cap.start("GenosStyleStudio deliberately missing test port", None)
                 .is_err()
         );
         assert_eq!(cap.snapshot().event_count, 2);
@@ -602,5 +850,82 @@ mod tests {
     fn marker_requires_active_capture() {
         let cap = MidiCapture::default();
         assert!(cap.add_marker("x").is_err());
+    }
+
+    #[test]
+    fn channel_controllers_extract_with_offset_and_quantize() {
+        let cap = take(&[
+            (0, &[0xb0, 7, 100]),
+            (125, &[0xb0, 10, 40]),
+            (200, &[0xc0, 12]),
+        ]);
+        let evs = cap
+            .to_channel_events_quantized(0, 1920, 480, 120.0, 0, 120, 0)
+            .unwrap();
+        assert_eq!(evs.len(), 3);
+        assert_eq!(evs[0].data, vec![0xb0, 7, 100]);
+        assert_eq!(evs[0].tick, 0);
+        // 125ms @ 120BPM/PPQ480 → 120 ticks → snaps to 120
+        assert_eq!(evs[1].tick, 120);
+        assert_eq!(evs[2].data, vec![0xc0, 12]);
+        let notes_err = cap.to_note_inputs(0, 1920, 480, 120.0, 0).unwrap_err();
+        assert!(notes_err.to_string().contains("no complete note"));
+    }
+
+    #[test]
+    fn inject_cc_requires_active_capture_and_allows_expression() {
+        let mut cap = MidiCapture::default();
+        assert!(cap.inject_cc(11, 11, 64).is_err());
+        // Simulate an active take without a real MIDI port.
+        cap.started = Some(Instant::now());
+        let ev = cap.inject_cc(11, 11, 80).unwrap();
+        assert_eq!(ev.data, vec![0xba, 11, 80]);
+        assert!(cap.inject_cc(11, 0, 64).is_err()); // bank MSB blocked
+        assert_eq!(cap.snapshot().event_count, 1);
+    }
+
+    #[test]
+    fn retain_input_channel_filters_notes_and_cc_before_remap() {
+        use crate::edit::{ChannelEventInput, NoteInput};
+        let mut notes = vec![
+            NoteInput {
+                track: 0,
+                channel: 1,
+                pitch: 60,
+                velocity: 80,
+                start: 0,
+                duration: 120,
+            },
+            NoteInput {
+                track: 0,
+                channel: 3,
+                pitch: 64,
+                velocity: 80,
+                start: 0,
+                duration: 120,
+            },
+        ];
+        let mut evs = vec![
+            ChannelEventInput {
+                track: 0,
+                tick: 0,
+                data: vec![0xb0, 7, 100], // CH1
+            },
+            ChannelEventInput {
+                track: 0,
+                tick: 10,
+                data: vec![0xb2, 7, 90], // CH3
+            },
+        ];
+        retain_input_channel(&mut notes, &mut evs, None);
+        assert_eq!(notes.len(), 2);
+        assert_eq!(evs.len(), 2);
+        retain_input_channel(&mut notes, &mut evs, Some(3));
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].channel, 3);
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].data[0], 0xb2);
+        retain_input_channel(&mut notes, &mut evs, Some(99));
+        assert_eq!(notes.len(), 1);
     }
 }

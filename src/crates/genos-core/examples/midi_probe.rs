@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "CAPTURE: {} for {} seconds (Type-0 SMF export; not Style/CASM build)",
             in_name, seconds
         );
-        cap.start(in_name)?;
+        cap.start(in_name, None)?;
         let _ = cap.add_marker("capture-start");
         std::thread::sleep(Duration::from_secs(seconds));
         let _ = cap.add_marker("capture-end");

@@ -3,6 +3,22 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Write, path::Path};
 
+/// Editor workspace fields stored under `.gss` extension key `uiState` (SFM-002).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectUiState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snap: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Project {
@@ -103,4 +119,53 @@ pub fn write_recovery(path: &Path, b: &[u8]) -> Result<()> {
     temp.as_file().sync_all()?;
     temp.persist(path).map_err(|e| Error::Io(e.error))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::edit::Session;
+    use std::path::Path;
+
+    #[test]
+    fn ui_state_roundtrips_in_project_bytes() {
+        let style = fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../docs/research/experiments/fixtures/08.3-4-ACOUSTIC-control.STY"),
+        )
+        .expect("fixture");
+        let mut session = Session::open(&style, "ui".into()).expect("open");
+        session.set_ui_state(ProjectUiState {
+            section_id: Some(1),
+            channel: Some(11),
+            snap: Some(16),
+            zoom: Some(1.5),
+            tool: Some("draw".into()),
+        });
+        let bytes = session_bytes(&session).expect("bytes");
+        let reopened = {
+            let dir = tempfile::tempdir().expect("tmp");
+            let path = dir.path().join("t.gss");
+            write_recovery(&path, &bytes).expect("write");
+            open_file(&path).expect("reopen")
+        };
+        assert_eq!(
+            reopened.project_extensions.get("uiState"),
+            Some(&serde_json::json!({
+                "sectionId": 1,
+                "channel": 11,
+                "snap": 16,
+                "zoom": 1.5,
+                "tool": "draw"
+            }))
+        );
+        assert_eq!(
+            reopened
+                .view()
+                .ui_state
+                .as_ref()
+                .and_then(|v| v.get("tool")),
+            Some(&serde_json::json!("draw"))
+        );
+    }
 }

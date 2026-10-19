@@ -78,6 +78,8 @@ it("previews replacement scope and Cancel never mutates the document", async () 
     section: 7,
     channel: 11,
     revision: 0,
+    wholeSection: false,
+    docLabel: "main",
   });
   expect(screen.getByText("2 → 3")).toBeTruthy();
   expect(screen.getByText("960 → 480 PPQ")).toBeTruthy();
@@ -185,6 +187,8 @@ it("cancelled file selection performs no IPC and failed export keeps the dialog 
     section: 7,
     channel: 11,
     revision: 0,
+    wholeSection: false,
+    docLabel: "main",
   });
   expect(useStudio.getState().view).toBe(view);
 });

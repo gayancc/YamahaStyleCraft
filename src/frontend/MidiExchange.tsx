@@ -14,12 +14,13 @@ export function MidiExchange({
   channel: number;
   onClose: () => void;
 }) {
-  const { view } = useStudio();
+  const { view, docLabel } = useStudio();
   const [original] = useState(view!);
   const [preview, setPreview] = useState<ExchangePreview | null>(null);
   const [file, setFile] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [wholeSection, setWholeSection] = useState(false);
   const working = useRef(false);
   const dialog = useRef<HTMLElement>(null);
   const stale = view !== original;
@@ -53,15 +54,20 @@ export function MidiExchange({
     if (useStudio.getState().view !== original)
       throw new Error("The document changed. Close and reopen MIDI exchange.");
   };
-  const args = { section: section.id, channel, revision: original.revision };
+  const args = {
+    section: section.id,
+    channel,
+    revision: original.revision,
+    wholeSection,
+    docLabel,
+  };
   const exportMidi = () =>
     run(async () => {
       ensureCurrent();
-      const name =
-        `${original.name}-${section.label}-source-${channel}`.replace(
-          /[<>:"/\\|?*]/g,
-          "_",
-        );
+      const scope = wholeSection
+        ? `${section.label}-section`
+        : `${section.label}-source-${channel}`;
+      const name = `${original.name}-${scope}`.replace(/[<>:"/\\|?*]/g, "_");
       const path = await save({
         defaultPath: `${name}.mid`,
         filters: [{ name: "Standard MIDI", extensions: ["mid"] }],
@@ -69,7 +75,11 @@ export function MidiExchange({
       if (!path) return;
       ensureCurrent();
       await invoke("export_phrase_midi", { path, ...args });
-      useStudio.setState({ message: "Source phrase exported as MIDI" });
+      useStudio.setState({
+        message: wholeSection
+          ? "Section sources exported as multi-track MIDI"
+          : "Source phrase exported as MIDI",
+      });
     });
   const chooseMidi = () =>
     run(async () => {
@@ -167,12 +177,25 @@ export function MidiExchange({
             Export this phrase, edit it in your DAW, then choose the returned
             MIDI to review its notes.
           </p>
+          <label className="source-check">
+            <input
+              type="checkbox"
+              checked={wholeSection}
+              disabled={pending || stale}
+              onChange={(e) => {
+                setWholeSection(e.target.checked);
+                setPreview(null);
+                setFile("");
+              }}
+            />{" "}
+            Entire section (all source channels)
+          </label>
           <div className="exchange-actions">
             <button
               disabled={pending || stale}
               onClick={() => void exportMidi()}
             >
-              Export phrase MIDI…
+              {wholeSection ? "Export section MIDI…" : "Export phrase MIDI…"}
             </button>
             <button
               disabled={pending || stale}
@@ -182,9 +205,9 @@ export function MidiExchange({
             </button>
           </div>
           <p className="exchange-hint">
-            One note channel, up to 8 MiB. Keep the phrase at its original tick
-            offset. Import replaces only this source's notes in this section; it
-            keeps the Style's voices, controllers, tempo and CASM.
+            {wholeSection
+              ? "Type-1 multi-track MIDI, one track per source with notes. Up to 8 MiB. Import matches channels and replaces notes only; voices, controllers, tempo and CASM stay."
+              : "One note channel, up to 8 MiB. Keep the phrase at its original tick offset. Import replaces only this source's notes in this section; it keeps the Style's voices, controllers, tempo and CASM."}
           </p>
           {preview && (
             <div className="exchange-preview" aria-label="MIDI import preview">
@@ -199,9 +222,24 @@ export function MidiExchange({
                 <div>
                   <dt>Channel</dt>
                   <dd>
-                    {preview.sourceChannel} → Source {preview.targetChannel}
+                    {preview.channels?.length
+                      ? `${preview.channels.length} sources`
+                      : `${preview.sourceChannel} → Source ${preview.targetChannel}`}
                   </dd>
                 </div>
+                {preview.channels && preview.channels.length > 0 && (
+                  <div>
+                    <dt>Per source</dt>
+                    <dd>
+                      {preview.channels
+                        .map(
+                          (c) =>
+                            `CH${c.channel}: ${c.originalNotes}→${c.importedNotes}`,
+                        )
+                        .join(" · ")}
+                    </dd>
+                  </div>
+                )}
                 <div>
                   <dt>Resolution</dt>
                   <dd>

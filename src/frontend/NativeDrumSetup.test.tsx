@@ -44,6 +44,27 @@ describe("NativeDrumSetup", () => {
     );
   });
   afterEach(() => cleanup());
+  it("auditions the selected drum key on the MIDI output", async () => {
+    render(
+      <NativeDrumSetup
+        channel={9}
+        output={{ index: 1, name: "Genos" }}
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByText(/StandardKit/);
+    fireEvent.click(screen.getByRole("button", { name: "Audition drum key" }));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("preview_drum_note", {
+        index: 1,
+        name: "Genos",
+        channel: 9,
+        pitch: 36,
+        velocity: 90,
+        holdMs: 200,
+      }),
+    );
+  });
   it("confirms a multi-key scalar batch with raw pan and semitone values in one transaction", async () => {
     const close = vi.fn();
     render(<NativeDrumSetup channel={9} onClose={close} />);

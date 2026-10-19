@@ -67,6 +67,9 @@ pub struct View {
     pub routes: Vec<Route>,
     pub chunks: Vec<ChunkInfo>,
     pub warnings: Vec<String>,
+    /// Editor workspace restored from `.gss` `uiState` (SFM-002).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_state: Option<serde_json::Value>,
 }
 #[derive(Clone)]
 pub struct Document {
@@ -78,10 +81,20 @@ pub struct Document {
 }
 pub fn musical_marker(s: &str) -> bool {
     let n = s.trim_matches(char::from(0)).trim().to_ascii_uppercase();
-    ["MAIN ", "FILL IN ", "FILL ", "INTRO ", "ENDING "]
+    if n == "BREAK" || n == "FILL" || n == "MAIN" || n == "INTRO" || n == "ENDING" {
+        return true;
+    }
+    // Accept spaced and compact Yamaha markers (Main A, Fill In AA, IntroA, Ending I).
+    ["MAIN", "FILL IN", "FILL", "INTRO", "ENDING", "END"]
         .iter()
-        .any(|x| n.starts_with(x))
-        || n == "BREAK"
+        .any(|prefix| {
+            n.starts_with(&format!("{prefix} "))
+                || (n.starts_with(prefix)
+                    && n.len() > prefix.len()
+                    && n.as_bytes()
+                        .get(prefix.len())
+                        .is_some_and(|c| c.is_ascii_alphanumeric()))
+        })
 }
 impl Document {
     /// Active SMF timing metadata at a tick, including changes in other tracks.
@@ -300,6 +313,7 @@ impl Document {
             notes: self.notes.clone(),
             events,
             routes: self.routes.clone(),
+            ui_state: None,
             chunks: self
                 .style
                 .chunks
@@ -311,5 +325,32 @@ impl Document {
                 .collect(),
             warnings: self.warnings.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::musical_marker;
+
+    #[test]
+    fn musical_marker_accepts_yamaha_aliases() {
+        for label in [
+            "Main A",
+            "MAIN B",
+            "Fill In AA",
+            "Fill BA",
+            "Intro A",
+            "IntroA",
+            "INTRO 1",
+            "Ending A",
+            "Ending I",
+            "END A",
+            "Break",
+            "BREAK",
+        ] {
+            assert!(musical_marker(label), "{label}");
+        }
+        assert!(!musical_marker("SFF2"));
+        assert!(!musical_marker("Chorus"));
     }
 }

@@ -292,6 +292,142 @@ fn all_eleven_non_guitar_tables_compile_through_casm_without_document_mutation()
 }
 
 #[test]
+fn transposed_bypass_matches_144_observed_jjazz_engine_cases() {
+    // Actual released fitting-helper output, not a reconstructed formula.
+    // Scope: Root Transposition + Bypass, no high-key wrap or range folding.
+    let oracle: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/jjazz-bypass-oracle.json")).unwrap();
+    for case in oracle["cases"].as_array().unwrap() {
+        let mut route = fixture().routes[0].bytes.clone();
+        route[18] = case["sourceRoot"].as_u64().unwrap() as u8;
+        route[19] = case["sourceChord"].as_u64().unwrap() as u8;
+        for offset in [22, 28, 34] {
+            route[offset] = 0;
+            route[offset + 1] = 0;
+        }
+        let mut rows = vec![
+            (0, vec![0xff, 6, 4, b'S', b'F', b'F', b'2']),
+            (0, vec![0xff, 6, 6, b'M', b'a', b'i', b'n', b' ', b'A']),
+            (0, vec![0xb0, 0, 0]),
+            (0, vec![0xb0, 32, 0]),
+            (0, vec![0xc0, 0]),
+        ];
+        for pitch in 60..72 {
+            let tick = u64::from(pitch - 60) * 120;
+            rows.push((tick, vec![0x90, pitch, 80]));
+            rows.push((tick + 60, vec![0x80, pitch, 0]));
+        }
+        rows.push((1920, vec![0xff, 0x2f, 0]));
+        rows.sort_by_key(|row| row.0);
+        let events = rows
+            .into_iter()
+            .enumerate()
+            .map(|(i, (tick, data))| Event {
+                id: i as u64 + 1,
+                order: i as u64 + 1,
+                tick,
+                data,
+            })
+            .collect::<Vec<_>>();
+        let chunk = |tag: &[u8; 4], data| Chunk { tag: *tag, data };
+        let bytes = genos_core::smf::pack(&[
+            chunk(b"MThd", vec![0, 0, 0, 1, 1, 224]),
+            chunk(b"MTrk", genos_core::smf::encode_track(&events).unwrap()),
+            chunk(
+                b"CASM",
+                genos_core::smf::pack(&[chunk(
+                    b"CSEG",
+                    genos_core::smf::pack(&[
+                        chunk(b"Sdec", b"Main A".to_vec()),
+                        chunk(b"Ctb2", route),
+                    ])
+                    .unwrap(),
+                )])
+                .unwrap(),
+            ),
+        ])
+        .unwrap();
+        let doc = Document::parse(&bytes).unwrap();
+        let mut cfg = config(&doc);
+        cfg.chords = vec![Chord {
+            root: case["targetRoot"].as_u64().unwrap() as u8,
+            quality: case["targetQuality"].as_str().unwrap().into(),
+            bars: 1,
+            bass: None,
+        }];
+        let before = doc.style.bytes().unwrap();
+        let compiled = live_preview::compile(&doc, &cfg).unwrap();
+        let on = compiled
+            .plan
+            .packets
+            .iter()
+            .filter(|p| p.data[0] & 240 == 144 && p.data[2] > 0)
+            .collect::<Vec<_>>();
+        let expected: Vec<u8> = serde_json::from_value(case["pitches"].clone()).unwrap();
+        assert_eq!(
+            on.iter().map(|p| p.data[1]).collect::<Vec<_>>(),
+            expected,
+            "{case}"
+        );
+        assert_eq!(on.len(), 12);
+        for (i, packet) in on.iter().enumerate() {
+            assert_eq!(packet.data[0], 0x9f);
+            assert_eq!(packet.data[2], 80);
+            assert_eq!(packet.at.as_micros(), i as u128 * 125_000);
+            assert!(
+                compiled
+                    .plan
+                    .packets
+                    .iter()
+                    .any(|off| off.data == [0x8f, packet.data[1], 0]
+                        && off.at.as_micros() == packet.at.as_micros() + 62_500)
+            );
+        }
+        assert_eq!(doc.style.bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn transposed_bypass_accepts_valid_chord_bytes_and_retains_caps_limits_and_validation() {
+    let mut doc = fixture();
+    doc.routes[0].bytes[18] = 7;
+    for offset in [22, 28, 34] {
+        doc.routes[0].bytes[offset + 1] = 0;
+    }
+    let pitches = |doc: &Document| {
+        live_preview::compile(doc, &config(doc))
+            .unwrap()
+            .plan
+            .packets
+            .iter()
+            .filter(|p| p.data[0] & 240 == 144 && p.data[2] > 0)
+            .map(|p| p.data[1])
+            .collect::<Vec<_>>()
+    };
+    for source_chord in 0..=33 {
+        doc.routes[0].bytes[19] = source_chord;
+        assert_eq!(
+            pitches(&doc),
+            [53, 57, 62, 66],
+            "source chord {source_chord}"
+        );
+    }
+    doc.routes[0].bytes[19] = 34;
+    assert!(live_preview::compile(&doc, &config(&doc)).is_err());
+    doc.routes[0].bytes[19] = 17;
+    doc.routes[0].bytes[29] = 2;
+    assert!(live_preview::compile(&doc, &config(&doc)).is_err());
+    doc.routes[0].bytes[29] = 0;
+    doc.routes[0].bytes[18] = 0;
+    for offset in [22, 28, 34] {
+        doc.routes[0].bytes[offset + 2] = 4;
+        doc.routes[0].bytes[offset + 3] = 60;
+        doc.routes[0].bytes[offset + 4] = 72;
+    }
+    assert_eq!(pitches(&doc), [60, 64, 69, 61]);
+}
+
+#[test]
 fn root_fixed_bypass_is_literal_for_pitched_parts_and_ignores_valid_source_chord() {
     let mut doc = fixture();
     doc.routes[0].bytes[28] = 1;

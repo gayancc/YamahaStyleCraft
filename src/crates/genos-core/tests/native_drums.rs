@@ -82,6 +82,17 @@ fn cmd(changes: Vec<Change>) -> Command {
         changes,
     }
 }
+fn reset_cmd(notes: Vec<u8>) -> Command {
+    Command::ResetDrumScalars {
+        channel: 9,
+        address: Address {
+            msb: 127,
+            lsb: 0,
+            program: 0,
+        },
+        notes,
+    }
+}
 fn change(note: u8, field: Field, value: i16) -> Change {
     Change { note, field, value }
 }
@@ -358,4 +369,54 @@ fn initialization_order_reset_and_type_one_headers_fail_closed() {
         512
     );
     assert!(s.execute(0, cmd(vec![change(36, Field::Pan, 64)])).is_err());
+}
+
+#[test]
+fn reset_drum_key_removes_scalar_overrides_and_undoes() {
+    let mut s = session();
+    let before = s.document.style.bytes().unwrap();
+    assert_eq!(
+        native_drums::inspect(&s.document, 9)
+            .unwrap()
+            .keys
+            .iter()
+            .find(|k| k.note == 36)
+            .unwrap()
+            .volume,
+        Some(77)
+    );
+    s.execute(0, reset_cmd(vec![36])).unwrap();
+    let after = native_drums::inspect(&s.document, 9).unwrap();
+    assert!(
+        after
+            .keys
+            .iter()
+            .find(|k| k.note == 36)
+            .unwrap()
+            .volume
+            .is_none()
+    );
+    // Fine-tuning parameter (1) is preserved; only volume/pan/pitch scalars cleared.
+    assert!(
+        native_drums::parameters(&s.document)
+            .unwrap()
+            .iter()
+            .any(|r| r.setup == 1 && r.note == 36 && r.parameter == 1)
+    );
+    assert!(s.view().can_undo);
+    s.undo().unwrap();
+    assert_eq!(s.document.style.bytes().unwrap(), before);
+}
+
+#[test]
+fn reset_all_drums_clears_every_scalar_override() {
+    let mut s = session();
+    s.execute(0, cmd(vec![change(36, Field::Pan, 64)])).unwrap();
+    s.execute(1, reset_cmd(vec![])).unwrap();
+    let params = native_drums::parameters(&s.document).unwrap();
+    assert!(
+        !params
+            .iter()
+            .any(|r| r.setup == 1 && [0u8, 2, 4].contains(&r.parameter))
+    );
 }

@@ -458,3 +458,54 @@ pub(crate) fn apply(
     style.tracks[0].extend(additions);
     Ok(())
 }
+
+/// Remove per-key volume/pan/pitch overrides so kit defaults apply again (SFM Reset drum / Reset all).
+/// `notes` empty = every key that currently has a scalar override on this setup.
+pub fn reset_keys(
+    style: &mut Style,
+    channel: u8,
+    address: Address,
+    notes: Vec<u8>,
+) -> Result<usize> {
+    let doc = Document::from_style(style.clone())?;
+    let b = binding(&doc, channel)?;
+    if address != b.address {
+        return Err(bad("Initial drum kit changed; reopen Drum Setup"));
+    }
+    let scalar_params = [
+        Field::Pitch.parameter(),
+        Field::Volume.parameter(),
+        Field::Pan.parameter(),
+    ];
+    let targets: HashSet<u8> = if notes.is_empty() {
+        b.records
+            .iter()
+            .filter(|r| r.setup == b.setup && scalar_params.contains(&r.parameter))
+            .map(|r| r.note)
+            .collect()
+    } else {
+        notes
+            .into_iter()
+            .filter(|n| (13..=91).contains(n))
+            .collect()
+    };
+    if targets.is_empty() {
+        return Err(bad("No drum scalar overrides to reset"));
+    }
+    let remove: HashSet<u64> = b
+        .records
+        .iter()
+        .filter(|r| {
+            r.setup == b.setup && targets.contains(&r.note) && scalar_params.contains(&r.parameter)
+        })
+        .map(|r| r.event)
+        .collect();
+    if remove.is_empty() {
+        return Err(bad("No drum scalar overrides to reset"));
+    }
+    let count = remove.len();
+    for track in &mut style.tracks {
+        track.retain(|e| !remove.contains(&e.id));
+    }
+    Ok(count)
+}

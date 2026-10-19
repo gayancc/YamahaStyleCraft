@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Port, Section, TransportStatus, View } from "./contracts";
 import { trapModalFocus } from "./modal";
+import { useStudio } from "./store";
 
 type Chord = { root: number; quality: string; bars: number; bass?: number };
 type Report = {
@@ -49,6 +50,7 @@ export function LivePreview({
   onTransport: (status: TransportStatus) => void;
   onClose: () => void;
 }) {
+  const docLabel = useStudio((s) => s.docLabel);
   const channels = [
     ...new Set(
       view.notes
@@ -130,6 +132,7 @@ export function LivePreview({
         "preview_live_style",
         {
           revision: view.revision,
+          docLabel,
           config: { section: section.id, sources, chords, effects, drums },
         },
       );

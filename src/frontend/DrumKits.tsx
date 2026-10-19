@@ -161,7 +161,13 @@ export function DrumKits({
   };
 
   if (native)
-    return <NativeDrumSetup channel={previewChannel} onClose={onClose} />;
+    return (
+      <NativeDrumSetup
+        channel={previewChannel}
+        output={output}
+        onClose={onClose}
+      />
+    );
   return (
     <div
       className="modal-backdrop"

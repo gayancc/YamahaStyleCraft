@@ -1,10 +1,30 @@
 {
   "identifier": "main",
-  "description": "Studio window file dialogs and close confirmation",
-  "windows": ["main"],
+  "description": "Studio windows: main editor, project windows, detached piano roll and mixer",
+  "windows": [
+    "main",
+    "piano-roll",
+    "mixer",
+    "project-2",
+    "project-3",
+    "project-4",
+    "project-5",
+    "project-6",
+    "project-7",
+    "project-8"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-destroy",
+    "core:window:allow-close",
+    "core:window:allow-set-title",
+    "core:window:allow-set-focus",
+    "core:window:allow-create",
+    "core:webview:allow-create-webview-window",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-confirm"

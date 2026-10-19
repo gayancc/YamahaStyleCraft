@@ -163,10 +163,9 @@ pub fn recover_pack_with_options(
                         });
                     }
                     Ok(_) => {}
-                    Err(e) => notes.push(format!(
-                        "MIDI voice scan skipped for {:?}: {e}",
-                        item.title
-                    )),
+                    Err(e) => {
+                        notes.push(format!("MIDI voice scan skipped for {:?}: {e}", item.title))
+                    }
                 },
                 Err(e) => notes.push(format!("MIDI read failed for {:?}: {e}", item.title)),
             }
@@ -576,9 +575,18 @@ mod tests {
 
     #[test]
     fn export_extension_prefers_pack_eext_over_midi_payload() {
-        assert_eq!(pack_item_export_extension(&item(Some("vce"), "midi")), "vce");
-        assert_eq!(pack_item_export_extension(&item(Some("drm"), "midi")), "drm");
-        assert_eq!(pack_item_export_extension(&item(Some(".VCE"), "midi")), "vce");
+        assert_eq!(
+            pack_item_export_extension(&item(Some("vce"), "midi")),
+            "vce"
+        );
+        assert_eq!(
+            pack_item_export_extension(&item(Some("drm"), "midi")),
+            "drm"
+        );
+        assert_eq!(
+            pack_item_export_extension(&item(Some(".VCE"), "midi")),
+            "vce"
+        );
     }
 
     #[test]

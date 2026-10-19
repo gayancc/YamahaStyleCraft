@@ -130,6 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name: port.name.clone(),
                 looping: false,
                 initial_effects: true,
+                from_tick: None,
             },
         )?;
         let start = Instant::now();

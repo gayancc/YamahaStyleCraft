@@ -203,6 +203,7 @@ describe("source-track draft transaction", () => {
           },
         ],
       },
+      docLabel: "main",
     });
   });
   it("guitar transitions reset table index while keeping Bass and use the guitar table", async () => {

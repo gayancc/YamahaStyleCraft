@@ -90,6 +90,8 @@ fn replace(s: &mut Session, notes: Vec<PhraseNote>) -> genos_core::Result<()> {
             section: s.document.sections[0].id,
             channel: 9,
             notes,
+            voice: None,
+            controllers: vec![],
         },
     )
 }
@@ -306,7 +308,9 @@ fn out_of_section_and_bad_command_reject_atomically_including_stale_revision() {
             Command::ReplacePhrase {
                 section: id,
                 channel: 9,
-                notes: vec![]
+                notes: vec![],
+                voice: None,
+                controllers: vec![],
             }
         )
         .is_err()
@@ -402,6 +406,8 @@ fn real_corpus_phrase_export_return_preserves_every_original_byte() {
                     section,
                     channel,
                     notes: prepared.notes,
+                    voice: None,
+                    controllers: vec![],
                 },
             )
             .unwrap();
@@ -410,6 +416,50 @@ fn real_corpus_phrase_export_return_preserves_every_original_byte() {
         tested += 1;
     }
     assert_eq!(tested, 84);
+}
+
+#[test]
+fn section_export_roundtrip_is_one_undo_and_preserves_casm() {
+    let mut s = target();
+    let id = s.document.sections[0].id;
+    let before = s.document.style.bytes().unwrap();
+    let casm = s
+        .document
+        .style
+        .chunks
+        .iter()
+        .find(|c| &c.tag == b"CASM")
+        .map(|c| c.data.clone())
+        .unwrap();
+    let mid = exchange::export_section(&s.document, id).unwrap();
+    let prepared = exchange::prepare_section(&s.document, id, &mid).unwrap();
+    assert!(!prepared.phrases.is_empty());
+    assert!(prepared.preview.unchanged);
+    // Flip one channel note so apply writes history.
+    let mut phrases = prepared.phrases;
+    phrases[0].notes[0].velocity = phrases[0].notes[0].velocity.saturating_sub(1).max(1);
+    s.execute(
+        0,
+        Command::ReplaceSectionPhrases {
+            section: id,
+            phrases,
+            voices: vec![],
+            controllers: vec![],
+        },
+    )
+    .unwrap();
+    assert!(s.view().can_undo);
+    assert_eq!(
+        s.document
+            .style
+            .chunks
+            .iter()
+            .find(|c| &c.tag == b"CASM")
+            .map(|c| &c.data),
+        Some(&casm)
+    );
+    s.undo().unwrap();
+    assert_eq!(s.document.style.bytes().unwrap(), before);
 }
 
 #[test]

@@ -66,6 +66,7 @@ it("does not transmit on open or check; applies source channels and progression 
     "preview_live_style",
     {
       revision: 1,
+      docLabel: "main",
       config: {
         section: 2,
         sources: [1],

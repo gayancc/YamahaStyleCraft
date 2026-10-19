@@ -31,16 +31,19 @@ const fields: { field: Field; label: string; min: number; max: number }[] = [
 ];
 export function NativeDrumSetup({
   channel,
+  output,
   onClose,
 }: {
   channel: number;
+  output?: { index: number; name: string } | null;
   onClose: () => void;
 }) {
   const { view } = useStudio();
   const [original] = useState(view!);
   const [context, setContext] = useState<NativeDrumContext | null>(null);
   const [note, setNote] = useState(36),
-    [draft, setDraft] = useState<Record<string, string>>({});
+    [draft, setDraft] = useState<Record<string, string>>({}),
+    [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null),
     [pending, setPending] = useState(false);
   const dialog = useRef<HTMLElement>(null),
@@ -71,6 +74,15 @@ export function NativeDrumSetup({
     };
   }, [channel, original]);
   const key = context?.header.keys.find((k) => k.note === note);
+  const filteredKeys =
+    context?.header.keys.filter((k) => {
+      if (!search.trim()) return true;
+      const q = search.trim().toLowerCase();
+      return (
+        String(k.note).includes(q) ||
+        pitchName(k.note).toLowerCase().includes(q)
+      );
+    }) ?? [];
   const changes = Object.entries(draft)
     .filter(([, v]) => v.trim() !== "")
     .map(([id, value]) => {
@@ -86,6 +98,37 @@ export function NativeDrumSetup({
         context?.header.keys.find((k) => k.note === c.note)?.[c.field] !==
         c.value,
     );
+  const audition = async () => {
+    if (!output || working.current || pending || stale) return;
+    if (note < 13 || note > 91) {
+      setError("Audition is limited to drum notes 13–91.");
+      return;
+    }
+    working.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      const drumCh =
+        context?.header.channel === 9 || context?.header.channel === 10
+          ? context.header.channel
+          : channel === 9 || channel === 10
+            ? channel
+            : 10;
+      await invoke("preview_drum_note", {
+        index: output.index,
+        name: output.name,
+        channel: drumCh,
+        pitch: note,
+        velocity: 90,
+        holdMs: 200,
+      });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      working.current = false;
+      setPending(false);
+    }
+  };
   const valid = changes.every((c) => {
     const f = fields.find((f) => f.field === c.field)!;
     return Number.isInteger(c.value) && c.value >= f.min && c.value <= f.max;
@@ -121,6 +164,45 @@ export function NativeDrumSetup({
       useStudio.setState({
         view: next,
         message: "Genos Drum Setup applied · one undo step",
+      });
+      close.current();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      working.current = false;
+      setPending(false);
+      useStudio.setState({ busy: false });
+    }
+  };
+  const resetKeys = async (notes: number[]) => {
+    if (!context || stale || working.current || useStudio.getState().busy) return;
+    if (useStudio.getState().view !== original) {
+      setError("Document changed; reopen Drum Setup.");
+      return;
+    }
+    const scope = notes.length ? `MIDI ${notes.join(", ")}` : "all overridden keys";
+    if (
+      !window.confirm(
+        `Reset drum scalars for ${scope} to kit defaults? One undo step.`,
+      )
+    )
+      return;
+    working.current = true;
+    setPending(true);
+    setError(null);
+    useStudio.setState({ busy: true });
+    try {
+      const next = await invoke<View>("reset_native_drums", {
+        channel,
+        revision: original.revision,
+        address: context.header.address,
+        notes,
+      });
+      useStudio.setState({
+        view: next,
+        message: notes.length
+          ? `Drum key ${notes[0]} reset to kit defaults · one undo`
+          : "All drum scalar overrides reset · one undo",
       });
       close.current();
     } catch (e) {
@@ -187,14 +269,25 @@ export function NativeDrumSetup({
                 {context.header.setup + 1}
               </p>
               <label className="field">
+                Search drums
+                <input
+                  aria-label="Search drums"
+                  type="search"
+                  value={search}
+                  disabled={pending || stale}
+                  placeholder="Name or MIDI note…"
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </label>
+              <label className="field">
                 Drum key
                 <select
                   aria-label="Native drum key"
                   value={note}
-                  disabled={pending || stale}
+                  disabled={pending || stale || !filteredKeys.length}
                   onChange={(e) => setNote(Number(e.target.value))}
                 >
-                  {context.header.keys.map((k) => (
+                  {filteredKeys.map((k) => (
                     <option key={k.note} value={k.note}>
                       {pitchName(k.note)} · MIDI {k.note}
                       {k.used ? " · used" : ""}
@@ -202,6 +295,9 @@ export function NativeDrumSetup({
                   ))}
                 </select>
               </label>
+              {!filteredKeys.length && (
+                <p className="muted">No drum keys match that search.</p>
+              )}
               <div className="drum-preview-row">
                 {fields.map((f) => (
                   <label className="field" key={f.field}>
@@ -283,6 +379,35 @@ export function NativeDrumSetup({
         <footer className="modal-actions">
           <button disabled={pending} onClick={dismiss}>
             Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!context || !output || pending || stale}
+            title={
+              output
+                ? "Audition selected drum key on MIDI output"
+                : "Select a MIDI output to audition"
+            }
+            aria-label="Audition drum key"
+            onClick={() => void audition()}
+          >
+            Audition
+          </button>
+          <button
+            type="button"
+            disabled={!context || pending || stale}
+            title="Remove volume/pan/pitch overrides for this key"
+            onClick={() => void resetKeys([note])}
+          >
+            Reset drum
+          </button>
+          <button
+            type="button"
+            disabled={!context || pending || stale}
+            title="Remove volume/pan/pitch overrides for every key"
+            onClick={() => void resetKeys([])}
+          >
+            Reset all drums
           </button>
           <button
             className="primary"

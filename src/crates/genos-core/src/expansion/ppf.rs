@@ -234,10 +234,7 @@ pub fn rewrite_ppf(data: &[u8], pkg: &PpfPackage) -> Result<Vec<u8>, Error> {
             return Err(Error::Format("rewrite out of bounds".into()));
         }
         resources.push(PpfWriteResource {
-            title: r
-                .title
-                .clone()
-                .unwrap_or_else(|| "resource".into()),
+            title: r.title.clone().unwrap_or_else(|| "resource".into()),
             extension: r.extension.clone().unwrap_or_else(|| "bin".into()),
             data: data[start..end].to_vec(),
         });

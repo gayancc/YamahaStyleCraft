@@ -171,6 +171,7 @@ fn note_edit_reopen_preserves_all_other_events_and_chunks() {
             velocity: Some(n.velocity + 1),
             duration: Some(n.duration + 4),
             delta_duration: 0,
+            move_controllers: true,
         },
     )
     .unwrap();
@@ -270,7 +271,8 @@ fn rejected_batch_is_atomic_and_stale_revision_rejects() {
                         start: sec.start,
                         duration: 4
                     }
-                ]
+                ],
+                channel_events: vec![],
             }
         )
         .is_err()
@@ -309,6 +311,7 @@ fn unknown_chunks_and_sysex_survive_musical_edits() {
                 start: sec.start,
                 duration: 4,
             }],
+            channel_events: vec![],
         },
     )
     .unwrap();
@@ -372,7 +375,8 @@ fn overlapping_pitch_edits_cannot_silently_change_pairing() {
                 delta_pitch: 0,
                 velocity: None,
                 duration: Some(400),
-                delta_duration: 0
+                delta_duration: 0,
+                move_controllers: true,
             }
         )
         .is_err()
@@ -430,6 +434,7 @@ fn quantize_clamps_exclusive_end_and_preserves_unknown_events() {
                 start: sec.end - 1,
                 duration: 1,
             }],
+            channel_events: vec![],
         },
     )
     .unwrap();
@@ -446,6 +451,7 @@ fn quantize_clamps_exclusive_end_and_preserves_unknown_events() {
             section: sec.id,
             ids: vec![n.id],
             step: 480,
+            move_controllers: true,
         },
     )
     .unwrap();
@@ -499,6 +505,7 @@ fn no_op_note_and_casm_commands_preserve_original_bytes_and_history() {
             velocity: Some(n.velocity),
             duration: Some(n.duration),
             delta_duration: 0,
+            move_controllers: true,
         },
     )
     .unwrap();

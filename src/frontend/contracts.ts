@@ -32,6 +32,15 @@ export interface Route {
   middleNtt: number;
   middleNttBass: boolean;
 }
+/** Workspace fields stored in `.gss` project extensions (SFM-002). */
+export interface ProjectUiState {
+  sectionId?: number;
+  channel?: number;
+  snap?: number;
+  zoom?: number;
+  tool?: "select" | "draw" | "paint" | "erase" | "cursor" | "pan";
+}
+
 export interface View {
   name: string;
   revision: number;
@@ -49,6 +58,7 @@ export interface View {
   routes: Route[];
   chunks: { tag: string; bytes: number }[];
   warnings: string[];
+  uiState?: ProjectUiState | null;
 }
 export interface NoteInput {
   track: number;
@@ -57,6 +67,23 @@ export interface NoteInput {
   velocity: number;
   start: number;
   duration: number;
+}
+export type NoteUpdate = Pick<
+  Note,
+  "id" | "start" | "duration" | "pitch" | "velocity"
+>;
+export interface ControllerPoint {
+  tick: number;
+  value: number;
+}
+/** 14-bit pitch bend (0..=16383, center 8192). */
+export interface PitchBendPoint {
+  tick: number;
+  value: number;
+}
+export interface TempoPoint {
+  tick: number;
+  bpm: number;
 }
 export interface ExchangePreview {
   token: string;
@@ -76,6 +103,7 @@ export interface ExchangePreview {
     duration: number;
     velocity: number;
   }[];
+  channels?: { channel: number; originalNotes: number; importedNotes: number }[];
 }
 export interface CatalogVoice {
   category: string;
@@ -150,6 +178,24 @@ export type SourceAction =
   | { type: "clone"; source: number; destination: number; target: number };
 export type Command =
   | {
+      type: "pianoNotes";
+      section: number;
+      channel: number;
+      updates?: NoteUpdate[];
+      add?: NoteInput[];
+      remove?: number[];
+      /** Default true: retime owned CC/pitch-bend when starts move. */
+      moveControllers?: boolean;
+    }
+  | {
+      type: "controllerPoints";
+      section: number;
+      channel: number;
+      controller: number;
+      points?: ControllerPoint[];
+      remove?: number[];
+    }
+  | {
       type: "setVoice";
       section: number;
       channel: number;
@@ -167,7 +213,12 @@ export type Command =
       }[];
     }
   | { type: "sourceTracks"; section: number; actions: SourceAction[] }
-  | { type: "addNotes"; section: number; notes: NoteInput[] }
+  | {
+      type: "addNotes";
+      section: number;
+      notes: NoteInput[];
+      channelEvents?: { track: number; tick: number; data: number[] }[];
+    }
   | {
       type: "updateNotes";
       section: number;
@@ -177,9 +228,17 @@ export type Command =
       velocity?: number;
       duration?: number;
       deltaDuration?: number;
+      /** Default true: retime owned CC/pitch-bend with note starts. */
+      moveControllers?: boolean;
     }
   | { type: "deleteNotes"; ids: number[] }
-  | { type: "quantize"; section: number; ids: number[]; step: number }
+  | {
+      type: "quantize";
+      section: number;
+      ids: number[];
+      step: number;
+      moveControllers?: boolean;
+    }
   | {
       type: "casm";
       route: number;
@@ -200,6 +259,74 @@ export type Command =
       tempoBpm: number;
       numerator: number;
       denominator: number;
+    }
+  | {
+      type: "mixerCc";
+      section: number;
+      channel: number;
+      controller: number;
+      value: number;
+      allSections?: boolean;
+    }
+  | {
+      type: "mixerCcBatch";
+      section: number;
+      channel: number;
+      changes: [number, number][];
+      allSections?: boolean;
+    }
+  | {
+      type: "mixerEq";
+      section: number;
+      channel: number;
+      band: "eqLow" | "eqHigh";
+      value: number;
+      allSections?: boolean;
+    }
+  | {
+      type: "mixerEqPoints";
+      section: number;
+      channel: number;
+      band: "eqLow" | "eqHigh";
+      points?: ControllerPoint[];
+      clearTicks?: number[];
+    }
+  | {
+      type: "pitchBendPoints";
+      section: number;
+      channel: number;
+      points?: PitchBendPoint[];
+      remove?: number[];
+    }
+  | {
+      type: "tempoPoints";
+      section: number;
+      points?: TempoPoint[];
+      remove?: number[];
+    }
+  | {
+      type: "pitchBendRange";
+      section: number;
+      channel: number;
+      semitones: number;
+      allSections?: boolean;
+    }
+  | {
+      type: "copyMaterial";
+      sourceSection: number;
+      destinationSection: number;
+      scope:
+        | { type: "section" }
+        | { type: "part"; channel: number }
+        | { type: "source"; channel: number };
+      fit: "keep" | "repeat" | "fit";
+    }
+  | {
+      type: "sectionLength";
+      section: number;
+      op:
+        | { type: "fillBreak"; bars: number }
+        | { type: "shorten"; bars: number };
     };
 export interface RecentEntry {
   id: string;
@@ -218,7 +345,25 @@ export interface Prefs {
   midiOutputIndex: number | null;
   snap: number;
   zoom: number;
+  /** Interface chrome scale 0.85–1.25 (SFM Settings A−/A+/100%). */
+  uiScale?: number;
   tool: string;
+  returnOnStop?: boolean;
+  mixerApplyAllSections?: boolean;
+  metronomeDuringPlayback?: boolean;
+  countInBars?: number;
+  recQuantize?: number;
+  /** SFM Record data: `all` | `notes` | `controllers`. */
+  recData?: "all" | "notes" | "controllers";
+  /** 0 = OMNI, 1–16 = filter input channel before arm remap. */
+  recInputChannel?: number;
+  midiThru?: boolean;
+  /** Positive pulls captured notes earlier (latency compensation). */
+  recordingOffsetMs?: number;
+  /** Favorite Style paths for the Part Library (SFM-LIB-FAVORITES). */
+  libraryFavorites?: string[];
+  /** Per MIDI channel 1–16 display colors (SFM Note colors). */
+  noteColors?: string[];
 }
 export interface MonitorEvent {
   stampMs: number;

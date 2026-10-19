@@ -172,9 +172,10 @@ fn rule<'a>(r: &'a Route, note: u8, chord: &'a Chord) -> Result<(PitchRule<'a>, 
     Ok((
         PitchRule {
             source_root: r.bytes[18],
-            source_quality: if ntr == "root_fixed" && ntt == "bypass" {
-                // Yamaha H0 p28: this pair performs no note conversion.
-                // The valid source-chord field is irrelevant to its pitch.
+            source_quality: if ntt == "bypass" {
+                // Bypass does not use chord quality. Root Transposition still
+                // applies its root shift, high key and limits; Root Fixed is
+                // literal. The raw source-chord byte was validated above.
                 "Major"
             } else {
                 source_quality(r.bytes[19])

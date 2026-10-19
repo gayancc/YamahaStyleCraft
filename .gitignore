@@ -2,14 +2,12 @@
 /*
 !/.gitignore
 !/src/
-!/README.md
 !/assets/
 !/assets/**
 
 # Documentation, research and local verification evidence stay local.
 /docs/
 *.md
-!/README.md
 *.mdx
 *.rst
 *.txt
