@@ -1,0 +1,839 @@
+/* FL physical button kit.
+   Measured on the running FL Studio 25.1.1.4879 (rea-2026-10-20/fl-button-states.png,
+   fl-button-activation-frames.png, FL-E6):
+   - idle: flat dark cell, 1px darker outline, faint vertical gradient (#495257 > #545d62 > #464f54)
+   - pressed or latched: instant cream-to-orange glow, deeper orange 1px edge, dark-orange label
+   - release: the light fades out in about 80-160ms; lighting up has no delay
+   Used by the section bar and the toolbar/transport icon buttons. */
+:root {
+  --fl-btn-top: #4d565b;
+  --fl-btn-mid: #545d62;
+  --fl-btn-bot: #464f54;
+  --fl-lit-hi: #fff2b8;
+  --fl-lit-mid: #ffd27f;
+  --fl-lit-edge: #f6a04a;
+  --fl-lit-line: #c35216;
+  --fl-lit-text: #6e2a05;
+  --fl-lit-glow: rgb(255 160 60 / 0.5);
+  --fl-fade: 0.14s;
+}
+
+.sections-strip .section-chip,
+.app .toolbar .icon-button,
+.app .transport .icon-button {
+  background: linear-gradient(var(--fl-btn-top), var(--fl-btn-mid) 48%, var(--fl-btn-bot));
+  border: 1px solid var(--fl-s1);
+  border-radius: 2px;
+  color: var(--fl-t1);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.05),
+    0 1px 0 rgb(255 255 255 / 0.05);
+  text-shadow: none;
+  transition:
+    background var(--fl-fade) ease-out,
+    color var(--fl-fade) ease-out,
+    border-color var(--fl-fade) ease-out,
+    box-shadow var(--fl-fade) ease-out;
+}
+/* Hover never overrides a lit (selected, latched or pressed) face. */
+.sections-strip .section-chip:not(.selected):not([aria-pressed="true"]):not(:active):hover:not(:disabled),
+.app .toolbar .icon-button:not(.active):not(:active):hover:not(:disabled),
+.app .transport .icon-button:not(.active):not(:active):hover:not(:disabled) {
+  background: linear-gradient(#566066, #5f686d 48%, #4f585d);
+  border-color: var(--fl-s0);
+  color: var(--fl-t0);
+}
+
+/* Available section (the loaded Style has data for this Genos panel slot): blue-tinted body like
+   the Genos panel buttons. Selection, press and release then behave exactly like FL (below). */
+.sections-strip .section-chip:not(.empty-slot) {
+  background: linear-gradient(#3f719d, #386691 48%, #305a82);
+  border-color: #162b42;
+  color: var(--fl-t0);
+  box-shadow:
+    inset 0 0 0 1px rgb(150 200 255 / 0.12),
+    inset 0 -2px 0 rgb(120 190 255 / 0.28),
+    0 1px 0 rgb(255 255 255 / 0.05);
+}
+.sections-strip .section-chip:not(.empty-slot):not(.selected):not([aria-pressed="true"]):not(:active):hover:not(:disabled) {
+  background: linear-gradient(#4577a3, #3e6c97 48%, #36608a);
+  border-color: #0f2236;
+  color: #fff;
+}
+.sections-strip .section-chip:not(.empty-slot) small {
+  color: var(--fl-t0);
+}
+.sections-strip .section-chip:not(.empty-slot):not(.selected):not([aria-pressed="true"]):not(:active):hover:not(:disabled) small {
+  color: #fff;
+}
+
+/* Lit: pressed (instant, no transition) or latched (selected / active / aria-pressed). */
+.sections-strip .section-chip:active:not(:disabled),
+.sections-strip .section-chip.selected,
+.sections-strip .section-chip[aria-pressed="true"],
+.app .toolbar .icon-button:active:not(:disabled),
+.app .toolbar .icon-button.active,
+.app .transport .icon-button:active:not(:disabled),
+.app .transport .icon-button.active {
+  background: radial-gradient(
+    ellipse at 50% 55%,
+    var(--fl-lit-hi) 0,
+    var(--fl-lit-mid) 58%,
+    var(--fl-lit-edge) 100%
+  );
+  border-color: var(--fl-lit-line);
+  color: var(--fl-lit-text);
+  box-shadow:
+    inset 0 0 5px rgb(255 140 40 / 0.55),
+    0 0 7px var(--fl-lit-glow);
+  text-shadow: 0 1px 0 rgb(255 255 255 / 0.35);
+}
+.sections-strip .section-chip:active:not(:disabled),
+.app .toolbar .icon-button:active:not(:disabled),
+.app .transport .icon-button:active:not(:disabled) {
+  transition: none;
+}
+.sections-strip .section-chip.selected small,
+.sections-strip .section-chip:active:not(:disabled) small {
+  color: var(--fl-lit-text);
+}
+.sections-strip .section-chip:focus-visible,
+.app .toolbar .icon-button:focus-visible,
+.app .transport .icon-button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.app .toolbar .icon-button:disabled,
+.app .transport .icon-button:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+}
+
+/* Section bar: the fixed Genos panel layout, separators between groups. */
+.sections-strip .section-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.sections-strip .section-group {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+}
+.sections-strip .section-group + .section-group {
+  margin-left: 7px;
+  padding-left: 7px;
+  border-left: 1px solid var(--fl-s1);
+  box-shadow: inset 1px 0 0 rgb(255 255 255 / 0.05);
+}
+.sections-strip .section-chip {
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  min-height: 24px;
+  padding: 0 7px;
+  gap: 5px;
+  font-size: 11px;
+}
+.sections-strip .section-chip small {
+  font-size: 9px;
+  color: var(--fl-t3);
+}
+/* A section that exists but has no notes keeps its bar count, marked with an empty set. */
+.sections-strip .section-chip.empty-section {
+  opacity: 1;
+}
+/* A slot the loaded Style has no data for: recessed and dark like an unlit FL button, but still a
+   button: clicking it opens Add section (as StyleMagicYA's empty section tiles do). */
+.sections-strip .section-chip.empty-slot {
+  background: var(--fl-s3);
+  border-color: var(--fl-s2);
+  color: var(--fl-t3);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.45);
+  cursor: pointer;
+  gap: 4px;
+}
+.sections-strip .section-chip.empty-slot svg {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+.sections-strip .section-chip.empty-slot:hover:not(:active):not(:disabled) {
+  background: var(--fl-s5);
+  border-color: var(--fl-s7);
+  color: var(--fl-t0);
+}
+.sections-strip .section-chip.empty-slot:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sections-strip .section-chip,
+  .app .toolbar .icon-button,
+  .app .transport .icon-button {
+    transition: none;
+  }
+}
+
+/* Window controls: FL Studio's three title-bar buttons (measured on FL 25.1.1.4879,
+   rea-2026-10-20/fl-main-default.png): square beveled faces #4b5459 → #586166, 1px #384146
+   border, #d9e1e5 glyphs, 2px apart at the right end of the bar. Pressed uses the shared lit
+   button state; FL shows no separate red close state, so none is invented here. */
+.titlebar .window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  margin-right: -4px;
+  flex: 0 0 auto;
+}
+.titlebar .wc-btn {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 19px;
+  min-height: 0;
+  padding: 0;
+  background: linear-gradient(#4b5459, #586166 50%, #4b5459);
+  border: 1px solid #384146;
+  border-radius: 2px;
+  color: #d9e1e5;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1);
+  transition: background var(--fl-fade) ease-out;
+}
+.titlebar .wc-btn svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: square;
+}
+.titlebar .wc-btn:hover:not(:active) {
+  background: linear-gradient(#566066, #646e73 50%, #566066);
+}
+.titlebar .wc-btn:active {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+  border-color: #c35216;
+  color: var(--fl-lit-text);
+  transition: none;
+}
+.titlebar .wc-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Section buttons are near-square pads, like the Genos panel buttons: name over bar count. */
+.sections-strip {
+  min-height: 48px;
+  max-height: 48px;
+  padding: 3px 8px;
+}
+.sections-strip .section-chip {
+  flex-direction: column;
+  gap: 1px;
+  min-width: 54px;
+  min-height: 40px;
+  padding: 3px 6px;
+  font-size: 11.5px;
+  line-height: 1.15;
+}
+.sections-strip .section-chip small {
+  font-size: 9.5px;
+  line-height: 1.1;
+}
+.sections-strip .section-chip.empty-slot svg {
+  margin-top: 1px;
+}
+.sections-strip .section-chip.empty-slot {
+  gap: 2px;
+  padding-top: 5px;
+  justify-content: flex-start;
+}
+
+/* Top bar: transport and section pads share one row (FL keeps transport, tempo and time readout
+   together in the top bar). Transport shapes, colours and proportions are measured from FL
+   25.1.1.4879 (rea-2026-10-20/fl-transport-zoom.png): a capsule holding the play and stop
+   buttons, a separate round record button, a light tempo field with large dark digits, and a
+   large light-cyan time readout on a teal-grey panel. */
+.toolbar.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  min-height: 48px;
+  max-height: 48px;
+  padding: 0 8px;
+}
+.toolbar.topbar > .transport {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: visible;
+}
+.toolbar.topbar > .sections-strip {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 48px;
+  min-height: 48px;
+  max-height: 48px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+.toolbar.topbar > .sections-strip .section-bar {
+  height: 44px;
+}
+.fl-transport {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.fl-capsule {
+  display: flex;
+  height: 36px;
+  background: #353d42;
+  border: 1px solid #1d2428;
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+}
+.fl-capsule .icon-button {
+  width: 40px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  background: linear-gradient(#444d53, #394146 55%, #343c41);
+  border: 0;
+  border-right: 1px solid #1d2428;
+  border-radius: 0;
+  color: #c9d0d4;
+}
+.fl-capsule .icon-button:last-child {
+  border-right: 0;
+}
+.fl-capsule .icon-button:hover:not(:active):not(.active):not(:disabled) {
+  background: linear-gradient(#4e585e, #424a50 55%, #3b4349);
+}
+.fl-capsule .icon-button.active,
+.fl-capsule .icon-button:active:not(:disabled) {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+  color: var(--fl-lit-text);
+  transition: none;
+}
+.fl-capsule .icon-button:disabled {
+  color: #7d878d;
+  opacity: 1;
+}
+.fl-capsule .icon-button .menu-label,
+.fl-capsule .icon-button .menu-shortcut,
+.fl-transport .rec-btn .menu-label,
+.fl-transport .rec-btn .menu-shortcut {
+  display: none;
+}
+.fl-transport .rec-btn {
+  width: 36px;
+  height: 36px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #556066, #444d53 70%);
+  border: 1px solid #1d2428;
+  color: #ee4f4c;
+}
+.fl-transport .rec-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.fl-transport .rec-btn:disabled {
+  color: #8a5b5a;
+  opacity: 1;
+}
+.fl-transport .rec-btn.active,
+.fl-transport .rec-btn:active:not(:disabled) {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+  border-color: #c35216;
+  color: #c01f1c;
+}
+.fl-tempo {
+  display: flex;
+  align-items: center;
+}
+.fl-tempo .tempo {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.fl-tempo .tempo input {
+  width: 74px;
+  height: 30px;
+  min-height: 0;
+  padding: 0 6px;
+  text-align: right;
+  background: #becdd4;
+  border: 1px solid #7f8f97;
+  border-radius: 7px;
+  color: #212229;
+  font: 500 18px/1 "Segoe UI", system-ui, sans-serif;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.25);
+}
+.fl-tempo .tempo input:disabled {
+  background: #8c989e;
+  color: #4d555a;
+}
+.fl-tempo .tempo span {
+  color: var(--fl-t3);
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+.toolbar.topbar .time-readout {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  min-width: 150px;
+  height: 36px;
+  padding: 0 22px 0 12px;
+  background: #536566;
+  border: 1px solid #2c383b;
+  border-radius: 3px;
+  color: #e0f7f8;
+  font: 300 26px/36px "Segoe UI", system-ui, sans-serif;
+  letter-spacing: 1px;
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.3);
+}
+.toolbar.topbar .time-readout::after {
+  content: "M:S.MS";
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  font: 600 8px/1 "Segoe UI", system-ui, sans-serif;
+  letter-spacing: 0.6px;
+  color: #c0d6d8;
+}
+.toolbar.topbar .time-readout span {
+  color: #b9d3d5;
+  font-size: 17px;
+}
+.fl-extra {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.fl-extra .icon-button {
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+}
+
+/* Time signature: a stacked notation chip on the time-readout panel colour, opening a key panel. */
+.time-sig {
+  position: relative;
+  flex: 0 0 auto;
+}
+.time-sig-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: 34px;
+  height: 36px;
+  min-height: 0;
+  padding: 0;
+  background: #536566;
+  border: 1px solid #2c383b;
+  border-radius: 3px;
+  color: #e0f7f8;
+  font: 400 15px/1 "Segoe UI", system-ui, sans-serif;
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.3);
+  cursor: ns-resize;
+}
+.time-sig-chip .ts-bar {
+  width: 16px;
+  height: 1px;
+  margin: 2px 0;
+  background: #9bb5b8;
+}
+.time-sig-chip:hover:not(:disabled),
+.time-sig-chip[aria-expanded="true"] {
+  background: #5d7274;
+  border-color: #f6a04a;
+}
+.time-sig-chip:disabled {
+  opacity: 0.55;
+}
+.time-sig-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  width: 236px;
+  padding: 6px 8px 8px;
+  background: var(--fl-menu);
+  border: 1px solid #1d2428;
+  box-shadow: 3px 3px 0 rgb(0 0 0 / 0.38);
+  color: var(--fl-menu-text);
+}
+.time-sig-panel .ts-heading {
+  margin: 2px -8px 5px;
+  padding: 2px 8px;
+  background: #929da4;
+  color: #1c2428;
+  font-size: 10.5px;
+}
+.time-sig-panel .ts-keys {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+.time-sig-panel .ts-beats {
+  grid-template-columns: repeat(8, 1fr);
+}
+.time-sig-panel .ts-units {
+  grid-template-columns: repeat(5, 1fr);
+}
+.time-sig-panel .ts-presets {
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 0;
+}
+.time-sig-panel .ts-key {
+  min-height: 24px;
+  padding: 0;
+  background: linear-gradient(#4d565b, #545d62 50%, #464f54);
+  border: 1px solid #262e33;
+  border-radius: 2px;
+  color: var(--fl-t0);
+  font-size: 11.5px;
+}
+.time-sig-panel .ts-key:hover:not([aria-pressed="true"]):not(:active) {
+  background: linear-gradient(#5b656b, #636d73 50%, #545e64);
+}
+.time-sig-panel .ts-key[aria-pressed="true"],
+.time-sig-panel .ts-key:active {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+  border-color: #c35216;
+  color: var(--fl-lit-text);
+  transition: none;
+}
+
+/* Fit the full Genos pad layout beside the transport at the default window width. */
+.toolbar.topbar .sections-strip .section-chip {
+  min-width: 47px;
+  padding: 3px 4px;
+}
+.toolbar.topbar .sections-strip .section-group + .section-group {
+  margin-left: 5px;
+  padding-left: 5px;
+}
+.toolbar.topbar .time-readout {
+  min-width: 124px;
+  padding: 0 20px 0 8px;
+  font-size: 23px;
+}
+.fl-tempo .tempo input {
+  width: 62px;
+}
+.toolbar.topbar > .transport,
+.fl-transport {
+  gap: 6px;
+}
+
+/* FL tempo field (rea-2026-10-20/fl-transport-zoom.png): light box, large dark digits with a
+   small fraction, stacked spinner arrows on the right edge. */
+.fl-tempo .tempo-field {
+  position: relative;
+  display: flex;
+  width: 96px;
+  height: 30px;
+  background: linear-gradient(#cdd9de, #becdd4 60%, #b3c3cb);
+  border: 1px solid #1d2428;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5);
+}
+.fl-tempo .tempo-field[data-disabled] {
+  background: #8c989e;
+}
+.fl-tempo .tempo-field input {
+  position: absolute;
+  inset: 0 18px 0 0;
+  width: auto;
+  height: 100%;
+  min-height: 0;
+  padding: 0 6px;
+  text-align: right;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: transparent;
+  caret-color: #212229;
+  font: 500 19px/1 "Segoe UI", system-ui, sans-serif;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.fl-tempo .tempo-field input::-webkit-inner-spin-button,
+.fl-tempo .tempo-field input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+.fl-tempo .tempo-field input:focus {
+  color: #212229;
+  background: #e6eef1;
+  outline: none;
+}
+.fl-tempo .tempo-field .tempo-face {
+  position: absolute;
+  inset: 0 18px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 6px;
+  color: #212229;
+  font: 500 19px/1 "Segoe UI", system-ui, sans-serif;
+  pointer-events: none;
+}
+.fl-tempo .tempo-field input:focus + .tempo-face {
+  visibility: hidden;
+}
+.fl-tempo .tempo-field .tempo-face small {
+  align-self: flex-end;
+  margin-bottom: 7px;
+  color: #3c474d;
+  font-size: 11px;
+}
+.fl-tempo .tempo-field[data-disabled] .tempo-face {
+  color: #4d555a;
+}
+.fl-tempo .tempo-spin {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  width: 18px;
+  border-left: 1px solid rgb(29 36 40 / 0.35);
+}
+.fl-tempo .tempo-spin button {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  position: relative;
+}
+.fl-tempo .tempo-spin button + button {
+  border-top: 1px solid rgb(29 36 40 / 0.2);
+}
+.fl-tempo .tempo-spin button::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border: 4px solid transparent;
+  transform: translate(-50%, -50%);
+}
+.fl-tempo .tempo-spin button:first-child::after {
+  border-bottom: 5px solid #5f6e76;
+  border-top: 0;
+}
+.fl-tempo .tempo-spin button:last-child::after {
+  border-top: 5px solid #5f6e76;
+  border-bottom: 0;
+}
+.fl-tempo .tempo-spin button:hover:not(:disabled):not(:active) {
+  background: rgb(255 255 255 / 0.35);
+}
+.fl-tempo .tempo-spin button:active:not(:disabled) {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+}
+.fl-tempo .tempo-spin button:disabled::after {
+  opacity: 0.4;
+}
+
+.fl-tempo .tempo-unit {
+  color: var(--fl-t3);
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+/* Specificity over the shared button kit for the transport shapes. */
+.toolbar.topbar .fl-transport .rec-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #556066, #444d53 70%);
+  border: 1px solid #1d2428;
+  color: #ee4f4c;
+}
+.toolbar.topbar .fl-transport .rec-btn:hover:not(:disabled):not(.active):not(:active) {
+  background: radial-gradient(circle at 50% 35%, #626d73, #4d565c 70%);
+}
+.toolbar.topbar .fl-transport .rec-btn:disabled {
+  color: #8a5b5a;
+}
+.toolbar.topbar .fl-transport .rec-btn.active,
+.toolbar.topbar .fl-transport .rec-btn:active:not(:disabled) {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+  border-color: #c35216;
+  color: #c01f1c;
+}
+.toolbar.topbar .fl-capsule .icon-button {
+  border-radius: 0;
+  background: linear-gradient(#444d53, #394146 55%, #343c41);
+  border: 0;
+  border-right: 1px solid #1d2428;
+}
+.toolbar.topbar .fl-capsule .icon-button:last-child {
+  border-right: 0;
+}
+.toolbar.topbar .fl-capsule .icon-button.active,
+.toolbar.topbar .fl-capsule .icon-button:active:not(:disabled) {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+}
+
+/* The section bar never scrolls: pads share the available width and shrink with it. */
+.toolbar.topbar .sections-strip .section-bar {
+  overflow: hidden;
+  container-type: inline-size;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.toolbar.topbar .sections-strip .section-group {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.toolbar.topbar .sections-strip .section-group:nth-child(1),
+.toolbar.topbar .sections-strip .section-group:nth-child(2),
+.toolbar.topbar .sections-strip .section-group:nth-child(3) {
+  flex-grow: 4;
+}
+.toolbar.topbar .sections-strip .section-group:nth-child(4) {
+  flex-grow: 1;
+}
+.toolbar.topbar .sections-strip .section-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 64px;
+  padding: 3px 2px;
+  overflow: hidden;
+}
+.toolbar.topbar .sections-strip .section-chip > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+@container (max-width: 600px) {
+  .toolbar.topbar .sections-strip .section-chip {
+    font-size: 10px;
+  }
+  .toolbar.topbar .sections-strip .section-chip small {
+    display: none;
+  }
+}
+.toolbar.topbar .sections-strip .section-group:nth-child(5) {
+  flex-grow: 3;
+}
+.toolbar.topbar .sections-strip .section-group:nth-child(6) {
+  flex-grow: 1;
+}
+
+/* Section tools sit at the top of the inspector as three compact, equal-width buttons. */
+.inspector .section-tools {
+  display: flex;
+  gap: 3px;
+  padding: 4px 8px 2px;
+}
+.inspector .section-tools button {
+  flex: 1 1 0;
+  min-height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+.toolbar.topbar .sections-strip .section-chip {
+  max-width: 76px;
+}
+
+/* Narrow windows: the transport gives up its extras so every pad keeps a readable name. */
+@media (max-width: 1180px) {
+  .toolbar.topbar .fl-extra,
+  .fl-tempo .tempo-unit {
+    display: none;
+  }
+  .toolbar.topbar .time-readout {
+    min-width: 96px;
+    padding: 0 16px 0 6px;
+    font-size: 17px;
+  }
+  .toolbar.topbar .time-readout span {
+    font-size: 12px;
+  }
+  .toolbar.topbar .time-readout::after {
+    display: none;
+  }
+  .fl-tempo .tempo-field {
+    width: 84px;
+  }
+  .toolbar.topbar .sections-strip .section-chip {
+    font-size: 9.5px;
+    letter-spacing: -0.2px;
+  }
+  .toolbar.topbar .sections-strip .section-group + .section-group {
+    margin-left: 3px;
+    padding-left: 3px;
+  }
+}
+@media (max-width: 1100px) {
+  .toolbar.topbar .time-readout {
+    display: none;
+  }
+}
+
+/* Section bar grid: every pad is the same width and height; groups are divided by a thin rule
+   in a fixed gutter. The bar never scrolls. */
+.toolbar.topbar .sections-strip .section-bar {
+  display: grid;
+  grid-auto-flow: column;
+  column-gap: 3px;
+  align-items: center;
+  justify-content: start;
+  overflow: hidden;
+}
+.toolbar.topbar .sections-strip .section-group {
+  display: contents;
+}
+.toolbar.topbar .sections-strip .section-sep {
+  justify-self: center;
+  width: 1px;
+  height: 30px;
+  background: var(--fl-s1);
+  box-shadow: 1px 0 0 rgb(255 255 255 / 0.05);
+}
+.toolbar.topbar .sections-strip .section-chip,
+.toolbar.topbar .sections-strip .section-chip.empty-slot {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  margin: 0;
+  padding: 3px 2px;
+  justify-content: center;
+}

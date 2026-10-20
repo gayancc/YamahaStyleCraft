@@ -228,8 +228,7 @@ impl MidiCapture {
                 "Capture overflowed; events were dropped".into(),
             ));
         }
-        self.data_bytes
-            .fetch_add(data.len(), Ordering::Relaxed);
+        self.data_bytes.fetch_add(data.len(), Ordering::Relaxed);
         let ev = MonitorEvent {
             stamp_ms: started.elapsed().as_millis() as u64,
             data: data.clone(),
@@ -597,9 +596,8 @@ pub fn retain_input_channel(
         return;
     };
     notes.retain(|n| n.channel == filter);
-    channel_events.retain(|ev| {
-        !ev.data.is_empty() && ev.data[0] < 0xf0 && (ev.data[0] & 0x0f) + 1 == filter
-    });
+    channel_events
+        .retain(|ev| !ev.data.is_empty() && ev.data[0] < 0xf0 && (ev.data[0] & 0x0f) + 1 == filter);
 }
 
 fn validate_message(data: &[u8]) -> Result<()> {

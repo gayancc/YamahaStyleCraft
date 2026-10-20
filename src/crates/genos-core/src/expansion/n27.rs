@@ -72,7 +72,13 @@ pub fn parse_n27(data: &[u8]) -> Result<InstrumentInfo, Error> {
 }
 
 pub fn parse_n27_file(path: &std::path::Path) -> Result<InstrumentInfo, Error> {
-    let data = std::fs::read(path)?;
+    use std::io::Read;
+    // An instrument-info file has a fixed evidenced size; never allocate an
+    // arbitrarily large selected file before discovering that it is invalid.
+    let mut data = Vec::with_capacity(N27_SIZE + 1);
+    std::fs::File::open(path)?
+        .take((N27_SIZE + 1) as u64)
+        .read_to_end(&mut data)?;
     parse_n27(&data)
 }
 

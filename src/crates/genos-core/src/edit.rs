@@ -185,6 +185,17 @@ pub enum Command {
         section: u64,
         op: crate::section_length::SectionLengthOp,
     },
+    /// Add a Yamaha section the Style does not contain: empty, or a copy of an existing section's
+    /// notes and controllers; shares `casm_from`'s CASM routes.
+    AddSection {
+        label: String,
+        bars: u32,
+        casm_from: u64,
+        #[serde(default)]
+        copy_from: Option<u64>,
+        #[serde(default)]
+        fit: Option<crate::copy_material::CopyFit>,
+    },
     SetEvent {
         id: u64,
         tick: u64,
@@ -953,6 +964,33 @@ impl Session {
             }
             Command::SectionLength { section, op } => {
                 let changes = crate::section_length::apply(&mut style, section, op)?;
+                for id in changes.removed {
+                    expected_pairs.remove(&id);
+                }
+                expected_pairs.extend(changes.added);
+                for (track, events) in style.tracks.iter().enumerate() {
+                    if events != &self.document.style.tracks[track] {
+                        touched.insert(track);
+                    }
+                }
+            }
+            Command::AddSection {
+                label,
+                bars,
+                casm_from,
+                copy_from,
+                fit,
+            } => {
+                let changes = crate::add_section::apply(
+                    &mut style,
+                    crate::add_section::AddSection {
+                        label,
+                        bars,
+                        casm_from,
+                        copy_from,
+                        fit,
+                    },
+                )?;
                 for id in changes.removed {
                     expected_pairs.remove(&id);
                 }

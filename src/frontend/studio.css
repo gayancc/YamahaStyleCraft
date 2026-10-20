@@ -1,9 +1,5 @@
 /* Function-led workspace: chrome recedes, musical controls carry the hierarchy. */
-:root {
-  --accent: #e3b56c;
-  --line: #353c42;
-  --muted: #a1acb4;
-}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -15,31 +11,73 @@
   white-space: nowrap;
   border: 0;
 }
+/* Long reference dialogs retain their orientation and dismiss control while scrolling. */
+.modal > .modal-title,
+.modal > .modal-header {
+  position: sticky;
+  top: -16px;
+  z-index: 2;
+  background: var(--studio-dialog);
+  padding: 8px 0;
+}
+.modal-header,
+.modal-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.modal-header {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.modal-header > .icon-button {
+  flex-shrink: 0;
+}
+/* CSS zoom scales viewport units too; reserve the actual viewport at every
+   supported interface size, including modal drafts and disclosure menus. */
+.app .modal {
+  max-width: calc(100vw / var(--ui-scale, 1) - 32px);
+  max-height: calc(100dvh / var(--ui-scale, 1) - 32px);
+}
+.app .studio-menu-content {
+  max-height: calc(100dvh / var(--ui-scale, 1) - 130px);
+}
+.app .piano-options .piano-tool-menu > div {
+  max-height: calc(100dvh / var(--ui-scale, 1) - 260px);
+}
+.note-colors-menu > .studio-menu-content {
+  left: auto;
+  right: 0;
+}
+.note-colors-grid > small {
+  grid-column: 1 / -1;
+}
 button {
-  border-radius: 5px;
+  border-radius: var(--studio-radius);
 }
 .titlebar {
-  height: 44px;
-  min-height: 44px;
-  max-height: 44px;
-  padding: 0 16px;
-  gap: 14px;
+  /* Keep compact chrome from styles.css — piano roll owns the viewport. */
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
+  padding: 0 10px;
+  gap: 8px;
   overflow: visible;
-  background: #20252a;
-  border-bottom: 1px solid #111619;
+  background: var(--studio-title);
+  border-bottom: 1px solid var(--fl-s1);
   z-index: 20;
 }
 .brand {
-  font-size: 15px;
-  letter-spacing: -0.45px;
-  gap: 9px;
+  font-size: 13px;
+  letter-spacing: -0.4px;
+  gap: 6px;
 }
 .brand-light {
-  margin-left: 3px;
+  margin-left: 2px;
 }
 .project-title {
-  font-size: 12px;
-  color: #dce1e4;
+  font-size: 11px;
+  color: var(--fl-t1);
 }
 .titlebar .file-actions {
   gap: 3px;
@@ -48,18 +86,19 @@ button {
   display: none;
 }
 .titlebar .icon-button {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
 }
 .output-select {
-  max-width: 210px;
-  min-height: 28px;
+  max-width: 180px;
+  min-height: 26px;
   font-size: 11px;
   border: 0;
   background: transparent;
 }
 .titlebar-tools {
-  gap: 5px;
+  gap: 4px;
 }
 .studio-menu {
   position: relative;
@@ -72,11 +111,11 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 5px 9px;
+  gap: 6px;
+  min-height: 26px;
+  padding: 2px 7px;
   border-radius: 4px;
-  color: #b8c2ca;
+  color: var(--fl-t2);
   user-select: none;
 }
 .studio-menu > summary::-webkit-details-marker {
@@ -84,8 +123,8 @@ button {
 }
 .studio-menu[open] > summary,
 .studio-menu > summary:hover {
-  background: #343d44;
-  color: #f1f3f4;
+  background: var(--fl-s7);
+  color: var(--fl-t0);
 }
 .studio-menu-content {
   position: absolute;
@@ -98,8 +137,8 @@ button {
   flex-direction: column;
   gap: 3px;
   padding: 8px;
-  background: #252d33;
-  border: 1px solid #46515a;
+  background: var(--fl-s4);
+  border: 1px solid var(--fl-s9);
   box-shadow: 0 12px 36px #0008;
   border-radius: 7px;
   z-index: 50;
@@ -119,7 +158,7 @@ button {
   justify-content: flex-start;
 }
 .studio-menu-content > button:hover {
-  background: #3b454d;
+  background: var(--fl-s8);
 }
 .studio-menu-content > .icon-button::after {
   content: attr(aria-label);
@@ -151,43 +190,43 @@ button {
   margin: 10px;
 }
 .toolbar {
-  height: 64px;
-  min-height: 64px;
-  max-height: 64px;
-  padding: 0 16px;
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  padding: 0 8px;
   overflow: visible;
-  background: #292f35;
-  border-bottom: 1px solid #101518;
+  background: var(--fl-s5);
+  border-bottom: 1px solid var(--fl-s1);
   z-index: 15;
 }
 .transport {
   overflow: visible;
-  gap: 18px;
+  gap: 8px;
 }
 .transport-primary {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   flex-shrink: 0;
 }
 .transport-primary .icon-button {
-  width: 34px;
-  height: 34px;
-  min-height: 34px;
-  border-radius: 5px;
-  background: #343c43;
-  border: 1px solid #414b53;
-  color: #c3cdd4;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  border-radius: 4px;
+  background: var(--fl-s7);
+  border: 1px solid var(--fl-s8);
+  color: var(--fl-t1);
 }
 .transport-primary .icon-button[aria-label^="Play"] {
-  width: 44px;
+  width: 32px;
   color: #e4bc7c;
   background: #443e33;
   border-color: #6b5840;
 }
 .transport-primary .icon-button[aria-label^="Play"].active {
   background: var(--accent);
-  color: #242321;
+  color: var(--fl-s3);
   border-color: var(--accent);
 }
 .transport-primary .icon-button[aria-label^="Record"] {
@@ -202,48 +241,49 @@ button {
   background: #443d32;
 }
 .transport-primary .icon-button[aria-label^="Move"] {
-  width: 28px;
+  width: 24px;
   background: transparent;
   border-color: transparent;
 }
 .time-readout {
   font:
-    24px/1 Consolas,
+    13px/1 Consolas,
     monospace;
   letter-spacing: 0;
-  color: #e6edef;
-  background: #1b2126;
-  border: 1px solid #3b454e;
-  border-radius: 5px;
-  padding: 10px 12px;
+  color: var(--fl-t0);
+  background: var(--fl-s3);
+  border: 1px solid var(--fl-s8);
+  border-radius: 4px;
+  padding: 2px 8px;
   margin: 0;
-  min-width: 150px;
+  min-width: 96px;
 }
 .time-readout span {
-  color: #8799a6;
-  font-size: 17px;
+  color: var(--fl-t3);
+  font-size: 11px;
 }
 .transport-timing {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
   padding-left: 2px;
 }
 .transport .tempo {
   border: 0;
   padding: 0;
   margin: 0;
-  gap: 5px;
+  gap: 4px;
 }
 .transport .tempo input {
   font:
-    19px Consolas,
+    12px Consolas,
     monospace;
-  width: 87px;
-  padding: 5px 6px;
-  background: #20262b;
-  border: 1px solid #414c54;
-  height: 34px;
+  width: 56px;
+  padding: 2px 4px;
+  background: var(--fl-s4);
+  border: 1px solid var(--fl-s8);
+  height: 24px;
+  min-height: 24px;
 }
 .transport .tempo span {
   font-size: 9px;
@@ -254,27 +294,30 @@ button {
   padding: 0;
   border: 0;
   display: flex;
-  gap: 3px;
+  gap: 2px;
   align-items: center;
 }
 .transport .meter-edit input {
-  width: 35px;
-  padding: 4px 2px;
-  height: 30px;
+  width: 28px;
+  padding: 2px;
+  height: 24px;
+  min-height: 24px;
 }
 .transport .meter-edit select {
-  width: 43px;
-  padding: 4px 0;
-  height: 30px;
+  width: 36px;
+  padding: 2px 0;
+  height: 24px;
+  min-height: 24px;
 }
 .transport-preview {
   margin-left: auto;
 }
 .sections-strip {
-  min-height: 48px;
-  padding: 7px 14px;
-  background: #1c2227;
-  gap: 12px;
+  min-height: 28px;
+  max-height: 28px;
+  padding: 2px 8px;
+  background: var(--fl-s3);
+  gap: 8px;
 }
 .sections-strip nav {
   scrollbar-width: thin;
@@ -282,11 +325,11 @@ button {
 }
 .section-chip {
   border: 1px solid transparent;
-  min-height: 31px;
-  font-size: 11px;
-  background: #282f35;
-  padding: 4px 9px;
-  border-radius: 4px;
+  min-height: 22px;
+  font-size: 10px;
+  background: var(--fl-s5);
+  padding: 1px 7px;
+  border-radius: 3px;
 }
 .section-chip.selected {
   background: #453b2d;
@@ -307,32 +350,53 @@ button {
   min-height: 29px;
 }
 .workspace {
+  container-type: size;
   grid-template-columns: 206px minmax(240px, 1fr) 246px;
+}
+/* At large interface sizes a short workspace must scroll, never squeeze the
+   editable pitch grid to zero beneath wrapped toolbars and the event lane. */
+@container (max-height: 440px) {
+  .editor {
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+  .editor > .canvas-wrap {
+    flex: 1 0 auto;
+    overflow: visible;
+  }
+  .editor .piano {
+    height: auto;
+    min-height: 400px;
+  }
+  .editor .piano-scroll {
+    flex: 1 0 160px;
+    min-height: 160px;
+  }
 }
 .workspace.inspector-collapsed {
   grid-template-columns: 206px minmax(240px, 1fr) 36px;
 }
 .tracks {
-  background: #20262b;
-  border-right-color: #11171b;
+  background: var(--fl-s4);
+  border-right-color: var(--fl-s1);
 }
 .panel-heading {
   height: 37px;
   padding: 0 13px;
   letter-spacing: 1.3px;
   font-size: 9px;
-  background: #252c32;
-  border-bottom-color: #353e45;
+  background: var(--fl-s4);
+  border-bottom-color: var(--fl-s7);
 }
 .track {
   min-height: 50px;
   background: transparent;
-  border-bottom: 1px solid #2f373e;
+  border-bottom: 1px solid var(--fl-s6);
   padding: 0 7px 0 0;
   gap: 1px;
 }
 .track.selected {
-  background: #343c43;
+  background: var(--fl-s7);
 }
 .track.selected:after {
   background: var(--accent);
@@ -349,15 +413,15 @@ button {
 }
 .channel-number {
   font-size: 9px;
-  color: #91a0aa;
+  color: var(--fl-t3);
 }
 .track-content strong {
   font-size: 11px;
-  color: #d8dfe3;
+  color: var(--fl-t1);
 }
 .track-content small {
   font-size: 9px;
-  color: #91a0aa;
+  color: var(--fl-t3);
 }
 .track-msr {
   gap: 2px;
@@ -366,8 +430,8 @@ button {
   width: 20px;
   min-height: 22px;
   border: 0;
-  background: #282f35;
-  color: #96a6b0;
+  background: var(--fl-s5);
+  color: var(--fl-t3);
   font-size: 9px;
 }
 .track-msr button.active {
@@ -388,9 +452,9 @@ button {
 }
 .part-sound {
   flex-shrink: 0;
-  border-top: 1px solid #3a444c;
+  border-top: 1px solid var(--fl-s8);
   padding: 12px 12px 8px;
-  background: #252d33;
+  background: var(--fl-s4);
 }
 .part-sound-heading {
   display: flex;
@@ -402,19 +466,19 @@ button {
 .part-sound-heading span {
   font-size: 9px;
   letter-spacing: 1px;
-  color: #95a5af;
+  color: var(--fl-t3);
 }
 .part-sound-heading strong {
   font-size: 11px;
   font-weight: 500;
-  color: #d5dee3;
+  color: var(--fl-t1);
 }
 .part-voice {
   min-height: 26px;
   display: flex;
   justify-content: space-between;
-  background: #303a42;
-  border: 1px solid #414e57;
+  background: var(--studio-tool);
+  border: 1px solid var(--fl-s9);
   font-size: 11px;
   width: 100%;
   margin-bottom: 12px;
@@ -428,14 +492,14 @@ button {
   display: block;
   margin-top: 8px;
   font-size: 9px;
-  color: #94a5b0;
+  color: var(--fl-t3);
   text-align: center;
 }
 .editor-heading {
   min-height: 38px;
   padding: 0 12px;
   flex-wrap: nowrap;
-  background: #252c32;
+  background: var(--fl-s4);
   gap: 10px;
 }
 .view-tabs {
@@ -457,11 +521,11 @@ button {
   min-height: 39px;
   padding: 4px 10px;
   gap: 8px;
-  background: #2b333a;
+  background: var(--fl-s5);
 }
 .edit-toolbar .tool-group {
   gap: 1px;
-  border-right: 1px solid #46515a;
+  border-right: 1px solid var(--fl-s9);
   padding-right: 9px;
   flex-wrap: nowrap;
 }
@@ -479,10 +543,10 @@ button {
 }
 .piano-options {
   min-height: 32px;
-  background: #232b31;
+  background: var(--fl-s4);
   padding: 3px 10px;
   gap: 12px;
-  border-bottom: 1px solid #11171b;
+  border-bottom: 1px solid var(--fl-s1);
   overflow: visible;
 }
 .piano-options label {
@@ -504,7 +568,7 @@ button {
 .editor-footnote {
   min-height: 24px;
   padding: 4px 10px;
-  border-color: #343e45;
+  border-color: var(--fl-s7);
 }
 .editor-footnote > span:first-child {
   overflow: hidden;
@@ -513,11 +577,11 @@ button {
   font-size: 9px;
 }
 .inspector {
-  background: #22292f;
-  border-left: 1px solid #10171b;
+  background: var(--fl-s4);
+  border-left: 1px solid var(--fl-s1);
 }
 .inspector-tabs {
-  background: #252d33;
+  background: var(--fl-s4);
   gap: 0;
   padding: 0 9px;
 }
@@ -527,7 +591,7 @@ button {
   border-radius: 0;
   min-height: 34px;
   background: transparent;
-  color: #a1afb9;
+  color: var(--fl-t2);
 }
 .inspector-tabs button.active {
   border-bottom-color: var(--accent);
@@ -542,15 +606,15 @@ button {
   max-height: 27px;
   flex-wrap: nowrap;
   padding: 4px 13px;
-  background: #1c2227;
-  border-top-color: #353e45;
-  color: #9baeb9;
+  background: var(--fl-s3);
+  border-top-color: var(--fl-s7);
+  color: var(--fl-t2);
 }
 .statusbar > span:nth-child(2) {
   flex: 1;
 }
 .statusbar .native-label {
-  font-size: 8px;
+  font-size: 9px;
 }
 .parameter {
   display: flex;
@@ -558,12 +622,12 @@ button {
   align-items: center;
   gap: 3px;
   min-width: 0;
-  color: #b4c1ca;
+  color: var(--fl-t2);
   user-select: none;
 }
 .parameter-label {
   font-size: 9px;
-  color: #a2b1bb;
+  color: var(--fl-t2);
   white-space: nowrap;
   line-height: 1.4;
 }
@@ -599,10 +663,10 @@ button {
 .note-effects-disclosure > summary,
 .midi-bank-details > summary {
   cursor: pointer;
-  color: #c1cfd8;
+  color: var(--fl-t1);
   font-size: 11px;
   padding: 8px 0;
-  border-top: 1px solid #46535d;
+  border-top: 1px solid var(--fl-s9);
 }
 .note-effects-disclosure .note-fx-panel h3 {
   display: none;
@@ -639,33 +703,33 @@ button {
   stroke-linecap: round;
 }
 .knob-track {
-  stroke: #46545e;
+  stroke: var(--fl-s9);
 }
 .knob-amount {
   stroke: var(--accent);
 }
 .knob-body {
-  fill: #343f48;
-  stroke: #54636e;
+  fill: var(--fl-s7);
+  stroke: var(--fl-s9);
   stroke-width: 1;
 }
 .knob-pointer {
-  stroke: #e0e9ed;
+  stroke: var(--fl-t0);
   stroke-width: 2;
   stroke-linecap: round;
 }
 .knob-center {
-  stroke: #bac8d0;
+  stroke: var(--fl-t2);
   stroke-width: 1;
 }
 .parameter-surface:hover .knob-body {
-  fill: #414f59;
+  fill: var(--fl-s9);
 }
 .parameter-value {
   font:
     10px/1.1 Consolas,
     monospace;
-  color: #d9e2e7;
+  color: var(--fl-t1);
   background: transparent;
   border: 1px solid transparent;
   min-height: 19px;
@@ -673,8 +737,8 @@ button {
   min-width: 34px;
 }
 .parameter-value:hover {
-  border-color: #61717d;
-  background: #303c45;
+  border-color: var(--fl-s9);
+  background: var(--fl-s7);
 }
 .parameter-entry {
   width: 54px;
@@ -704,8 +768,8 @@ button {
   top: 6px;
   bottom: 6px;
   border-radius: 3px;
-  background: #10171c;
-  border: 1px solid #3b4b56;
+  background: var(--fl-s1);
+  border: 1px solid var(--fl-s8);
 }
 .fader-scale {
   position: absolute;
@@ -716,13 +780,13 @@ button {
   font:
     8px Consolas,
     monospace;
-  color: #879ba8;
+  color: var(--fl-t3);
   background: repeating-linear-gradient(
     to top,
     transparent 0px,
     transparent 16px,
-    #40505b 16px,
-    #40505b 17px
+    var(--fl-s9) 16px,
+    var(--fl-s9) 17px
   );
   background-size: 12px 100%;
   background-position: 41px 0;
@@ -734,9 +798,9 @@ button {
   width: 25px;
   height: 16px;
   top: calc(6px + (1 - var(--parameter-ratio)) * 146px);
-  border: 1px solid #7e8f9b;
+  border: 1px solid var(--fl-t4);
   border-radius: 3px;
-  background: linear-gradient(#61717e, #3b4a55);
+  background: linear-gradient(var(--fl-s9), var(--fl-s8));
   box-shadow: 0 2px 4px #0008;
 }
 .fader-thumb::after {
@@ -746,11 +810,11 @@ button {
   right: 3px;
   top: 6px;
   height: 2px;
-  background: #d7e2e9;
+  background: var(--fl-t1);
 }
 .mixer {
   padding: 16px;
-  background: #1c2329;
+  background: var(--fl-s3);
 }
 .mixer-console-heading {
   display: flex;
@@ -768,10 +832,10 @@ button {
 }
 .console-banks {
   display: flex;
-  border: 1px solid #3e4c56;
+  border: 1px solid var(--fl-s8);
   border-radius: 5px;
   padding: 2px;
-  background: #242e36;
+  background: var(--fl-s5);
   gap: 2px;
 }
 .console-banks button {
@@ -794,8 +858,8 @@ button {
   grid-template-columns: repeat(3, 1fr);
   gap: 16px 10px;
   padding: 14px 0;
-  border-top: 1px solid #4b5a64;
-  border-bottom: 1px solid #4b5a64;
+  border-top: 1px solid var(--fl-s9);
+  border-bottom: 1px solid var(--fl-s9);
 }
 .piano-options > .studio-menu .studio-menu-content {
   width: 220px;
@@ -809,13 +873,13 @@ button {
 }
 .mixer-utilities {
   margin-bottom: 14px;
-  color: #a8b8c3;
+  color: var(--fl-t2);
   font-size: 11px;
 }
 .mixer-utilities > summary {
   cursor: pointer;
   padding: 7px 0;
-  border-top: 1px solid #35434d;
+  border-top: 1px solid var(--fl-s7);
 }
 .mixer-utilities-body {
   display: flex;
@@ -825,13 +889,14 @@ button {
 }
 .mixer-utilities-body fieldset {
   flex: 1 1 200px;
-  background: #26313a;
+  background: var(--fl-s5);
   border-radius: 4px;
 }
 .mixer-strips {
   align-items: stretch;
-  overflow: visible;
-  min-width: max-content;
+  overflow-x: auto;
+  overflow-y: auto;
+  min-width: 0;
   padding-top: 4px;
 }
 .mixer-strip {
@@ -839,12 +904,12 @@ button {
   min-width: 118px;
   max-width: 140px;
   padding: 14px 8px 10px;
-  background: #29333c;
-  border-left-color: #41505b;
+  background: var(--fl-s5);
+  border-left-color: var(--fl-s9);
   gap: 5px;
 }
 .mixer-strip.selected {
-  background: #333f48;
+  background: var(--fl-s7);
   box-shadow: inset 0 -2px var(--accent);
 }
 .mixer-part-name {
@@ -853,7 +918,7 @@ button {
   min-height: 23px;
   padding: 2px 3px;
   font-size: 11px;
-  color: #d8e2e8;
+  color: var(--fl-t1);
   font-weight: 600;
 }
 .mixer-strip .mixer-activity {
@@ -879,8 +944,8 @@ button {
   align-content: start;
   width: 100%;
   min-height: 92px;
-  border-top: 1px solid #44515b;
-  border-bottom: 1px solid #44515b;
+  border-top: 1px solid var(--fl-s9);
+  border-bottom: 1px solid var(--fl-s9);
   padding: 12px 0;
 }
 .mixer-bank-controls .parameter-surface {
@@ -903,7 +968,7 @@ button {
   min-height: 25px;
   padding: 4px;
   font-size: 9px;
-  background: #29343d;
+  background: var(--fl-s5);
 }
 .sustain-control button[aria-checked="true"] {
   color: #e9bd7a;
@@ -915,7 +980,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 4px;
-  color: #9fb0bc;
+  color: var(--fl-t2);
 }
 .sustain-control input {
   width: 48px;
@@ -991,16 +1056,16 @@ button {
     grid-template-columns: 190px minmax(220px, 1fr) 32px;
   }
   .transport .time-readout {
-    font-size: 21px;
-    min-width: 135px;
-    padding: 10px;
+    font-size: 12px;
+    min-width: 88px;
+    padding: 2px 6px;
   }
   .transport-timing {
-    gap: 5px;
+    gap: 4px;
   }
   .sections-strip {
     flex-wrap: nowrap;
-    gap: 8px;
+    gap: 6px;
   }
   .sections-strip nav {
     flex-basis: 0;
@@ -1012,21 +1077,91 @@ button {
     flex-wrap: wrap;
   }
 }
-@media (max-height: 760px) {
+@media (max-height: 820px) {
+  .track {
+    min-height: 42px;
+  }
+  .track-select {
+    height: 42px;
+    min-height: 42px;
+    padding: 4px 4px 4px 10px;
+  }
   .part-sound {
-    padding-top: 8px;
+    padding: 8px 10px 6px;
+  }
+  .part-sound-heading {
+    margin-bottom: 6px;
   }
   .part-voice {
     margin-bottom: 8px;
   }
-  .track {
-    min-height: 45px;
-  }
   .parameter-fader .parameter-surface {
-    height: 150px;
+    height: 118px;
+    margin: 4px 0 0;
   }
   .parameter-fader .fader-thumb {
-    top: calc(6px + (1 - var(--parameter-ratio)) * 122px);
+    top: calc(6px + (1 - var(--parameter-ratio)) * 90px);
+  }
+  .mixer-bank-controls {
+    min-height: 68px;
+    padding: 6px 0;
+    gap: 6px 4px;
+  }
+  .mixer-strip {
+    padding: 6px 5px 6px;
+    gap: 2px;
+  }
+  .mixer-strip > fieldset.console-controls {
+    gap: 6px;
+  }
+  .mixer-utilities-body {
+    gap: 8px;
+    padding-top: 4px;
+  }
+}
+@media (max-height: 760px) {
+  .part-sound {
+    padding-top: 6px;
+  }
+  .part-voice {
+    margin-bottom: 6px;
+  }
+  .track {
+    min-height: 38px;
+  }
+  .track-select {
+    height: 38px;
+    min-height: 38px;
+    padding: 2px 4px 2px 10px;
+  }
+  .parameter-fader .parameter-surface {
+    height: 56px;
+  }
+  .parameter-fader .fader-thumb {
+    top: calc(6px + (1 - var(--parameter-ratio)) * 28px);
+  }
+  .mixer-bank-controls {
+    min-height: 48px;
+    padding: 2px 0;
+  }
+  .mixer-bank-controls .parameter-surface {
+    width: 28px;
+    height: 28px;
+  }
+  .mixer-console-heading {
+    margin-bottom: 2px;
+  }
+  .mixer-scope {
+    margin-bottom: 2px;
+  }
+  .mixer {
+    padding: 8px 10px 6px;
+  }
+  .mixer-utilities {
+    margin-bottom: 6px;
+  }
+  .mixer-utilities > summary {
+    padding: 2px 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1058,9 +1193,9 @@ button {
   z-index: 60;
   width: 320px;
   max-width: calc(100vw - 16px);
-  background: #303a42;
-  color: #d9e1e6;
-  border: 1px solid #626e77;
+  background: var(--studio-tool);
+  color: var(--fl-t1);
+  border: 1px solid var(--studio-tool-border);
   border-radius: 3px;
   box-shadow: 0 6px 18px #0007;
   padding: 0;
@@ -1071,8 +1206,8 @@ button {
   display: flex;
   align-items: center;
   height: 29px;
-  background: #454f58;
-  border-bottom: 1px solid #222a31;
+  background: var(--studio-tool-title);
+  border-bottom: 1px solid var(--fl-s4);
   padding: 0 3px 0 0;
 }
 .note-utility-titlebar button {
@@ -1091,7 +1226,7 @@ button {
   cursor: grab;
   touch-action: none;
   font-size: 11px;
-  color: #e3e8eb;
+  color: var(--fl-t0);
   font-weight: 500;
 }
 .note-utility-drag:active {
@@ -1116,8 +1251,8 @@ button {
   align-items: center;
   padding: 6px 10px;
   font-size: 9px;
-  color: #a6b4be;
-  border-bottom: 1px solid #45515b;
+  color: var(--fl-t2);
+  border-bottom: 1px solid var(--fl-s9);
 }
 .note-utility-context label {
   display: flex;
@@ -1129,7 +1264,7 @@ button {
   padding: 0;
   border: 0;
   background: transparent;
-  color: #bac6cf;
+  color: var(--fl-t2);
   font:
     9px Consolas,
     monospace;
@@ -1152,26 +1287,26 @@ button {
   align-items: center;
   gap: 7px;
   font-size: 11px;
-  color: #c0ccd4;
+  color: var(--fl-t1);
 }
 .note-utility-pitch select {
   width: 100%;
   min-height: 25px;
   padding: 3px 5px;
-  background: #242e35;
+  background: var(--fl-s5);
   font:
     11px Consolas,
     monospace;
-  border: 1px solid #5d6b76;
+  border: 1px solid var(--fl-s9);
 }
 .note-utility-readout input {
   min-width: 0;
   width: 100%;
   height: 29px;
   padding: 3px 7px;
-  background: #1c262e;
+  background: var(--fl-s4);
   color: #edcc96;
-  border: 1px solid #536573;
+  border: 1px solid var(--fl-s9);
   border-radius: 2px;
   text-align: right;
   font:
@@ -1182,7 +1317,7 @@ button {
 }
 .note-utility-units {
   font-size: 8px;
-  color: #a0b0bc;
+  color: var(--fl-t2);
   text-align: right;
   white-space: nowrap;
 }
@@ -1190,7 +1325,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-left: 1px solid #46535d;
+  border-left: 1px solid var(--fl-s9);
   padding-left: 7px;
 }
 .note-utility-level .parameter-surface {
@@ -1210,8 +1345,8 @@ button {
   align-items: center;
   gap: 5px;
   padding: 7px 9px;
-  border-top: 1px solid #45515b;
-  background: #2b353d;
+  border-top: 1px solid var(--fl-s9);
+  background: var(--fl-s6);
 }
 .note-utility-actions button {
   min-height: 25px;
@@ -1219,8 +1354,8 @@ button {
   padding: 3px 8px;
   font-size: 10px;
   border-radius: 3px;
-  border: 1px solid #596974;
-  background: #35424b;
+  border: 1px solid var(--fl-s9);
+  background: var(--fl-s7);
 }
 .note-utility-actions .note-utility-accept {
   color: #edc991;
@@ -1228,7 +1363,7 @@ button {
   border-color: #8f7854;
 }
 .note-utility-actions button:hover {
-  background: #485966;
+  background: var(--fl-s9);
 }
 .note-utility-error {
   color: #ffc093;
@@ -1245,8 +1380,8 @@ button {
   max-width: calc(100vw - 16px);
   max-height: calc(100dvh - 16px);
   overflow: hidden;
-  background: #303a42;
-  border: 1px solid #626e77;
+  background: var(--studio-tool);
+  border: 1px solid var(--studio-tool-border);
   border-radius: 3px;
   box-shadow: 0 6px 18px #0007;
 }
@@ -1304,7 +1439,7 @@ button {
   grid-column: 1/-1;
   font-size: 10px;
   line-height: 1.5;
-  color: #b4c3cc;
+  color: var(--fl-t2);
 }
 .piano-tools-content button {
   font-size: 11px;
@@ -1313,18 +1448,18 @@ button {
   justify-self: start;
 }
 .tool-window-help {
-  border-top: 1px solid #53626e;
+  border-top: 1px solid var(--fl-s9);
   padding-top: 8px;
 }
 .tool-window-help summary {
   cursor: pointer;
   font-size: 10px;
-  color: #adbeca;
+  color: var(--fl-t2);
 }
 .tool-window-help small {
   display: block;
   margin-top: 8px;
-  color: #b7c5cf;
+  color: var(--fl-t2);
   font-size: 10px;
   line-height: 1.5;
 }
@@ -1352,7 +1487,7 @@ button {
 .midi-connection-content > .field > span {
   margin: 0;
   font-size: 10px;
-  color: #b1c0c9;
+  color: var(--fl-t2);
 }
 .midi-connection-content select {
   min-height: 26px;
@@ -1366,7 +1501,7 @@ button {
 .midi-connection-content .section-with-help {
   margin: 6px 0 0;
   padding-top: 8px;
-  border-top: 1px solid #4a5964;
+  border-top: 1px solid var(--fl-s9);
   width: 100%;
   gap: 5px;
 }
@@ -1435,7 +1570,7 @@ button {
     monospace;
   border-radius: 3px;
   overflow: auto;
-  background: #222d35;
+  background: var(--fl-s4);
   margin: 0;
 }
 .midi-connection-content .midi-capture-heading > button {
@@ -1451,9 +1586,9 @@ button {
   font-size: 9px;
 }
 .midi-connection-content .midi-routing-help {
-  border-top: 1px solid #43525c;
+  border-top: 1px solid var(--fl-s9);
   padding-top: 5px;
-  color: #a7bac7;
+  color: var(--fl-t2);
   font-size: 9px;
 }
 .midi-routing-help summary {
@@ -1468,14 +1603,14 @@ button {
   margin: 2px 0 0;
   padding-top: 6px;
   gap: 6px;
-  border-top: 1px solid #43525c;
+  border-top: 1px solid var(--fl-s9);
 }
 .midi-connection-content .modal-actions button {
   min-height: 27px;
 }
 
 .voice-catalog-tools {
-  color: #a7bac7;
+  color: var(--fl-t2);
   font-size: 11px;
   margin-bottom: 8px;
 }
@@ -1500,7 +1635,7 @@ button {
 .voice-picker-window .voice-search { margin: 8px 0; }
 .voice-picker-window .voice-search input { min-height: 28px; }
 .voice-browser-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
-.voice-browser-filters label { display: grid; gap: 3px; font-size: 10px; color: #a7bac7; }
+.voice-browser-filters label { display: grid; gap: 3px; font-size: 10px; color: var(--fl-t2); }
 .voice-browser-filters select { width: 100%; min-height: 27px; font-size: 11px; }
 .voice-page-controls { display: flex; justify-content: space-between; margin: 7px 0; }
 .voice-picker-window button { font-size: 11px; }

@@ -1,3 +1,4 @@
+import { restoreEditorFocus } from "./modal";
 import { useEffect, useRef, useState } from "react";
 import type { Section, View } from "./contracts";
 import { trapModalFocus } from "./modal";
@@ -35,7 +36,7 @@ export function CopyMaterial({
   useEffect(() => {
     const prior = document.activeElement as HTMLElement | null;
     dialog.current?.querySelector<HTMLElement>("button")?.focus();
-    return () => prior?.focus();
+    return () => restoreEditorFocus(prior);
   }, []);
 
   const dismiss = () => {

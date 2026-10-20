@@ -201,7 +201,7 @@ it("shows unchanged note comparison and traps focus without triggering backgroun
   apply().focus();
   fireEvent.keyDown(apply(), { key: "Tab" });
   expect(document.activeElement).toBe(
-    screen.getByRole("button", { name: "Export phrase MIDI…" }),
+    screen.getByRole("checkbox", { name: "Entire section (all source channels)" }),
   );
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
   expect(close).toHaveBeenCalledOnce();

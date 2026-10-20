@@ -1,3 +1,4 @@
+import { restoreEditorFocus } from "./modal";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Section, View } from "./contracts";
 import { trapModalFocus } from "./modal";
@@ -49,7 +50,7 @@ export function SectionLength({
   useEffect(() => {
     const prior = document.activeElement as HTMLElement | null;
     dialog.current?.querySelector<HTMLElement>("button")?.focus();
-    return () => prior?.focus();
+    return () => restoreEditorFocus(prior);
   }, []);
 
   const maxBars = mode === "fillBreak" ? 8 : Math.max(1, currentBars - 1);

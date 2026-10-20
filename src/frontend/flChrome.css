@@ -1,0 +1,1102 @@
+/* FL Studio compliance layer.
+   Every rule below traces to a measurement or interaction recorded on the running FL Studio
+   25.1.1.4879 in docs/development/fl-compliance/rea-2026-10-20 (COMPLIANCE-2026-10-20.md).
+   Imported after styles.css and studio.css so shared tokens decide the final chrome. */
+
+/* E1 chrome hierarchy: FL chrome strips (captions, toolbars) are lighter than the content
+   wells (grid, inputs, lanes). Caption #434c51, toolbar #3e464b, wells #131c21..#1c262b. */
+.titlebar {
+  background: var(--fl-s7);
+  border-bottom: 1px solid var(--fl-s1);
+}
+.toolbar {
+  background: var(--fl-s6);
+  border-bottom: 1px solid var(--fl-s1);
+}
+.statusbar {
+  background: var(--fl-s6);
+  border-top: 1px solid var(--fl-s1);
+  color: var(--fl-t2);
+}
+.inspector-tabs,
+.lane-toolbar,
+.piano-options {
+  background: var(--fl-s6);
+}
+
+/* E2 hint bar: a persistent, separate panel that names the control under the pointer or
+   keyboard focus, with its shortcut right-aligned and an optional live value. */
+.statusbar .hint-bar {
+  flex: 0 0 min(34vw, 340px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 19px;
+  padding: 0 8px;
+  background: var(--fl-s1);
+  border: 1px solid var(--fl-s0);
+  border-radius: var(--studio-radius);
+  color: var(--fl-t1);
+  font-size: 11px;
+  overflow: hidden;
+}
+.statusbar .hint-bar[data-empty] .hint-name {
+  color: var(--fl-t4);
+}
+.statusbar .hint-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.statusbar .hint-value {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-family: var(--mono);
+}
+.statusbar .hint-shortcut {
+  flex: 0 0 auto;
+  color: var(--fl-t3);
+  font: inherit;
+}
+/* The status message is now the third child; keep the connection dot at its own width. */
+.statusbar > span:nth-child(2) {
+  flex: 0 0 auto;
+}
+.statusbar > span:nth-child(3) {
+  flex: 1;
+}
+
+/* E3 menu popups: flat light surface, 1px dark border, square corners, compact rows,
+   dark text, disabled rows muted (measured on File/Options/context menus). */
+.studio-menu-content {
+  background: var(--fl-menu);
+  color: var(--fl-menu-text);
+  border: 1px solid var(--fl-s0);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 rgb(0 0 0 / 0.35);
+}
+.studio-menu-content > button,
+.titlebar .studio-menu-content > button {
+  border-radius: 0;
+  background: transparent;
+  color: var(--fl-menu-text);
+}
+.studio-menu-content > button:hover,
+.studio-menu-content > button:focus-visible {
+  background: var(--fl-s7);
+  color: var(--fl-t0);
+}
+.studio-menu-content > button:disabled {
+  color: var(--fl-menu-disabled);
+}
+
+/* E3 menu rows: compact, label left, shortcut right-aligned, group bands as full-width
+   darker strips (FL "System" / "Project" / "Recent projects" bands, #929da4 on #bbc3c8). */
+.studio-menu-content {
+  gap: 0;
+  padding: 2px 0;
+  width: 250px;
+}
+.studio-menu-content > button,
+.titlebar .studio-menu-content > button {
+  min-height: 24px;
+  padding: 2px 10px;
+  gap: 8px;
+}
+.studio-menu-content > button svg {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+.studio-menu-content > .icon-button::after {
+  content: none;
+}
+.icon-button > .menu-label,
+.icon-button > .menu-shortcut {
+  display: none;
+}
+.studio-menu-content > .icon-button > .menu-label {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: normal;
+}
+.studio-menu-content > .icon-button > .menu-shortcut {
+  display: block;
+  flex: 0 0 auto;
+  margin-left: 12px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fl-s3);
+}
+.studio-menu-content > button:hover > .menu-shortcut,
+.studio-menu-content > button:focus-visible > .menu-shortcut {
+  color: var(--fl-t2);
+}
+.studio-menu-content > button:disabled > .menu-shortcut {
+  color: var(--fl-menu-disabled);
+}
+.studio-menu-content > .menu-group {
+  margin: 2px 0;
+  padding: 1px 10px;
+  background: var(--fl-menu-band);
+  color: var(--fl-s1);
+  font-size: 10.5px;
+  line-height: 15px;
+}
+.studio-menu-content > .menu-group:first-child {
+  margin-top: 0;
+}
+
+/* Menu text scope: the menu surface is light, so text tokens flip to dark inside it, while
+   form wells (selects, inputs, swatches) keep the light-on-dark ramp they were authored with. */
+.studio-menu-content {
+  --fl-t0: #0a1114;
+  --fl-t1: #11181c;
+  --fl-t2: #26323a;
+  --fl-t3: #3b4851;
+  --fl-t4: #55636b;
+  --muted: #3b4851;
+  color: var(--fl-menu-text);
+}
+.studio-menu-content :is(select, input:not([type="range"]), textarea, .parameter) {
+  --fl-t0: #eef2f4;
+  --fl-t1: #d3d8dc;
+  --fl-t2: #aab4ba;
+  --fl-t3: #8a979e;
+  --fl-t4: #6d7a81;
+}
+.studio-menu-content :is(select, input:not([type="range"]), textarea) {
+  color: var(--fl-t1);
+}
+/* Long labels wrap inside the 250px menu instead of clipping ("MIDI control: this process"). */
+.studio-menu-content > :not(button):not(.menu-group) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* Note-color popover follows the same flat light surface as every other menu. */
+.note-colors-menu > .studio-menu-content {
+  background: var(--fl-menu);
+  border-color: var(--fl-s0);
+}
+.studio-menu-content > .midi-owner-btn {
+  white-space: normal;
+  overflow: visible;
+  text-align: left;
+  justify-content: flex-start;
+  height: auto;
+}
+
+/* Errors replace the hint text in the hint bar (no separate banner) and widen it, graded by tone:
+   red for a rejected action. */
+.statusbar .hint-bar[data-tone] {
+  flex: 1 1 auto;
+  max-width: 62vw;
+}
+.statusbar .hint-bar[data-tone="error"] {
+  background: #5a2824;
+  border-color: #2e0f0d;
+  color: #ffe3dd;
+}
+.statusbar .hint-bar[data-tone="error"] .hint-name {
+  white-space: normal;
+  line-height: 1.1;
+  max-height: 17px;
+}
+.statusbar .hint-dismiss {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 15px;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+}
+.statusbar .hint-dismiss:hover {
+  background: rgb(255 255 255 / 0.16);
+}
+
+/* The inspector only scrolls vertically; it never shows a horizontal scroll bar. */
+.inspector-body,
+.inspector {
+  overflow-x: hidden;
+}
+
+/* Style parts as an FL channel rack (rea-2026-10-20/fl-f11 rack crop): per row a green LED,
+   a recessed number box, a wide raised name button and a slim selection slot that outlines in
+   lime when the channel is selected. Part colour survives as the slot's inner stripe. */
+.tracks {
+  background: var(--fl-s7);
+}
+.tracks .track-list {
+  padding: 4px 0;
+  overflow-x: hidden;
+}
+.tracks .track {
+  min-height: 34px;
+  gap: 4px;
+  padding: 2px 6px 2px 8px;
+  background: transparent;
+  border-bottom: 0;
+}
+.tracks .track:hover,
+.tracks .track.selected,
+.tracks .track.armed-track {
+  background: transparent;
+}
+.tracks .track.selected:after {
+  display: none;
+}
+.tracks .track-select {
+  display: grid;
+  grid-template-columns: 11px 26px minmax(0, 1fr) 7px;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+}
+.tracks .track-led {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #d8ffa0, #7ed321 55%, #2f6a0c);
+  border: 1px solid #1d2f10;
+  box-shadow: 0 0 4px rgb(126 211 33 / 0.55);
+}
+.tracks .track.muted-track .track-led {
+  background: #2f3a3d;
+  border-color: #1d2428;
+  box-shadow: none;
+}
+.tracks .track.armed-track .track-led {
+  background: radial-gradient(circle at 40% 35%, #ffb0a8, #ee4f4c 55%, #7a1816);
+  border-color: #3a0f0e;
+  box-shadow: 0 0 4px rgb(238 79 76 / 0.6);
+}
+.tracks .channel-number {
+  display: grid;
+  place-items: center;
+  height: 26px;
+  background: var(--fl-s5);
+  border: 1px solid var(--fl-s2);
+  border-radius: 5px;
+  color: var(--fl-t1);
+  font: 300 15px/1 "Segoe UI", system-ui, sans-serif;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.3);
+}
+.tracks .track-content {
+  position: relative;
+  justify-content: center;
+  align-items: center;
+  gap: 0;
+  height: 28px;
+  padding: 0 4px;
+  background: linear-gradient(#5b656b, #535c62 50%, #4a5359);
+  border: 1px solid #262e33;
+  border-radius: 3px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1);
+  text-align: center;
+}
+.tracks .track-select:hover .track-content {
+  background: linear-gradient(#657077, #5c666c 50%, #525b61);
+}
+.tracks .track.selected .track-content {
+  background: linear-gradient(#3f474c, #3a4247 50%, #343c41);
+}
+.tracks .track-content strong {
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 1.1;
+  color: var(--fl-t0);
+}
+.tracks .track-content small {
+  max-width: 100%;
+  font-size: 8.5px;
+  line-height: 1.1;
+  color: var(--fl-t3);
+}
+.tracks .track.muted-track .track-content {
+  opacity: 0.6;
+}
+.tracks .track-stripe {
+  width: 6px;
+  height: 26px;
+  margin: 0;
+  border: 1px solid #1d2428;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.35);
+  opacity: 0.55;
+}
+.tracks .track.selected .track-stripe {
+  opacity: 1;
+  border-color: #b6ff3c;
+  box-shadow: 0 0 0 1px #b6ff3c;
+}
+.tracks .track-msr {
+  gap: 2px;
+}
+.tracks .track-msr button {
+  width: 18px;
+  height: 20px;
+  min-height: 0;
+  background: linear-gradient(#4d565b, #464f54);
+  border: 1px solid #262e33;
+  border-radius: 2px;
+  color: var(--fl-t2);
+  font-size: 9px;
+}
+.tracks .track-msr button.active {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+  border-color: #c35216;
+  color: var(--fl-lit-text);
+}
+
+/* Relaxed Style parts: a Yamaha Style has eight fixed parts, so each gets a roomy card. The name
+   is larger, a note-density strip shows where the part plays across the section, and the
+   channel number, LED and M/S/R buttons keep the FL channel-rack look. */
+.tracks .track {
+  min-height: 62px;
+  padding: 4px 8px 4px 10px;
+  gap: 6px;
+}
+.tracks .track-select {
+  grid-template-columns: 12px 34px minmax(0, 1fr) 8px;
+  gap: 7px;
+  height: 54px;
+  min-height: 54px;
+}
+.tracks .track-led {
+  width: 11px;
+  height: 11px;
+}
+.tracks .channel-number {
+  height: 42px;
+  border-radius: 6px;
+  font-size: 17px;
+}
+.tracks .track-content {
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 2px;
+  height: 54px;
+  padding: 6px 8px 5px;
+  text-align: left;
+  border-radius: 4px;
+}
+.tracks .track-content strong {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.tracks .track-content small {
+  font-size: 9.5px;
+}
+.tracks .part-activity {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 11px;
+}
+.tracks .part-activity i {
+  flex: 1 1 0;
+  min-width: 0;
+  background: rgb(0 0 0 / 0.28);
+  border-radius: 1px;
+}
+.tracks .part-activity i.on {
+  background: var(--fl-t3);
+}
+.tracks .track.selected .part-activity i.on {
+  background: #f6a04a;
+}
+.tracks .track.muted-track .part-activity i.on {
+  background: var(--fl-t4);
+  opacity: 0.5;
+}
+.tracks .track-stripe {
+  width: 8px;
+  height: 54px;
+}
+.tracks .track-msr {
+  flex-direction: column;
+  gap: 2px;
+}
+.tracks .track-msr button {
+  width: 22px;
+  height: 16px;
+  font-size: 9px;
+  line-height: 1;
+}
+
+/* Calm part numbers: a flat quiet label, not a lit block. */
+.tracks .track-select {
+  grid-template-columns: 9px 24px minmax(0, 1fr) 8px;
+  gap: 6px;
+}
+.tracks .channel-number {
+  height: 22px;
+  background: var(--fl-s6);
+  border: 1px solid var(--fl-s5);
+  border-radius: 3px;
+  box-shadow: none;
+  color: var(--fl-t3);
+  font: 400 11px/1 Consolas, monospace;
+  letter-spacing: 0;
+}
+.tracks .track.selected .channel-number {
+  color: var(--fl-t1);
+}
+.tracks .track-led {
+  width: 8px;
+  height: 8px;
+  box-shadow: none;
+}
+.tracks .track.armed-track .track-led {
+  box-shadow: none;
+}
+
+/* One attached component: number, name and part stripe are fused into a single bar with shared
+   hairline dividers and one set of rounded outer corners; the LED sits just before it. */
+.tracks .track-select {
+  grid-template-columns: 8px 28px minmax(0, 1fr) 9px;
+  gap: 0;
+  height: 54px;
+}
+.tracks .track-led {
+  margin-right: 8px;
+}
+.tracks .channel-number {
+  height: 54px;
+  border: 1px solid #262e33;
+  border-radius: 4px 0 0 4px;
+  background: linear-gradient(#3b4348, #343c41);
+  box-shadow: none;
+}
+.tracks .track-content {
+  height: 54px;
+  margin-left: -1px;
+  border-radius: 0;
+}
+.tracks .track-stripe {
+  position: static;
+  width: 9px;
+  height: 54px;
+  margin-left: -1px;
+  border: 1px solid #262e33;
+  border-radius: 0 4px 4px 0;
+  box-shadow: inset 0 0 0 2px #3a4247;
+  opacity: 1;
+}
+.tracks .track.selected .track-stripe {
+  border-color: #b6ff3c;
+  box-shadow: inset 0 0 0 2px #3a4247, 0 0 0 1px #b6ff3c;
+}
+.tracks .track.selected .track-content {
+  border-color: #b6ff3c;
+  border-left-color: #262e33;
+  border-right-color: #b6ff3c;
+}
+.tracks .track.selected .channel-number {
+  border-color: #b6ff3c;
+}
+
+/* LED under the number, inside the attached component's number segment. */
+.tracks .track-select {
+  position: relative;
+  grid-template-columns: 30px minmax(0, 1fr) 9px;
+}
+.tracks .track-led {
+  position: absolute;
+  left: 11px;
+  bottom: 9px;
+  margin: 0;
+  z-index: 1;
+}
+.tracks .channel-number {
+  align-items: start;
+  padding-top: 12px;
+  box-sizing: border-box;
+}
+
+/* Each part switch lights in its own colour: Mute blue, Solo yellow, Record red. */
+.tracks .track-msr button.active {
+  color: #fff;
+}
+.tracks .track-msr button[aria-label^="Mute"].active {
+  background: linear-gradient(#5b95c9, #3f719d 55%, #34628b);
+  border-color: #162b42;
+  box-shadow: 0 0 5px rgb(91 149 201 / 0.55);
+}
+.tracks .track-msr button[aria-label^="Solo"].active {
+  background: linear-gradient(#ffe27a, #f2c230 55%, #d9a514);
+  border-color: #7a5a06;
+  color: #3a2a00;
+  box-shadow: 0 0 5px rgb(242 194 48 / 0.55);
+}
+.tracks .track-msr button[aria-label^="Arm"].active {
+  background: linear-gradient(#ff7a74, #e8403a 55%, #c22a25);
+  border-color: #5c0f0c;
+  box-shadow: 0 0 6px rgb(238 79 76 / 0.65);
+}
+
+/* Selected part: no green outline. The whole bar sits pressed-in (darker face, brighter text)
+   with a neutral light edge. */
+.tracks .track.selected .channel-number,
+.tracks .track.selected .track-content,
+.tracks .track.selected .track-stripe {
+  border-color: #7d8a92;
+  box-shadow: none;
+}
+.tracks .track.selected .track-content {
+  border-left-color: #262e33;
+  border-right-color: #7d8a92;
+  background: linear-gradient(#323a3f, #2d3539 55%, #293136);
+}
+.tracks .track.selected .channel-number {
+  background: linear-gradient(#2f373c, #2a3236);
+  color: var(--fl-t0);
+}
+.tracks .track.selected .track-stripe {
+  box-shadow: inset 0 0 0 2px #2d3539;
+}
+.tracks .track.selected .track-content strong {
+  color: #fff;
+}
+
+/* ---- Fixes from review screenshots ---- */
+
+/* Focus and selection: no yellow ring. Keyboard focus gets a quiet neutral hairline. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+.sections-strip .section-chip:focus-visible,
+.app .toolbar .icon-button:focus-visible,
+.app .transport .icon-button:focus-visible,
+.titlebar .wc-btn:focus-visible,
+.parameter-surface:focus-visible {
+  outline: 1px solid rgb(190 205 212 / 0.6);
+  outline-offset: -1px;
+}
+button.active:not(.icon-button):not(.section-chip):not(.primary):not(.midi-owner-btn) {
+  background: var(--fl-s7);
+  border-color: #6b777e;
+  color: var(--fl-t0);
+}
+
+/* Dark drop-down lists to match the dark wells. */
+select {
+  color-scheme: dark;
+}
+select option {
+  background: var(--fl-s2);
+  color: var(--fl-t0);
+}
+
+/* Text buttons in a dialog caption (Chord preview "Close") size to their label. */
+.modal > .modal-title > button,
+.modal > .modal-header > button {
+  width: auto;
+  min-width: 22px;
+  padding: 0 7px;
+}
+
+/* MIDI level inside the Playback options menu: label, readout and a dark LED well. */
+.studio-menu-content .midi-level {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 10px 4px;
+  padding: 4px 0 0;
+  border-left: 0;
+  border-top: 1px solid var(--fl-menu-border, #8d989e);
+}
+.studio-menu-content .midi-level-label {
+  display: inline;
+  font-size: 11px;
+  letter-spacing: 0;
+  color: var(--fl-menu-text);
+}
+.studio-menu-content .midi-level-pct {
+  min-width: 2.4rem;
+  color: var(--fl-menu-text);
+  text-align: right;
+}
+.studio-menu-content .midi-level-track {
+  flex: 1;
+  width: auto;
+  height: 8px;
+  padding: 1px;
+  background: #1e272c;
+  border: 1px solid #0f1518;
+}
+
+/* Studio menu: MIDI owner toggle reads as a menu row, the MIDI-in lamp as its leading dot. */
+.studio-menu-content .midi-in-light {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 8px 6px 8px 12px;
+}
+.studio-menu-content .midi-owner-btn,
+.studio-menu-content .midi-owner-btn.active {
+  display: inline-block;
+  vertical-align: middle;
+  width: auto;
+  max-width: calc(100% - 40px);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--fl-menu-text);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.studio-menu-content .midi-owner-btn.active::after {
+  content: " ●";
+  color: #4a9a28;
+}
+
+/* ---- Quantize console ---- */
+.advanced-quantize {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.advanced-quantize .aq-box {
+  min-width: 0;
+  margin: 0;
+  padding: 0 8px 8px;
+  background: var(--fl-s4);
+  border: 1px solid var(--fl-s1);
+  border-radius: 0;
+}
+.advanced-quantize .aq-box > legend {
+  float: left;
+  box-sizing: border-box;
+  width: calc(100% + 16px);
+  margin: 0 -8px 7px;
+  padding: 3px 8px;
+  background: var(--fl-s3);
+  border-bottom: 1px solid var(--fl-s1);
+  color: var(--fl-t2);
+  font-size: 10.5px;
+}
+.advanced-quantize .aq-box > legend + * {
+  clear: both;
+}
+.quantize-preview {
+  display: block;
+  width: 100%;
+  height: 56px;
+  margin-bottom: 7px;
+  background: var(--fl-s2);
+  border: 1px solid var(--fl-s1);
+}
+.quantize-preview .qp-grid {
+  stroke: #46555c;
+  stroke-width: 1;
+}
+.quantize-preview .qp-beat {
+  stroke: #7d8f97;
+  stroke-width: 1.5;
+}
+.quantize-preview .qp-link {
+  stroke: #8b6a3c;
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+.quantize-preview .qp-raw {
+  fill: var(--fl-s2);
+  stroke: #9fb0b8;
+  stroke-width: 1.2;
+}
+.quantize-preview .qp-snap {
+  fill: #f6a04a;
+  stroke: #c35216;
+  stroke-width: 1;
+}
+.advanced-quantize .aq-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.advanced-quantize .aq-row:has(.aq-narrow) {
+  grid-template-columns: minmax(0, 1fr) 82px;
+}
+.advanced-quantize .aq-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  color: var(--fl-t2);
+  font-size: 10.5px;
+}
+.advanced-quantize .aq-field select {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  background: var(--fl-s1);
+  border: 1px solid var(--fl-s0);
+  border-radius: 2px;
+  color: var(--fl-t1);
+  font-size: 11px;
+}
+.advanced-quantize .aq-toggles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 8px;
+}
+.advanced-quantize .aq-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 2px;
+  color: var(--fl-t1);
+  font-size: 11px;
+  cursor: pointer;
+}
+.advanced-quantize .aq-toggle input {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  background: var(--fl-s1);
+  border: 1px solid var(--fl-s0);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px var(--fl-s4);
+}
+.advanced-quantize .aq-toggle input:checked {
+  background: radial-gradient(circle at 40% 35%, #ffe2b0, #f6a04a 55%, #b9621f);
+}
+.advanced-quantize .aq-toggle input:disabled,
+.advanced-quantize .aq-toggle input:disabled + span {
+  opacity: 0.5;
+}
+.advanced-quantize .quantize-knobs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px 0 0;
+  border: 0;
+}
+.advanced-quantize .aq-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.advanced-quantize .aq-actions .aq-toggle {
+  margin: 0 auto 0 0;
+}
+.advanced-quantize .aq-actions button {
+  min-height: 24px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+.advanced-quantize .aq-apply {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+  border-color: #c35216;
+  color: var(--fl-lit-text);
+}
+.advanced-quantize .aq-apply:disabled {
+  background: var(--fl-s5);
+  border-color: var(--fl-s2);
+  color: var(--fl-t4);
+}
+.advanced-quantize > small {
+  color: var(--fl-t3);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+/* Quantize console, repeated under the tool window scope to win over its generic label rules. */
+.piano-tools-content .advanced-quantize {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.piano-tools-content .advanced-quantize .aq-box {
+  min-width: 0;
+  margin: 0;
+  padding: 0 8px 8px;
+  background: var(--fl-s4);
+  border: 1px solid var(--fl-s1);
+  border-radius: 0;
+}
+.piano-tools-content .advanced-quantize .aq-box > legend {
+  float: left;
+  box-sizing: border-box;
+  width: calc(100% + 16px);
+  margin: 0 -8px 7px;
+  padding: 3px 8px;
+  background: var(--fl-s3);
+  border-bottom: 1px solid var(--fl-s1);
+  color: var(--fl-t2);
+  font-size: 10.5px;
+}
+.piano-tools-content .advanced-quantize .aq-box > legend + * {
+  clear: both;
+}
+.quantize-preview {
+  display: block;
+  width: 100%;
+  height: 56px;
+  margin-bottom: 7px;
+  background: var(--fl-s2);
+  border: 1px solid var(--fl-s1);
+}
+.quantize-preview .qp-grid {
+  stroke: #46555c;
+  stroke-width: 1;
+}
+.quantize-preview .qp-beat {
+  stroke: #7d8f97;
+  stroke-width: 1.5;
+}
+.quantize-preview .qp-link {
+  stroke: #8b6a3c;
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+.quantize-preview .qp-raw {
+  fill: var(--fl-s2);
+  stroke: #9fb0b8;
+  stroke-width: 1.2;
+}
+.quantize-preview .qp-snap {
+  fill: #f6a04a;
+  stroke: #c35216;
+  stroke-width: 1;
+}
+.piano-tools-content .advanced-quantize .aq-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.piano-tools-content .advanced-quantize .aq-row:has(.aq-narrow) {
+  grid-template-columns: minmax(0, 1fr) 82px;
+}
+.piano-tools-content .advanced-quantize .aq-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  color: var(--fl-t2);
+  font-size: 10.5px;
+}
+.piano-tools-content .advanced-quantize .aq-field select {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  background: var(--fl-s1);
+  border: 1px solid var(--fl-s0);
+  border-radius: 2px;
+  color: var(--fl-t1);
+  font-size: 11px;
+}
+.piano-tools-content .advanced-quantize .aq-toggles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 8px;
+}
+.piano-tools-content .advanced-quantize .aq-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 2px;
+  color: var(--fl-t1);
+  font-size: 11px;
+  cursor: pointer;
+}
+.piano-tools-content .advanced-quantize .aq-toggle input {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  background: var(--fl-s1);
+  border: 1px solid var(--fl-s0);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px var(--fl-s4);
+}
+.piano-tools-content .advanced-quantize .aq-toggle input:checked {
+  background: radial-gradient(circle at 40% 35%, #ffe2b0, #f6a04a 55%, #b9621f);
+}
+.piano-tools-content .advanced-quantize .aq-toggle input:disabled,
+.piano-tools-content .advanced-quantize .aq-toggle input:disabled + span {
+  opacity: 0.5;
+}
+.piano-tools-content .advanced-quantize .quantize-knobs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px 0 0;
+  border: 0;
+}
+.piano-tools-content .advanced-quantize .aq-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.piano-tools-content .advanced-quantize .aq-actions .aq-toggle {
+  margin: 0 auto 0 0;
+}
+.piano-tools-content .advanced-quantize .aq-actions button {
+  min-height: 24px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+.piano-tools-content .advanced-quantize .aq-apply {
+  background: radial-gradient(ellipse at 50% 55%, #fff2b8, #ffd27f 58%, #f6a04a);
+  border-color: #c35216;
+  color: var(--fl-lit-text);
+}
+.piano-tools-content .advanced-quantize .aq-apply:disabled {
+  background: var(--fl-s5);
+  border-color: var(--fl-s2);
+  color: var(--fl-t4);
+}
+.piano-tools-content .advanced-quantize > small {
+  color: var(--fl-t3);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.piano-tools-content .advanced-quantize label {
+  justify-content: flex-start;
+}
+.piano-tools-content .advanced-quantize .aq-field {
+  justify-content: flex-start;
+}
+.piano-tools-content .advanced-quantize button {
+  color: var(--fl-t1);
+}
+.piano-tools-content .advanced-quantize .aq-apply {
+  color: var(--fl-lit-text);
+}
+.piano-tools-content > button {
+  color: var(--fl-t1);
+}
+.piano-tools-content > select {
+  width: 100%;
+}
+.piano-tools-content .advanced-quantize .aq-field,
+.piano-tools-content .advanced-quantize .aq-field > span {
+  text-align: left;
+  align-items: stretch;
+}
+.titlebar .studio-menu-content .midi-owner-btn,
+.titlebar .studio-menu-content .midi-owner-btn.active,
+.titlebar .studio-menu-content .midi-owner-btn:hover {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--fl-menu-text);
+}
+.titlebar .studio-menu-content .midi-in-light {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 9px 6px 9px 12px;
+}
+.titlebar .studio-menu-content .midi-owner-btn {
+  vertical-align: middle;
+}
+
+.modal {
+  overflow-x: hidden;
+}
+.modal > .modal-title > button,
+.modal > .modal-header > button {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.studio-menu-content {
+  overflow-x: hidden;
+}
+.studio-menu-content .midi-level-label,
+.studio-menu-content .midi-level-pct {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Studio menu first row: lamp drawn in the row's left gutter, label as a normal menu item. */
+.titlebar .studio-menu-content {
+  position: absolute;
+}
+.titlebar .studio-menu-content .midi-in-light {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  margin: 0;
+}
+.titlebar .studio-menu-content .midi-owner-btn,
+.titlebar .studio-menu-content .midi-owner-btn.active,
+.titlebar .studio-menu-content .midi-owner-btn:hover {
+  display: block;
+  width: 100%;
+  max-width: none;
+  padding: 8px 12px 8px 32px;
+  white-space: nowrap;
+}
+.titlebar .studio-menu-content .midi-owner-btn:hover {
+  background: var(--fl-s7);
+  color: var(--fl-t0);
+}
+
+/* The hint bar takes the free width of the status bar so long piano-roll hints are not cut. */
+.statusbar .hint-bar {
+  flex: 1 1 340px;
+  min-width: 340px;
+  max-width: 64vw;
+}
+.statusbar > .spacer {
+  flex: 0 1 0;
+}
+
+/* Editor tabs (Piano roll / Mixer): roomy FL-style tabs with an accent underline, no box. */
+.editor-heading .view-tabs {
+  gap: 2px;
+  align-items: stretch;
+}
+.editor-heading .view-tabs button,
+.editor-heading .view-tabs button.active {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  min-height: 35px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--fl-t3);
+  white-space: nowrap;
+}
+.editor-heading .view-tabs button:hover:not(.active) {
+  background: var(--fl-s6);
+  color: var(--fl-t1);
+}
+.editor-heading .view-tabs button.active {
+  background: var(--fl-s6);
+  color: var(--fl-t0);
+  border-bottom-color: var(--accent);
+}

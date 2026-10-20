@@ -1,9 +1,11 @@
+import { restoreEditorFocus } from "./modal";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { ExchangePreview, Section, View } from "./contracts";
 import { useStudio } from "./store";
 import { pitchName } from "./PianoRoll";
+import { trapModalFocus } from "./modal";
 
 export function MidiExchange({
   section,
@@ -29,7 +31,7 @@ export function MidiExchange({
   useEffect(() => {
     const prior = document.activeElement as HTMLElement | null;
     dialog.current?.querySelector<HTMLElement>("button")?.focus();
-    return () => prior?.focus();
+    return () => restoreEditorFocus(prior);
   }, []);
   useEffect(() => {
     if (pending) dialog.current?.focus();
@@ -134,39 +136,14 @@ export function MidiExchange({
         ref={dialog}
         tabIndex={-1}
         onKeyDown={(e) => {
-          e.stopPropagation();
+          trapModalFocus(e);
           if (e.key === "Escape") {
             e.stopPropagation();
             dismiss();
           }
-          if (e.key === "Tab") {
-            const focusable = [
-              ...(dialog.current?.querySelectorAll<HTMLElement>(
-                'button:not(:disabled), [tabindex="0"]',
-              ) ?? []),
-            ];
-            const first = focusable[0],
-              last = focusable[focusable.length - 1];
-            if (!first) {
-              e.preventDefault();
-              return;
-            }
-            if (document.activeElement === dialog.current) {
-              e.preventDefault();
-              (e.shiftKey ? last : first)?.focus();
-            }
-            if (e.shiftKey && document.activeElement === first) {
-              e.preventDefault();
-              last?.focus();
-            }
-            if (!e.shiftKey && document.activeElement === last) {
-              e.preventDefault();
-              first?.focus();
-            }
-          }
         }}
       >
-        <header>
+        <header className="modal-title">
           <h2 id="exchange-title">MIDI exchange</h2>
           <p className="exchange-scope">
             {section.label} · Source {channel}
@@ -303,7 +280,7 @@ export function MidiExchange({
             </p>
           )}
         </div>
-        <footer className="exchange-actions">
+        <footer className="exchange-actions modal-actions">
           <button disabled={pending} onClick={dismiss}>
             Cancel
           </button>

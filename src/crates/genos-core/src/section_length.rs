@@ -35,7 +35,7 @@ fn is_fill_break(label: &str) -> bool {
     ) || n.starts_with("FILL ")
 }
 
-fn ticks_per_bar(doc: &Document, at: u64) -> Result<u64> {
+pub(crate) fn ticks_per_bar(doc: &Document, at: u64) -> Result<u64> {
     let (_, num, den) = doc.timing_at(at);
     if num == 0 || den == 0 || ![1u16, 2, 4, 8, 16, 32].contains(&den) {
         return Err(reject("unsupported meter for section length"));
@@ -86,7 +86,7 @@ fn should_shift(e: &Event, from: u64) -> bool {
     e.tick > from || (e.tick == from && !e.is_off())
 }
 
-fn shift_ticks(style: &mut Style, from: u64, delta: i64, touched: &mut HashSet<usize>) {
+pub(crate) fn shift_ticks(style: &mut Style, from: u64, delta: i64, touched: &mut HashSet<usize>) {
     if delta == 0 {
         return;
     }

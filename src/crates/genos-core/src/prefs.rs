@@ -131,7 +131,7 @@ fn sanitize(mut p: Prefs) -> Prefs {
         p.ui_scale = (p.ui_scale * 20.0).round() / 20.0;
         p.ui_scale = p.ui_scale.clamp(0.85, 1.25);
     }
-    if !["select", "draw", "paint", "erase"].contains(&p.tool.as_str()) {
+    if !["select", "draw", "paint", "erase", "cursor", "pan"].contains(&p.tool.as_str()) {
         p.tool = default_tool();
     }
     if p.count_in_bars > 8 {
@@ -169,16 +169,10 @@ fn sanitize_note_colors(raw: &[String]) -> Vec<String> {
             .get(i)
             .map(|s| {
                 let b = s.as_bytes();
-                b.len() == 7
-                    && b[0] == b'#'
-                    && b[1..].iter().all(|c| c.is_ascii_hexdigit())
+                b.len() == 7 && b[0] == b'#' && b[1..].iter().all(|c| c.is_ascii_hexdigit())
             })
             .unwrap_or(false);
-        out.push(if ok {
-            raw[i].clone()
-        } else {
-            String::new()
-        });
+        out.push(if ok { raw[i].clone() } else { String::new() });
     }
     out
 }
@@ -197,6 +191,26 @@ pub fn save(path: &Path, prefs: &Prefs) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn cursor_and_pan_preferences_survive_restart() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("prefs.json");
+        for tool in ["cursor", "pan"] {
+            save(
+                &path,
+                &Prefs {
+                    tool: tool.into(),
+                    snap: 0,
+                    ..Prefs::default()
+                },
+            )
+            .unwrap();
+            let restored = load(&path).unwrap();
+            assert_eq!(restored.tool, tool);
+            assert_eq!(restored.snap, 0);
+        }
+    }
 
     #[test]
     fn corrupt_prefs_soft_fail_and_roundtrip() {

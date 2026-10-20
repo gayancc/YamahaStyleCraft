@@ -316,7 +316,9 @@ fn effect_catalog_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 #[tauri::command]
 fn voice_catalog_status(app: tauri::AppHandle) -> Result<Option<voice_catalog::Summary>, String> {
-    Ok(Some(voice_catalog::available(&catalog_file(&app)?).summary()))
+    Ok(Some(
+        voice_catalog::available(&catalog_file(&app)?).summary(),
+    ))
 }
 #[tauri::command]
 async fn import_voice_catalog(
@@ -400,7 +402,13 @@ fn search_voice_catalog(
     app: tauri::AppHandle,
 ) -> Result<voice_catalog::Search, String> {
     voice_catalog::available(&catalog_file(&app)?)
-        .browse(&query, kind.as_deref().unwrap_or("all"), category.as_deref().unwrap_or(""), offset.unwrap_or(0), limit.unwrap_or(100))
+        .browse(
+            &query,
+            kind.as_deref().unwrap_or("all"),
+            category.as_deref().unwrap_or(""),
+            offset.unwrap_or(0),
+            limit.unwrap_or(100),
+        )
         .map_err(error)
 }
 #[tauri::command]
@@ -617,14 +625,14 @@ fn extract_all_expansion_resources(
 #[tauri::command]
 fn rewrite_expansion_ppf(source_path: String, dest_path: String) -> Result<String, String> {
     let src = Path::new(&source_path);
-    let data = std::fs::read(src).map_err(error)?;
+    let data = genos_core::expansion::ppf::read_ppf_file(src).map_err(error)?;
     let pkg = genos_core::expansion::parse_ppf(&data).map_err(error)?;
     let out = genos_core::expansion::rewrite_ppf(&data, &pkg).map_err(error)?;
     let dest = Path::new(&dest_path);
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(error)?;
     }
-    std::fs::write(dest, &out).map_err(error)?;
+    project::write_new(dest, &out).map_err(error)?;
     Ok(dest.display().to_string())
 }
 #[tauri::command]

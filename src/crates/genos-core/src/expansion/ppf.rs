@@ -71,6 +71,12 @@ pub fn parse_ppf(data: &[u8]) -> Result<PpfPackage, Error> {
 }
 
 pub fn parse_ppf_file(path: &std::path::Path) -> Result<PpfPackage, Error> {
+    parse_ppf(&read_ppf_file(path)?)
+}
+
+/// Read a bounded snapshot, including when a file grows after metadata lookup.
+pub fn read_ppf_file(path: &std::path::Path) -> Result<Vec<u8>, Error> {
+    use std::io::Read;
     const MAX_PPF: u64 = 512 * 1024 * 1024;
     let meta = std::fs::metadata(path)?;
     if meta.len() > MAX_PPF {
@@ -78,8 +84,14 @@ pub fn parse_ppf_file(path: &std::path::Path) -> Result<PpfPackage, Error> {
             ".ppf exceeds {MAX_PPF} byte safety limit"
         )));
     }
-    let data = std::fs::read(path)?;
-    parse_ppf(&data)
+    let mut data = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_PPF + 1)
+        .read_to_end(&mut data)?;
+    if data.len() as u64 > MAX_PPF {
+        return Err(Error::Format(".ppf exceeds byte safety limit".into()));
+    }
+    Ok(data)
 }
 
 fn collect_resources(
@@ -161,7 +173,7 @@ pub fn extract_resource(
         .ok_or_else(|| Error::Format("invalid extract name".into()))?;
     std::fs::create_dir_all(dest)?;
     let path = dest.join(name);
-    std::fs::write(&path, &data[start..end])?;
+    crate::project::write_new(&path, &data[start..end])?;
     Ok(path)
 }
 
@@ -218,28 +230,14 @@ pub fn write_ppf(title: &str, resources: &[PpfWriteResource]) -> Result<Vec<u8>,
     Ok(buf)
 }
 
-/// Rebuild a `.ppf` from a previously parsed package (byte-preserving FBIN payloads).
+/// Lossless no-edit rewrite. Preserve opaque vendor chunks, padding and metadata.
+/// Resource reconstruction is available separately through `write_ppf`; it must
+/// not silently discard unknown fields from an existing project.
 pub fn rewrite_ppf(data: &[u8], pkg: &PpfPackage) -> Result<Vec<u8>, Error> {
-    let title = pkg
-        .title
-        .as_deref()
-        .ok_or_else(|| Error::Format("parsed ppf missing title".into()))?;
-    let mut resources = Vec::with_capacity(pkg.resources.len());
-    for r in &pkg.resources {
-        let start = r.data_offset as usize;
-        let end = start
-            .checked_add(r.size as usize)
-            .ok_or_else(|| Error::Format("rewrite overflow".into()))?;
-        if end > data.len() {
-            return Err(Error::Format("rewrite out of bounds".into()));
-        }
-        resources.push(PpfWriteResource {
-            title: r.title.clone().unwrap_or_else(|| "resource".into()),
-            extension: r.extension.clone().unwrap_or_else(|| "bin".into()),
-            data: data[start..end].to_vec(),
-        });
+    if data.len() as u64 != pkg.file_size || hex_sha256(data) != pkg.sha256 {
+        return Err(Error::Format("ppf changed since analysis".into()));
     }
-    write_ppf(title, &resources)
+    Ok(data.to_vec())
 }
 
 #[cfg(test)]

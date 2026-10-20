@@ -306,7 +306,7 @@ pub fn recover_pack_with_options(
         capabilities.push(Capability {
             category: "ppf-rewrite".into(),
             status: "structural-roundtrip".into(),
-            detail: "write_ppf/rewrite_ppf can rebuild XPFH+BLOB structure from extracted resources; YEM import not yet verified".into(),
+            detail: "Lossless no-edit PPF copy preserves all metadata; resource reconstruction through write_ppf is structural only. YEM import not yet verified".into(),
         });
     }
 
@@ -373,42 +373,52 @@ fn ppf_resource_export_extension(res: &ppf::PpfResource) -> String {
     }
 }
 
-fn count_extractable(source: &Path, kind: &str) -> Result<usize, Error> {
-    match kind {
-        "ppi" => {
-            let pkg = ppi::parse_ppi(source)?;
-            Ok(pkg.packs.iter().map(|p| p.items.len()).sum())
-        }
-        "ppf" => {
-            let pkg = ppf::parse_ppf_file(source)?;
-            Ok(pkg.resources.len())
-        }
-        other => Err(Error::Format(format!(
-            "unsupported extract-all kind {other}"
-        ))),
-    }
-}
-
 /// Extract every PPI pack item or PPF resource into `dest_dir`.
 pub fn extract_all_resources(req: &ExtractAllRequest) -> Result<ExtractAllResult, Error> {
     let source = Path::new(&req.source_path);
     let dest = resolve_dest_dir(Path::new(&req.dest_dir))?;
-    let total = count_extractable(source, &req.kind)?;
-    if total == 0 {
-        return Err(Error::Format("no extractable resources".into()));
+    let mut paths = Vec::new();
+    // Parse and hash once, rather than once per resource (quadratic package I/O).
+    match req.kind.as_str() {
+        "ppf" => {
+            let data = ppf::read_ppf_file(source)?;
+            let pkg = ppf::parse_ppf(&data)?;
+            for (index, res) in pkg.resources.iter().enumerate() {
+                let name = format!(
+                    "{index}_{}.{}",
+                    sanitize_export_stem(res.title.as_deref(), "resource"),
+                    ppf_resource_export_extension(res)
+                );
+                paths.push(
+                    ppf::extract_resource(&data, res, &dest, &name)?
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+        "ppi" => {
+            let pkg = ppi::parse_ppi(source)?;
+            for (index, item) in pkg.packs.iter().flat_map(|p| &p.items).enumerate() {
+                let name = format!(
+                    "{index}_{}.{}",
+                    sanitize_export_stem(item.title.as_deref(), "item"),
+                    pack_item_export_extension(item)
+                );
+                paths.push(
+                    ppi::extract_pack_item(source, item, &dest, &name)?
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+        other => {
+            return Err(Error::Format(format!(
+                "unsupported extract-all kind {other}"
+            )));
+        }
     }
-    let mut paths = Vec::with_capacity(total);
-    for resource_index in 0..total {
-        let out = extract_resource(&ExtractRequest {
-            source_path: req.source_path.clone(),
-            dest_dir: dest.display().to_string(),
-            kind: req.kind.clone(),
-            resource_index,
-            encryption_key_hex: None,
-            vwst_offset: None,
-            vwst_size: None,
-        })?;
-        paths.push(out.display().to_string());
+    if paths.is_empty() {
+        return Err(Error::Format("no extractable resources".into()));
     }
     Ok(ExtractAllResult {
         dest_dir: dest.display().to_string(),
@@ -505,7 +515,7 @@ fn extract_vwst_slice(req: &ExtractRequest) -> Result<PathBuf, Error> {
 
     let name = format!("vwst_{offset:x}_{size:x}.bin");
     let out = dest.join(name);
-    std::fs::write(&out, plain)?;
+    crate::project::write_new(&out, &plain)?;
     Ok(out)
 }
 
@@ -514,8 +524,8 @@ pub fn extract_resource(req: &ExtractRequest) -> Result<PathBuf, Error> {
     let dest = resolve_dest_dir(Path::new(&req.dest_dir))?;
     match req.kind.as_str() {
         "ppf" => {
-            let pkg = ppf::parse_ppf_file(source)?;
-            let data = std::fs::read(source)?;
+            let data = ppf::read_ppf_file(source)?;
+            let pkg = ppf::parse_ppf(&data)?;
             let res = pkg
                 .resources
                 .get(req.resource_index)

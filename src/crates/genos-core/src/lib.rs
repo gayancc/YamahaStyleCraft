@@ -1,3 +1,4 @@
+pub mod add_section;
 pub mod advanced_quantize;
 pub mod blank;
 pub mod capture;

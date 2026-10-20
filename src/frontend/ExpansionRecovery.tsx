@@ -1,3 +1,4 @@
+import { trapModalFocus } from "./modal";
 import { useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -75,10 +76,22 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
   const [report, setReport] = useState<RecoveryReport | null>(null);
   const [extractMsg, setExtractMsg] = useState<string | null>(null);
 
+  const changeInput = (update: () => void) => {
+    update();
+    setReport(null);
+    setError(null);
+    setExtractMsg(null);
+  };
+
   const pick = async (filters: { name: string; extensions: string[] }[]) => {
     if (!isTauri()) return null;
-    const selected = await open({ multiple: false, filters });
-    return typeof selected === "string" ? selected : null;
+    try {
+      const selected = await open({ multiple: false, filters });
+      return typeof selected === "string" ? selected : null;
+    } catch (e) {
+      setError(String(e));
+      return null;
+    }
   };
 
   const analyze = async () => {
@@ -233,6 +246,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
   const rewritePpf = async () => {
     if (!ppfPath || !isTauri()) return;
     setBusy(true);
+    setError(null);
     setExtractMsg(null);
     try {
       const base =
@@ -246,7 +260,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
         sourcePath: ppfPath,
         destPath,
       });
-      setExtractMsg(`Rewrote structural .ppf to ${out}`);
+      setExtractMsg(`Saved lossless .ppf copy to ${out}`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -255,7 +269,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <div className="modal-backdrop" role="presentation" onClick={() => { if (!busy) onClose(); }}>
       <div
         className="modal expansion-recovery"
         role="dialog"
@@ -263,9 +277,10 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
         aria-labelledby="expansion-recovery-title"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
+          trapModalFocus(e);
           if (e.key === "Escape") {
             e.stopPropagation();
-            onClose();
+            if (!busy) onClose();
           }
         }}
       >
@@ -273,7 +288,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
           <h2 id="expansion-recovery-title">
             <PackageOpen size={18} /> Expansion Pack Recovery
           </h2>
-          <button className="icon-button" aria-label="Close" onClick={onClose}>
+          <button className="icon-button" aria-label="Close" disabled={busy} onClick={onClose}>
             <X size={16} />
           </button>
         </header>
@@ -299,7 +314,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                       name: "Installation",
                       extensions: ["ppi", "pqi"],
                     },
-                  ]).then((p) => p && setPpiPath(p))
+                  ]).then((p) => p && changeInput(() => setPpiPath(p)))
                 }
               >
                 <FolderOpen size={14} /> Select
@@ -315,7 +330,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                 onClick={() =>
                   void pick([
                     { name: "Instrument Info", extensions: ["n27"] },
-                  ]).then((p) => p && setN27Path(p))
+                  ]).then((p) => p && changeInput(() => setN27Path(p)))
                 }
               >
                 <FolderOpen size={14} /> Select
@@ -333,7 +348,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                 disabled={busy}
                 onClick={() =>
                   void pick([{ name: "Pack Project", extensions: ["ppf"] }]).then(
-                    (p) => p && setPpfPath(p),
+                    (p) => p && changeInput(() => setPpfPath(p)),
                   )
                 }
               >
@@ -353,7 +368,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                 onClick={() =>
                   void pick([
                     { name: "Wave index", extensions: ["waves", "xml"] },
-                  ]).then((p) => p && setWaveIndexPath(p))
+                  ]).then((p) => p && changeInput(() => setWaveIndexPath(p)))
                 }
               >
                 <FolderOpen size={14} /> Select
@@ -368,7 +383,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                 spellCheck={false}
                 placeholder="32 hex chars — offline SME seed (Model Encryption)"
                 value={encryptionKeyHex}
-                onChange={(e) => setEncryptionKeyHex(e.target.value)}
+                onChange={(e) => changeInput(() => setEncryptionKeyHex(e.target.value))}
                 disabled={busy}
               />
             </div>
@@ -551,7 +566,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                     <Download size={13} /> Extract all resources
                   </button>
                   <button disabled={busy} onClick={() => void rewritePpf()}>
-                    <Download size={13} /> Rewrite structural .ppf
+                    <Download size={13} /> Save lossless .ppf copy
                   </button>
                 </div>
                 <ul className="pack-list">
@@ -582,7 +597,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                   : report.blockers.some((b) => b.includes("encryptionkey") || b.includes("SME seed") || b.includes("samples") || b.includes("offline"))
                     ? "Blocked for installation-only recovery: VWST still needs the offline SME seed (or a source .ppf)."
                     : report.project
-                      ? "Structural .ppf rewrite is available (XPFH+BLOB round-trip). YEM import of rewritten files is not yet verified."
+                      ? "A lossless copy of the source .ppf is available. Installation-to-project reconstruction and YEM import acceptance remain unverified."
                       : "No .ppf loaded."}
               </p>
             </section>

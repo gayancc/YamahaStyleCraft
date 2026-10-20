@@ -33,3 +33,5 @@ third-party/
 .env
 .env.*
 !.env.example
+
+__pycache__/

@@ -37,12 +37,12 @@ function applyUiState(
     typeof ui.sectionId === "number" &&
     view.sections.some((s) => s.id === ui.sectionId);
   const channelOk =
-    typeof ui.channel === "number" && ui.channel >= 1 && ui.channel <= 16;
+    typeof ui.channel === "number" && Number.isInteger(ui.channel) && ui.channel >= 1 && ui.channel <= 16;
   return {
     sectionId: sectionOk ? ui.sectionId! : fallbackSection,
     channel: channelOk ? ui.channel! : fallbackChannel,
-    ...(typeof ui.snap === "number" && ui.snap > 0 ? { snap: ui.snap } : {}),
-    ...(typeof ui.zoom === "number" && ui.zoom > 0 ? { zoom: ui.zoom } : {}),
+    ...(typeof ui.snap === "number" && [0, 1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64].includes(ui.snap) ? { snap: ui.snap } : {}),
+    ...(typeof ui.zoom === "number" && Number.isFinite(ui.zoom) && ui.zoom >= 0.125 && ui.zoom <= 8 ? { zoom: ui.zoom } : {}),
     ...(ui.tool && tools.has(ui.tool) ? { tool: ui.tool } : {}),
   };
 }

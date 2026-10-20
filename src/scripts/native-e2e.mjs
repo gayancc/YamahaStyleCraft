@@ -75,11 +75,8 @@ try {
   );
   await page.mouse.click(geometry.x, geometry.y);
   await page
-    .getByRole("spinbutton", { name: "Velocity", exact: true })
-    .fill("73");
-  await page
-    .getByRole("spinbutton", { name: "Velocity", exact: true })
-    .press("Tab");
+    .getByRole("slider", { name: "Note velocity", exact: true })
+    .press("ArrowUp");
   await expect.poll(async () => (await state()).revision).toBe(1);
   view = await state();
   assert.equal(view.notes.find((x) => x.id === n.id).velocity, 73);

@@ -359,6 +359,12 @@ export function MixerPanel({
             <div
               className={`mixer-strip${ch === targetChannel ? " selected" : ""}`}
               key={ch}
+              onPointerDownCapture={() => {
+                if (ch !== targetChannel) onSelectChannel?.(ch);
+              }}
+              onFocusCapture={() => {
+                if (ch !== targetChannel) onSelectChannel?.(ch);
+              }}
             >
               <div
                 className="mixer-track-color"

@@ -18,5 +18,10 @@ export default defineConfig({
       ],
     },
   },
-  test: { environment: "jsdom", include: ["frontend/**/*.test.{ts,tsx}"] },
+  test: {
+    environment: "jsdom",
+    include: ["frontend/**/*.test.{ts,tsx}"],
+    // Keep the full DOM suite reliable alongside native WebView verification.
+    maxWorkers: 2,
+  },
 });

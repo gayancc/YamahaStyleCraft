@@ -1,3 +1,4 @@
+import { askConfirm } from "./confirmDialog";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useStudio } from "./store";
@@ -182,11 +183,16 @@ export function NativeDrumSetup({
     }
     const scope = notes.length ? `MIDI ${notes.join(", ")}` : "all overridden keys";
     if (
-      !window.confirm(
+      !(await askConfirm(
         `Reset drum scalars for ${scope} to kit defaults? One undo step.`,
-      )
+        { title: "Reset drum scalars", confirmLabel: "Reset" },
+      ))
     )
       return;
+    if (useStudio.getState().view !== original) {
+      setError("Document changed; reopen Drum Setup.");
+      return;
+    }
     working.current = true;
     setPending(true);
     setError(null);
@@ -230,6 +236,7 @@ export function NativeDrumSetup({
         onKeyDown={(e) => {
           trapModalFocus(e);
           if (e.key === "Escape") {
+            e.stopPropagation();
             e.preventDefault();
             dismiss();
           }

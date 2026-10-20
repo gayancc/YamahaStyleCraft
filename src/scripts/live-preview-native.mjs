@@ -253,9 +253,7 @@ try {
     );
     port = devices.outputs.find((p) => p.name === "Digital Workstation-1");
     assert(port, "Connected Genos MIDI port missing");
-    await page
-      .getByRole("button", { name: "MIDI device settings", exact: true })
-      .click();
+    await page.locator(".output-select").click();
     await page
       .getByLabel("MIDI output", { exact: true })
       .selectOption(`${port.index}:${port.name}`);
@@ -265,18 +263,15 @@ try {
       .click();
   }
   if (!hardware) {
-    await page
-      .getByRole("button", { name: "MIDI device settings", exact: true })
-      .click();
+    await page.locator(".output-select").click();
     await page.getByLabel("MIDI output", { exact: true }).selectOption("");
     await page
       .getByRole("dialog")
       .getByRole("button", { name: "Done", exact: true })
       .click();
   }
-  await page
-    .getByRole("button", { name: "Live Style preview", exact: true })
-    .click();
+  await page.locator("summary").filter({ hasText: /^Playback options$/ }).click();
+  await page.getByTitle("Live Style preview", { exact: true }).click();
   const dialog = page.getByRole("dialog", {
     name: "Live Style preview",
     exact: true,
@@ -503,9 +498,8 @@ try {
           2,
         ),
       );
-      await page
-        .getByRole("button", { name: "Live Style preview", exact: true })
-        .click();
+      await page.locator("summary").filter({ hasText: /^Playback options$/ }).click();
+      await page.getByTitle("Live Style preview", { exact: true }).click();
       for (const ch of config.sources.filter((c) => c !== auditionSource))
         await dialog
           .getByLabel(`Preview source ${ch}`, { exact: true })
@@ -626,7 +620,7 @@ try {
         name: "invalid",
         looping: false,
       }),
-      /changed/,
+      /Check live preview before Play$/,
     );
     await dialog
       .getByRole("button", { name: "Check live preview", exact: true })

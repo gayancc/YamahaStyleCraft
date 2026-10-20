@@ -50,6 +50,19 @@ beforeEach(() => {
   props.onTransport.mockReset();
 });
 afterEach(cleanup);
+it("keeps Escape inside the preview while a native check is pending", async () => {
+  let resolve!: (value: unknown) => void;
+  mock.invoke.mockImplementation(command => command === "preview_live_style"
+    ? new Promise(r => { resolve = r; }) : Promise.resolve());
+  const parentKey = vi.fn();
+  render(<div onKeyDown={parentKey}><LivePreview {...props} /></div>);
+  fireEvent.click(screen.getByRole("button", { name: "Check live preview" }));
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(parentKey).not.toHaveBeenCalled();
+  expect(props.onClose).not.toHaveBeenCalled();
+  await act(async () => resolve({ token: "checked", report }));
+  expect(screen.getByText("Preview ready")).toBeTruthy();
+});
 it("does not transmit on open or check; applies source channels and progression to preflight", async () => {
   render(<LivePreview {...props} />);
   expect(mock.invoke).not.toHaveBeenCalled();

@@ -40,6 +40,22 @@ fn is_fourcc(id: &[u8; 4]) -> bool {
 /// Nested children are detected when a payload begins with a valid FourCC and
 /// an in-bounds size (EV-0311 BLOB nesting, EV-0312 XPIH nesting).
 pub fn parse_chunks(data: &[u8], start: usize, end: usize, base: u64) -> Result<Vec<Chunk>, Error> {
+    parse_chunks_bounded(data, start, end, base, 0, &mut 100_000)
+}
+
+fn parse_chunks_bounded(
+    data: &[u8],
+    start: usize,
+    end: usize,
+    base: u64,
+    depth: usize,
+    remaining: &mut usize,
+) -> Result<Vec<Chunk>, Error> {
+    if depth > 64 {
+        return Err(Error::Format(
+            "chunk nesting exceeds safety limit 64".into(),
+        ));
+    }
     if end > data.len() || start > end {
         return Err(Error::Format("chunk range out of bounds".into()));
     }
@@ -57,6 +73,12 @@ pub fn parse_chunks(data: &[u8], start: usize, end: usize, base: u64) -> Result<
                 String::from_utf8_lossy(&id_bytes)
             )));
         }
+        if *remaining == 0 {
+            return Err(Error::Format(
+                "chunk count exceeds safety limit 100000".into(),
+            ));
+        }
+        *remaining -= 1;
         let size = u32::from_be_bytes(data[o + 4..o + 8].try_into().unwrap());
         let data_start = o + 8;
         let data_end = data_start
@@ -88,7 +110,14 @@ pub fn parse_chunks(data: &[u8], start: usize, end: usize, base: u64) -> Result<
                     .is_some_and(|n| n <= size as usize)
                 {
                     // Keep the same `data` buffer so offsets stay valid for payload().
-                    children = parse_chunks(data, data_start, data_end, base)?;
+                    children = parse_chunks_bounded(
+                        data,
+                        data_start,
+                        data_end,
+                        base,
+                        depth + 1,
+                        remaining,
+                    )?;
                 }
             }
         }

@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from "react";
 import type { HTMLAttributes, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { focusableControls, restoreEditorFocus } from "./modal";
 
 /** Floating editors live above layout clipping; their position is measured in viewport pixels. */
 export function useFloatingEditor(
@@ -32,6 +33,24 @@ export function useFloatingEditor(
   useLayoutEffect(() => {
     if (!open || !ref.current) return;
     place();
+    const el = ref.current;
+    const front = () => {
+      // Keep every utility below modal drafts, with the active utility on top.
+      const windows = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".floating-tool-window:not([hidden]),.note-utility-window",
+        ),
+      ]
+        .filter((window) => window !== el)
+        .sort((a, b) => Number(a.style.zIndex) - Number(b.style.zIndex));
+      [...windows, el].forEach((window, i) => {
+        window.style.zIndex = String(60 + i);
+      });
+    };
+    const previous = document.activeElement as HTMLElement | null;
+    front();
+    el.addEventListener("pointerdown", front);
+    el.addEventListener("focusin", front);
     const resize = () => place();
     const observer = new ResizeObserver(resize);
     observer.observe(ref.current);
@@ -39,6 +58,18 @@ export function useFloatingEditor(
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", resize);
+      el.removeEventListener("pointerdown", front);
+      el.removeEventListener("focusin", front);
+      queueMicrotask(() => {
+        // React restores selection during commit, after layout cleanup. Return
+        // focus once that finishes, unless another editor has already claimed it.
+        if (
+          (!el.isConnected || el.hidden) &&
+          (el.contains(document.activeElement) ||
+            document.activeElement === document.body)
+        )
+          restoreEditorFocus(previous);
+      });
       drag.current = null;
     };
   }, [open]);
@@ -109,12 +140,13 @@ export function FloatingToolWindow({
     open,
   );
   useLayoutEffect(() => {
-    if (open)
-      ref.current
-        ?.querySelector<HTMLElement>(
-          ".floating-tool-content select,.floating-tool-content input",
-        )
-        ?.focus();
+    if (!open || !ref.current) return;
+    const controls = focusableControls(
+      ref.current.querySelector<HTMLElement>(".floating-tool-content")!,
+    );
+    (
+      controls.find((el) => el.matches("input,select,textarea")) ?? controls[0]
+    )?.focus();
   }, [open]);
   return createPortal(
     <section

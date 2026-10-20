@@ -757,8 +757,7 @@ impl InputMonitor {
         let mut pitches: Vec<u8> = set
             .iter()
             .filter(|(ch, pitch)| {
-                channel.is_none_or(|want| *ch == want)
-                    && max_pitch.is_none_or(|max| *pitch <= max)
+                channel.is_none_or(|want| *ch == want) && max_pitch.is_none_or(|max| *pitch <= max)
             })
             .map(|(_, pitch)| *pitch)
             .collect();
@@ -804,7 +803,7 @@ impl Drop for InputMonitor {
 
 #[cfg(test)]
 mod audible_filter_tests {
-    use super::{packet_channel, Transport};
+    use super::{Transport, packet_channel};
 
     #[test]
     fn packet_channel_reads_voice_status() {
@@ -928,16 +927,24 @@ mod playback_tests {
         let mut sent = Vec::new();
         let mut ons = 0;
         let audible = Mutex::new(vec![1u8]);
-        let failure = run_plan(&test_plan(), &[1], &audible, true, &cancel, &status, |data| {
-            sent.push(data.to_vec());
-            if data[0] == 0x90 {
-                ons += 1;
-                if ons == 2 {
-                    *cancel.0.lock().unwrap() = true;
+        let failure = run_plan(
+            &test_plan(),
+            &[1],
+            &audible,
+            true,
+            &cancel,
+            &status,
+            |data| {
+                sent.push(data.to_vec());
+                if data[0] == 0x90 {
+                    ons += 1;
+                    if ons == 2 {
+                        *cancel.0.lock().unwrap() = true;
+                    }
                 }
-            }
-            Ok(())
-        });
+                Ok(())
+            },
+        );
         assert_eq!(failure, None);
         assert_eq!(ons, 2);
         assert_eq!(sent.iter().filter(|d| d[0] == 0xf0).count(), 1);
@@ -960,14 +967,22 @@ mod playback_tests {
             let status = Mutex::new(Status::default());
             let mut sent = Vec::new();
             let audible = Mutex::new(vec![1u8]);
-            let failure = run_plan(&test_plan(), &[1], &audible, false, &cancel, &status, |data| {
-                sent.push(data.to_vec());
-                if data[0] == 0xf0 {
-                    Err("setup failed".into())
-                } else {
-                    Ok(())
-                }
-            });
+            let failure = run_plan(
+                &test_plan(),
+                &[1],
+                &audible,
+                false,
+                &cancel,
+                &status,
+                |data| {
+                    sent.push(data.to_vec());
+                    if data[0] == 0xf0 {
+                        Err("setup failed".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
             assert_eq!(
                 failure,
                 if cancelled {

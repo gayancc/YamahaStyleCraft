@@ -9,9 +9,14 @@ import {
   isDetachedPianoRoute,
   listenClipboardSync,
 } from "./detach";
+import { ConfirmHost } from "./ConfirmHost";
 import { useStudio } from "./store";
+import "./designTokens.css";
 import "./styles.css";
 import "./studio.css";
+import "./flChrome.css";
+import "./flDialog.css";
+import "./flButtons.css";
 
 // Register before React mounts, including browser previews and detached routes.
 // Cancel the default action without stopping our piano/menu handlers.
@@ -36,4 +41,9 @@ const body = isDetachedPianoRoute() ? (
   <App />
 );
 
-ReactDOM.createRoot(root).render(<React.StrictMode>{body}</React.StrictMode>);
+ReactDOM.createRoot(root).render(
+  <React.StrictMode>
+    {body}
+    <ConfirmHost />
+  </React.StrictMode>,
+);

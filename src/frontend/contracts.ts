@@ -375,6 +375,17 @@ export type Command =
       section: number;
       op:
         { type: "fillBreak"; bars: number } | { type: "shorten"; bars: number };
+    }
+  | {
+      type: "addSection";
+      /** Yamaha marker name, for example `Intro B` or `Fill In BA`. */
+      label: string;
+      bars: number;
+      /** Existing section whose CASM routes the new section shares. */
+      casmFrom: number;
+      /** Existing section whose notes and controllers are copied in. */
+      copyFrom?: number | null;
+      fit?: "keep" | "repeat" | "fit" | null;
     };
 export interface RecentEntry {
   id: string;

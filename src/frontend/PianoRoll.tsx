@@ -1173,6 +1173,7 @@ export function PianoRoll({
         >
           <canvas
             aria-label="Piano roll. Double-click a note for properties or empty space to add notes. Drag notes to move, drag either edge to resize. Alt bypasses snap; middle drag pans."
+            data-hint="Piano roll · double-click a note for properties, empty space to add · drag edges to resize · Alt bypasses snap"
             role="img"
             tabIndex={0}
             ref={canvas}

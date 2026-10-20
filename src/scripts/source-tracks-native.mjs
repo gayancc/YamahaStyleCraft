@@ -768,7 +768,7 @@ try {
   await assert.rejects(() =>
     ipc("apply_phrase_midi", { token: stalePreview.token }),
   );
-  // Official Data List is a local, ignored reference; no catalog is bundled.
+  // Optional Data List maintenance must retain the embedded compatibility rows.
   await load(source);
   const catalogPath = path.join(path.dirname(recovery), "voice-catalog.json");
   if (fs.existsSync(catalogPath)) fs.unlinkSync(catalogPath);
@@ -786,14 +786,18 @@ try {
     name: "Genos voices",
     exact: true,
   });
+  await voicesDialog.getByText("Catalog tools", { exact: true }).click();
   await voicesDialog
     .getByRole("button", { name: "Import Data List PDF…" })
     .click();
   await expect(voicesDialog.getByLabel("Search voices")).toBeVisible({
     timeout: 30000,
   });
+  // Search is already available from the embedded catalog. Wait for the
+  // optional PDF import's actual persistent result before testing its cache.
+  await expect.poll(() => fs.existsSync(catalogPath), { timeout: 30000 }).toBe(true);
   const catalogStatus = await ipc("voice_catalog_status");
-  assert.equal(catalogStatus.count, 1711);
+  assert.equal(catalogStatus.count, 2456);
   assert.equal(
     catalogStatus.sourceSha256,
     "6022804163e4548abfd26db1889307d78f913297a3cc78b6cf6905bb3060a9bd",
@@ -840,7 +844,7 @@ try {
     ).toHaveCount(0);
   }
   await load(source);
-  assert.equal((await ipc("voice_catalog_status")).count, 1711);
+  assert.equal((await ipc("voice_catalog_status")).count, 2456);
   assert.equal(
     (await ipc("search_voice_catalog", { query: "CFX ConcertGrand" })).total,
     1,
@@ -1446,9 +1450,7 @@ try {
     /Document changed/,
   );
   // Read-only device scan and native preflight. No playback on an actual port.
-  await page
-    .getByRole("button", { name: "MIDI device settings", exact: true })
-    .click();
+  await page.locator(".output-select").click();
   const midiDialog = page.getByRole("dialog", {
     name: "MIDI connections",
     exact: true,

@@ -1,0 +1,53 @@
+/* Genos Style Studio design tokens.
+   Neutral ramp and chrome roles are derived from colors measured on the running
+   FL Studio 25.1.1.4879 (docs/development/fl-compliance/rea-2026-10-20/fl-palette-samples.json);
+   no vendor asset is reused. Musical grid, note selection and part colors keep their own
+   semantic roles, and the amber accent is deliberate Genos identity. */
+:root {
+  /* Surface ramp (blue-gray, hue ~200deg). s3 caption edge, s5 lane/toolbar,
+     s6 hint bar, s7 caption strip, s9 toolbar button were measured in FL. */
+  --fl-s0: #0b1419;
+  --fl-s1: #131c21;
+  --fl-s2: #1c262b;
+  --fl-s3: #242d32;
+  --fl-s4: #2c363b;
+  --fl-s5: #353e43;
+  --fl-s6: #3e464b;
+  --fl-s7: #434c51;
+  --fl-s8: #4f585d;
+  --fl-s9: #596267;
+  /* Text ramp. t1 tracks FL's measured light text (#d3d8dc), lifted slightly so every step
+     keeps >= 4.5:1 on the lightest chrome (s7 #434c51); verified by scripts/ui-audit-contrast.mjs. */
+  --fl-t0: #f2f5f6;
+  --fl-t1: #e0e5e8;
+  --fl-t2: #cfd6da;
+  --fl-t3: #c0c9ce;
+  --fl-t4: #b4bec4;
+  /* Menu surface measured on FL popup menus: body, group band, text. */
+  --fl-menu: #bbc3c8;
+  --fl-menu-band: #929da4;
+  --fl-menu-text: #11181c;
+  --fl-menu-disabled: #6f7b82;
+
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  font-synthesis: none;
+  color-scheme: dark;
+  color: var(--studio-text);
+  background: var(--studio-background);
+  --studio-background: var(--fl-s2);
+  --studio-panel: var(--fl-s3);
+  --studio-title: var(--fl-s5);
+  --studio-dialog: var(--fl-s5);
+  --studio-tool: var(--fl-s6);
+  --studio-tool-title: var(--fl-s7);
+  --studio-tool-border: var(--fl-s9);
+  --studio-control: var(--fl-s6);
+  --studio-input: var(--fl-s1);
+  --studio-text: var(--fl-t1);
+  --accent: #e3b56c;
+  --line: var(--fl-s6);
+  --muted: var(--fl-t3);
+  --studio-radius: 2px;
+  --mono: Consolas, ui-monospace, monospace;
+}

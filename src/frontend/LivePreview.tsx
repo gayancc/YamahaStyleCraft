@@ -175,6 +175,7 @@ export function LivePreview({
         onKeyDown={(e) => {
           trapModalFocus(e);
           if (e.key === "Escape") {
+            e.stopPropagation();
             e.preventDefault();
             if (!inFlight.current) close();
           }

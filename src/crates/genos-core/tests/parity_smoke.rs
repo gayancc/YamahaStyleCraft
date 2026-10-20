@@ -204,9 +204,8 @@ fn parity_smoke_beat_control_2_4_open_export_section() {
 #[test]
 fn parity_smoke_six_eight_open_and_casm_retain() {
     let b = fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(
-            "../../../docs/research/artifacts/style files/13.6-8 OFF WITH THAVIL.T236.STY",
-        ),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../docs/research/artifacts/style files/13.6-8 OFF WITH THAVIL.T236.STY"),
     )
     .unwrap();
     let s = Session::open(&b, "six-eight".into()).unwrap();

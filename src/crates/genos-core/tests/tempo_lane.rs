@@ -35,7 +35,10 @@ fn tempo_points_write_undo_and_survive_document_tempo() {
         0,
         Command::TempoPoints {
             section: main.id,
-            points: vec![TempoPoint { tick: t, bpm: 140.0 }],
+            points: vec![TempoPoint {
+                tick: t,
+                bpm: 140.0,
+            }],
             remove: vec![],
         },
     )

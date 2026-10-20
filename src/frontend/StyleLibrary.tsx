@@ -1,3 +1,4 @@
+import { restoreEditorFocus } from "./modal";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -134,7 +135,7 @@ export function StyleLibrary({
   useEffect(() => {
     const prior = document.activeElement as HTMLElement | null;
     dialog.current?.querySelector<HTMLElement>("button")?.focus();
-    return () => prior?.focus();
+    return () => restoreEditorFocus(prior);
   }, []);
 
   const dismiss = () => {

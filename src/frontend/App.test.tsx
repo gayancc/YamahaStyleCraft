@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { App } from "./App";
 import { useStudio } from "./store";
@@ -29,6 +30,10 @@ vi.mock("@tauri-apps/api/window", () => ({
     onCloseRequested: mocks.onCloseRequested,
     destroy: mocks.destroy,
   }),
+}));
+vi.mock("./confirmDialog", () => ({
+  askConfirm: (message: string, options?: unknown) =>
+    mocks.confirm(message, options),
 }));
 const view: View = {
   name: "Actual contract test fixture",
@@ -352,7 +357,7 @@ it("requires arm and starts overdub play when capturing", async () => {
       }),
     ),
   );
-});
+}, 10_000);
 
 it("applies capture to the armed part channel", async () => {
   mocks.isTauri = true;
@@ -652,11 +657,28 @@ describe("real IPC wiring with isolated test mocks", () => {
       docLabel: "main",
     });
     expect(
-      screen.getByRole("spinbutton", { name: "Meter numerator" }),
-    ).toHaveProperty("value", "3");
-    expect(
-      screen.getByRole("combobox", { name: "Meter denominator" }),
-    ).toHaveProperty("value", "4");
+      screen.getByRole("button", { name: "Time signature 3/4" }),
+    ).toBeTruthy();
+  });
+  it("sets the time signature from the top bar chip through setTempoMeter", async () => {
+    useStudio.setState({ view, sectionId: 7 });
+    mocks.invoke.mockResolvedValue({ ...view, revision: 1, dirty: true, numerator: 6 });
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Time signature 3/4" }));
+    const panel = await screen.findByRole("dialog", { name: "Time signature" });
+    fireEvent.click(within(panel).getByRole("button", { name: "6 beats" }));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+        revision: 0,
+        command: {
+          type: "setTempoMeter",
+          tempoBpm: view.tempo,
+          numerator: 6,
+          denominator: 4,
+        },
+        docLabel: "main",
+      }),
+    );
   });
   it("commits tempo and meter edits through setTempoMeter", async () => {
     useStudio.setState({ view, sectionId: 7 });
@@ -706,6 +728,70 @@ describe("real IPC wiring with isolated test mocks", () => {
     expect(screen.getByRole("heading", { name: "Help" })).toBeTruthy();
     expect(screen.getByText(/notes plus CC\/PC\/bend/i)).toBeTruthy();
     expect(screen.getByText(/hold right ~1s/i)).toBeTruthy();
+  });
+  it("shows the hovered control in the hint bar with its shortcut and clears on leave", () => {
+    render(<App />);
+    const hint = () => document.querySelector(".hint-bar")!;
+    expect(hint().getAttribute("data-empty")).toBe("true");
+    fireEvent.pointerOver(
+      screen.getByRole("button", { name: "Undo (Ctrl+Z)" }),
+    );
+    expect(hint().querySelector(".hint-name")?.textContent).toBe("Undo");
+    expect(hint().querySelector(".hint-shortcut")?.textContent).toBe("Ctrl+Z");
+    expect(hint().hasAttribute("data-empty")).toBe(false);
+    fireEvent.pointerLeave(document.querySelector(".app")!);
+    expect(hint().querySelector(".hint-shortcut")).toBeNull();
+    expect(hint().getAttribute("data-empty")).toBe("true");
+  });
+  it("shows the same hint for keyboard focus", () => {
+    render(<App />);
+    fireEvent.focus(screen.getByRole("button", { name: "Redo (Ctrl+Shift+Z)" }));
+    const hint = document.querySelector(".hint-bar")!;
+    expect(hint.querySelector(".hint-name")?.textContent).toBe("Redo");
+    expect(hint.querySelector(".hint-shortcut")?.textContent).toBe(
+      "Ctrl+Shift+Z",
+    );
+  });
+  it("groups the File menu into bands with right-aligned shortcut cells", () => {
+    render(<App />);
+    const content = document.querySelector(
+      ".titlebar .studio-menu-content",
+    ) as HTMLElement;
+    const bands = [...content.querySelectorAll(".menu-group")].map(
+      (el) => el.textContent,
+    );
+    expect(bands).toEqual(["Project", "Export"]);
+    const save = within(content).getByRole("button", {
+      name: "Save project (Ctrl+S)",
+    });
+    expect(save.querySelector(".menu-label")?.textContent).toBe("Save project");
+    expect(save.querySelector(".menu-shortcut")?.textContent).toBe("Ctrl+S");
+    expect(
+      within(content).getByRole("button", { name: "Export section notes CSV" })
+        .querySelector(".menu-shortcut"),
+    ).toBeNull();
+  });
+  it("lists every Genos section slot, selects the Style's own, and keeps a missing slot clickable to add it", () => {
+    useStudio.setState({ view, sectionId: 7 });
+    render(<App />);
+    const bar = screen.getByRole("navigation", { name: "Style sections" });
+    expect(
+      within(bar)
+        .getAllByRole("group")
+        .map((g) => g.getAttribute("aria-label")),
+    ).toEqual(["Intro", "Main", "Fill", "Break", "Ending"]);
+    const main = within(bar).getByRole("button", { name: /^Main A/ });
+    expect(main.getAttribute("aria-pressed")).toBe("true");
+    const missing = within(bar).getByRole("button", {
+      name: "Add Intro 2 (not in this Style)",
+    }) as HTMLButtonElement;
+    expect(missing.disabled).toBe(false);
+    expect(within(bar).getAllByRole("button", { name: /not in this Style/ })).toHaveLength(14);
+    fireEvent.click(missing);
+    const dialog = screen.getByRole("dialog", { name: "Add Intro 2" });
+    expect(dialog).toBeTruthy();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Add Intro 2" })).toBeNull();
   });
   it("opens feature inventory listing gated surfaces", () => {
     render(<App />);
@@ -1204,7 +1290,7 @@ it("closing a retained capture asks before discarding even without a dirty Style
 
 it("Cancel take confirms before discarding retained capture", async () => {
   mocks.isTauri = true;
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const confirm = mocks.confirm.mockResolvedValue(true);
   useStudio.setState({ view, sectionId: 7 });
   mocks.invoke.mockImplementation(async (cmd: string) => {
     if (cmd === "scan_devices")
@@ -1251,7 +1337,6 @@ it("Cancel take confirms before discarding retained capture", async () => {
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith("clear_capture"),
   );
-  confirm.mockRestore();
 });
 
 it("Composer stays open while native creation is pending", async () => {

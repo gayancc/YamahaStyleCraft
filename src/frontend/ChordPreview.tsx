@@ -183,8 +183,13 @@ export function ChordPreview({
       >
         <div className="modal-title">
           <h2 id="chord-preview-title">Chord preview</h2>
-          <button type="button" onClick={onClose}>
-            Close
+          <button
+            type="button"
+            aria-label="Close chord preview"
+            title="Close"
+            onClick={onClose}
+          >
+            ×
           </button>
         </div>
         <div className="voice-browser-body">

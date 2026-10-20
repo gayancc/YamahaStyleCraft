@@ -53,7 +53,9 @@ fn pitch_bend_range_writes_rpn_packet_and_undoes() {
         assert!(
             at.iter().any(|e| e.data[1] == cc && e.data[2] == val),
             "missing CC{cc}={val} in {:?}",
-            at.iter().map(|e| (e.data[1], e.data[2])).collect::<Vec<_>>()
+            at.iter()
+                .map(|e| (e.data[1], e.data[2]))
+                .collect::<Vec<_>>()
         );
     }
     // Ordered packet: first 101/0 before data entry before null RPN.

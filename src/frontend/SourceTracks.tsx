@@ -1,3 +1,4 @@
+import { cycleModalFocus } from "./modal";
 import { useEffect, useRef, useState } from "react";
 import type {
   Region,
@@ -310,22 +311,7 @@ export function SourceTracks({
           e.preventDefault();
           close.current();
         }
-        if (e.key === "Tab") {
-          const controls = Array.from(
-            dialog.current?.querySelectorAll<HTMLElement>(
-              "button:not(:disabled),input:not(:disabled),select:not(:disabled)",
-            ) ?? [],
-          );
-          const first = controls[0],
-            last = controls.at(-1);
-          if (e.shiftKey && document.activeElement === first) {
-            e.preventDefault();
-            last?.focus();
-          } else if (!e.shiftKey && document.activeElement === last) {
-            e.preventDefault();
-            first?.focus();
-          }
-        }
+        if (dialog.current) cycleModalFocus(e, dialog.current);
       }}
     >
       <section
@@ -351,32 +337,38 @@ export function SourceTracks({
           keep their original rules.
         </p>
         <div className="source-body">
-          <fieldset disabled={busy}>
-            <button
-              type="button"
-              disabled={route.destination < 9 || route.destination > 16}
-              onClick={() => {
-                setBytes(partDefaultBytes(bytes));
-                setMask(chords.map(() => true));
-                setExclusive(false);
-                setResetDefaults(true);
-                setError(null);
-              }}
-            >
-              Use part defaults
-            </button>
-            <p>
-              Resets this draft’s CASM rules for destination {route.destination}
-              , enables all chord roots and types, and keeps source notes and
-              voice. Apply saves one undoable change; Cancel discards it.
-            </p>
+          <fieldset className="fl-plain" disabled={busy}>
+            <fieldset className="fl-section">
+              <legend>Part defaults</legend>
+              <div className="fl-row-actions">
+                <button
+                  type="button"
+                  disabled={route.destination < 9 || route.destination > 16}
+                  onClick={() => {
+                    setBytes(partDefaultBytes(bytes));
+                    setMask(chords.map(() => true));
+                    setExclusive(false);
+                    setResetDefaults(true);
+                    setError(null);
+                  }}
+                >
+                  Use part defaults
+                </button>
+                <p className="fl-note">
+                  Resets this draft’s CASM rules for destination{" "}
+                  {route.destination}, enables all chord roots and types, and
+                  keeps source notes and voice. Apply saves one undoable change;
+                  Cancel discards it.
+                </p>
+              </div>
+            </fieldset>
             <fieldset>
               <legend>Allowed chord roots (Note Mute)</legend>
-              <p>
+              <p className="fl-note">
                 Unchecked roots mute this source for that chord root, regardless
                 of chord type. Source note pitches are not filtered.
               </p>
-              <div className="source-fields">
+              <div className="source-roots">
                 {roots.map((name, root) => (
                   <label key={root}>
                     <input
@@ -408,124 +400,130 @@ export function SourceTracks({
                 />
                 Auto Start
               </label>
-              <p>
+              <p className="fl-note">
                 Allows a rhythm part before a chord is detected. Live
                 progression preview starts with a chord; it uses the root and
                 chord masks.
               </p>
             </fieldset>
-            <div className="source-fields">
-              <Choice
-                label="Source root"
-                value={bytes[18]}
-                options={roots}
-                onChange={(value) => update({ type: "root", value })}
-              />
-              <Choice
-                label="Source chord"
-                value={bytes[19]}
-                options={chords}
-                onChange={(value) => update({ type: "chord", value })}
-              />
-              <Numeric
-                label="Middle zone low"
-                value={bytes[20]}
-                onChange={(low) =>
-                  update({ type: "zone", low, high: bytes[21] })
-                }
-              />
-              <Numeric
-                label="Middle zone high"
-                value={bytes[21]}
-                onChange={(high) =>
-                  update({ type: "zone", low: bytes[20], high })
-                }
-              />
-            </div>
-            <div
-              className="source-regions"
-              role="group"
-              aria-label="Conversion region"
-            >
-              {(["low", "middle", "high"] as Region[]).map((r) => (
-                <button
-                  key={r}
-                  aria-pressed={r === region}
-                  onClick={() => setRegion(r)}
-                >
-                  {r[0].toUpperCase() + r.slice(1)} region
-                </button>
-              ))}
-            </div>
-            <p className="source-zone">
-              Source pitches:{" "}
-              {region === "low"
-                ? bytes[20] === 0
-                  ? "inactive"
-                  : `0–${bytes[20] - 1}`
-                : region === "high"
-                  ? bytes[21] === 127
+            <fieldset className="fl-section">
+              <legend>Source</legend>
+              <div className="source-fields">
+                <Choice
+                  label="Source root"
+                  value={bytes[18]}
+                  options={roots}
+                  onChange={(value) => update({ type: "root", value })}
+                />
+                <Choice
+                  label="Source chord"
+                  value={bytes[19]}
+                  options={chords}
+                  onChange={(value) => update({ type: "chord", value })}
+                />
+                <Numeric
+                  label="Middle zone low"
+                  value={bytes[20]}
+                  onChange={(low) =>
+                    update({ type: "zone", low, high: bytes[21] })
+                  }
+                />
+                <Numeric
+                  label="Middle zone high"
+                  value={bytes[21]}
+                  onChange={(high) =>
+                    update({ type: "zone", low: bytes[20], high })
+                  }
+                />
+              </div>
+            </fieldset>
+            <fieldset className="fl-section">
+              <legend>Conversion region</legend>
+              <div
+                className="source-regions"
+                role="group"
+                aria-label="Conversion region"
+              >
+                {(["low", "middle", "high"] as Region[]).map((r) => (
+                  <button
+                    key={r}
+                    aria-pressed={r === region}
+                    onClick={() => setRegion(r)}
+                  >
+                    {r[0].toUpperCase() + r.slice(1)} region
+                  </button>
+                ))}
+              </div>
+              <p className="source-zone">
+                Source pitches:{" "}
+                {region === "low"
+                  ? bytes[20] === 0
                     ? "inactive"
-                    : `${bytes[21] + 1}–127`
-                  : `${bytes[20]}–${bytes[21]}`}{" "}
-              · Output limits are independent.
-            </p>
-            <div className="source-fields">
-              <Choice
-                label="Region NTR"
-                value={bytes[o]}
-                options={["Root Trans", "Root Fixed", "Guitar"]}
-                onChange={(value) => rule("ntr", value)}
-              />
-              <Choice
-                label="Region NTT"
-                value={bytes[o + 1] & 127}
-                options={
-                  bytes[o] === 2
-                    ? ["All Purpose", "Stroke", "Arpeggio"]
-                    : bytes[o] <= 1
-                      ? tables
-                      : []
-                }
-                onChange={(value) => rule("ntt", value)}
-              />
-              <Choice
-                label="Region high key"
-                value={bytes[o + 2]}
-                options={roots}
-                onChange={(value) => rule("highKey", value)}
-              />
-              <Choice
-                label="Region retrigger"
-                value={bytes[o + 5]}
-                options={[
-                  "Stop",
-                  "Pitch Shift",
-                  "Pitch Shift to Root",
-                  "Retrigger",
-                  "Retrigger to Root",
-                ]}
-                onChange={(value) => rule("retrigger", value)}
-              />
-              <Numeric
-                label="Output note low"
-                value={bytes[o + 3]}
-                onChange={(value) => rule("noteLow", value)}
-              />
-              <Numeric
-                label="Output note high"
-                value={bytes[o + 4]}
-                onChange={(value) => rule("noteHigh", value)}
-              />
-            </div>
-            <label className="source-check">
-              <input
-                type="checkbox"
-                checked={Boolean(bytes[o + 1] & 128)}
-                onChange={(e) => rule("bass", e.target.checked ? 1 : 0)}
-              />{" "}
-              NTT Bass
-            </label>
+                    : `0–${bytes[20] - 1}`
+                  : region === "high"
+                    ? bytes[21] === 127
+                      ? "inactive"
+                      : `${bytes[21] + 1}–127`
+                    : `${bytes[20]}–${bytes[21]}`}{" "}
+                · Output limits are independent.
+              </p>
+              <div className="source-fields">
+                <Choice
+                  label="Region NTR"
+                  value={bytes[o]}
+                  options={["Root Trans", "Root Fixed", "Guitar"]}
+                  onChange={(value) => rule("ntr", value)}
+                />
+                <Choice
+                  label="Region NTT"
+                  value={bytes[o + 1] & 127}
+                  options={
+                    bytes[o] === 2
+                      ? ["All Purpose", "Stroke", "Arpeggio"]
+                      : bytes[o] <= 1
+                        ? tables
+                        : []
+                  }
+                  onChange={(value) => rule("ntt", value)}
+                />
+                <Choice
+                  label="Region high key"
+                  value={bytes[o + 2]}
+                  options={roots}
+                  onChange={(value) => rule("highKey", value)}
+                />
+                <Choice
+                  label="Region retrigger"
+                  value={bytes[o + 5]}
+                  options={[
+                    "Stop",
+                    "Pitch Shift",
+                    "Pitch Shift to Root",
+                    "Retrigger",
+                    "Retrigger to Root",
+                  ]}
+                  onChange={(value) => rule("retrigger", value)}
+                />
+                <Numeric
+                  label="Output note low"
+                  value={bytes[o + 3]}
+                  onChange={(value) => rule("noteLow", value)}
+                />
+                <Numeric
+                  label="Output note high"
+                  value={bytes[o + 4]}
+                  onChange={(value) => rule("noteHigh", value)}
+                />
+              </div>
+              <label className="source-check">
+                <input
+                  type="checkbox"
+                  checked={Boolean(bytes[o + 1] & 128)}
+                  onChange={(e) => rule("bass", e.target.checked ? 1 : 0)}
+                />{" "}
+                NTT Bass
+              </label>
+            </fieldset>
             <details className="source-chords" open>
               <summary>
                 Enabled chords · {mask.filter(Boolean).length} of 34
@@ -583,28 +581,31 @@ export function SourceTracks({
                 routed to destination {route.destination} in {section.label}.
               </p>
             </details>
-            <label className="field">
-              <span>Clone into source channel</span>
-              <select
-                aria-label="Clone into source channel"
-                value={target}
-                onChange={(e) => setTarget(Number(e.target.value))}
-              >
-                <option value={0}>Do not clone</option>
-                {Array.from({ length: 16 }, (_, i) => i + 1).map((ch) => (
-                  <option key={ch} value={ch} disabled={used.has(ch)}>
-                    {ch}
-                    {used.has(ch) ? " · in use" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {target > 0 && (
-              <p className="source-zone">
-                The copy includes this source’s notes, controllers, program and
-                pitch bend. All 34 supported chord enables start off.
-              </p>
-            )}
+            <fieldset className="fl-section">
+              <legend>Clone</legend>
+              <label className="field">
+                <span>Clone into source channel</span>
+                <select
+                  aria-label="Clone into source channel"
+                  value={target}
+                  onChange={(e) => setTarget(Number(e.target.value))}
+                >
+                  <option value={0}>Do not clone</option>
+                  {Array.from({ length: 16 }, (_, i) => i + 1).map((ch) => (
+                    <option key={ch} value={ch} disabled={used.has(ch)}>
+                      {ch}
+                      {used.has(ch) ? " · in use" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {target > 0 && (
+                <p className="source-zone">
+                  The copy includes this source’s notes, controllers, program
+                  and pitch bend. All 34 supported chord enables start off.
+                </p>
+              )}
+            </fieldset>
           </fieldset>
         </div>
         {(invalid || error) && (

@@ -1,3 +1,4 @@
+import { askConfirm } from "./confirmDialog";
 import { useEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
 import type { Note, Section, View } from "./contracts";
@@ -330,16 +331,19 @@ export function PianoTools({
             disabled={disabled || !notes.length}
             title="Delete every note on this source in the current section (one undo)"
             onClick={() => {
-              if (
-                !window.confirm(
-                  `Clear Part: delete all ${notes.length} note(s) on CH${channel} in ${section.label}? Controllers, Voice, and CASM stay.`,
+              void (async () => {
+                if (
+                  !(await askConfirm(
+                    `Clear Part: delete all ${notes.length} note(s) on CH${channel} in ${section.label}? Controllers, Voice, and CASM stay.`,
+                    { title: "Clear Part", confirmLabel: "Clear Part" },
+                  ))
                 )
-              )
-                return;
-              void edit({
-                type: "deleteNotes",
-                ids: notes.map((n) => n.id),
-              });
+                  return;
+                void edit({
+                  type: "deleteNotes",
+                  ids: notes.map((n) => n.id),
+                });
+              })();
             }}
           >
             Clear Part
@@ -358,8 +362,7 @@ export function PianoTools({
         </div>
       </FloatingToolWindow>
       {onNoteColorsChange ? (
-        <details className="piano-tool-menu note-colors-menu">
-          <summary>Note colors</summary>
+        <StudioMenu label="Note colors" className="piano-tool-menu note-colors-menu">
           <div
             className="note-colors-grid"
             role="group"
@@ -390,7 +393,7 @@ export function PianoTools({
             </button>
             <small>Display only — does not change MIDI.</small>
           </div>
-        </details>
+        </StudioMenu>
       ) : null}
       <span className="piano-hint" title={advisory.text}>
         {advisory.text}

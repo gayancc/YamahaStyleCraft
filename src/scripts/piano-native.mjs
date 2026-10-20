@@ -9,6 +9,7 @@ import { verifyQuantizeNative, verifyExchangeWindowsNative } from "./verify-quan
 import { verifyClipboardNative } from "./verify-clipboard-native.mjs";
 import { verifyStudioDesign } from "./verify-studio-design-native.mjs";
 import { verifyPianoContinuity } from "./verify-piano-continuity-native.mjs";
+import { verifyUiCompliance } from "./verify-ui-compliance-native.mjs";
 const run = path.resolve(`../docs/piano-roll/validation/native-${Date.now()}`);
 fs.mkdirSync(run, { recursive: true });
 const existing = execFileSync(
@@ -28,13 +29,17 @@ assert.equal(
 execFileSync("cargo", ["build", "--locked", "-p", "genos-style-studio"], {
   stdio: "inherit",
 });
+// GENOS_REUSE_VITE=1 reuses a dev server that is already serving this project on 1420
+// (it is never stopped by this suite); the default still requires a clean port.
+const reuseVite = process.env.GENOS_REUSE_VITE === "1";
 for (const port of [1420, 9449]) {
   let busy = false;
   try {
     await fetch(`http://127.0.0.1:${port}`);
     busy = true;
   } catch {}
-  assert(!busy, `Port ${port} already in use`);
+  if (port === 1420 && reuseVite) assert(busy, "GENOS_REUSE_VITE=1 needs a dev server on 1420");
+  else assert(!busy, `Port ${port} already in use`);
 }
 const log = fs.openSync(path.join(run, "process.log"), "wx"),
   persisted = new Map(),
@@ -51,19 +56,21 @@ const ready = async (url, child) => {
   throw Error(`Timeout ${url}`);
 };
 try {
-  vite = spawn(
-    process.execPath,
-    [
-      "node_modules/vite/bin/vite.js",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      "1420",
-      "--strictPort",
-    ],
-    { windowsHide: true, stdio: ["ignore", log, log] },
-  );
-  await ready("http://127.0.0.1:1420", vite);
+  if (!reuseVite) {
+    vite = spawn(
+      process.execPath,
+      [
+        "node_modules/vite/bin/vite.js",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "1420",
+        "--strictPort",
+      ],
+      { windowsHide: true, stdio: ["ignore", log, log] },
+    );
+    await ready("http://127.0.0.1:1420", vite);
+  }
   app = spawn(path.resolve("target/debug/genos-style-studio.exe"), [], {
     windowsHide: true,
     stdio: ["ignore", log, log],
@@ -215,6 +222,8 @@ try {
   };
   await reset();
   await verifyStudioDesign({ page, ipc, run, results, source, reset });
+  await verifyUiCompliance({ page, run, results, source });
+  await reset();
   // Actual WebView right clicks must route to piano actions and cancel its
   // native context menu, including children outside the note canvas.
   await page.evaluate(() => {
@@ -556,7 +565,7 @@ try {
   );
   results.push("accessible lane splitter resize");
   await page.getByRole("button", { name: "Fit notes", exact: true }).click();
-  if (!(await page.locator(".piano-options > .studio-menu").evaluate(el => el.open))) await page.locator(".piano-options > .studio-menu > summary").click();
+  if (!(await page.locator(".piano-options > .studio-menu:not(.note-colors-menu)").evaluate(el => el.open))) await page.locator(".piano-options > .studio-menu:not(.note-colors-menu) > summary").click();
   await page.getByLabel("Pitch row height").focus();
   await page.keyboard.press("Home");
   for (let i = 0; i < 12; i++) await page.keyboard.press("ArrowRight");
@@ -674,9 +683,9 @@ try {
   results.push("representative real style visually rendered");
   // Read pixels from the actual WebView canvas, including black-key tails and
   // the incomplete MIDI endpoints, at both ends of the pitch-zoom range.
-  await page.locator(".piano-options > .studio-menu > summary").click();
+  await page.locator(".piano-options > .studio-menu:not(.note-colors-menu) > summary").click();
   for (const row of [10, 18, 30]) {
-    if (!(await page.locator(".piano-options > .studio-menu").evaluate(el => el.open))) await page.locator(".piano-options > .studio-menu > summary").click();
+    if (!(await page.locator(".piano-options > .studio-menu:not(.note-colors-menu)").evaluate(el => el.open))) await page.locator(".piano-options > .studio-menu:not(.note-colors-menu) > summary").click();
   await page.getByLabel("Pitch row height").focus();
     await page.keyboard.press("Home");
     for (let i = 10; i < row; i++) await page.keyboard.press("ArrowRight");

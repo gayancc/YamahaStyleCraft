@@ -7,6 +7,7 @@ import type {
   View,
 } from "./contracts";
 import { ParameterControl } from "./ParameterControl";
+import { QuantizePreview } from "./QuantizePreview";
 import { useStudio } from "./store";
 
 export const quantizeGrids: [QuantizeGrid, string][] = [
@@ -119,150 +120,169 @@ export function AdvancedQuantize({
       onCommit={(n) => patch({ [field]: n })}
     />
   );
+  const toggle = (
+    label: string,
+    ariaLabel: string,
+    checked: boolean,
+    onChange: (v: boolean) => void,
+    inactive = false,
+  ) => (
+    <label className="aq-toggle">
+      <input
+        type="checkbox"
+        aria-label={ariaLabel}
+        checked={checked}
+        disabled={disabled || inactive}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span>{label}</span>
+    </label>
+  );
   return (
     <div
       className="advanced-quantize"
       role="group"
       aria-label="Advanced quantize"
     >
-      <label>
-        Target
-        <select
-          aria-label="Quantize target"
-          value={options.target}
-          disabled={disabled}
-          onChange={(e) =>
-            patch({
-              target: e.target.value as QuantizeOptions["target"],
-              ...(e.target.value !== "starts"
-                ? { mode: "yamaha" as const }
-                : {}),
-            })
-          }
-        >
-          <option value="starts">Note starts</option>
-          <option value="ends">Note ends</option>
-          <option value="lengths">Note lengths</option>
-          <option value="both">Starts and ends</option>
-        </select>
-      </label>
-      <label>
-        Mode
-        <select
-          aria-label="Quantize mode"
-          disabled={disabled || options.target !== "starts"}
-          value={options.mode}
-          onChange={(e) =>
-            patch({ mode: e.target.value as QuantizeOptions["mode"] })
-          }
-        >
-          <option value="yamaha">Yamaha events · keep pattern</option>
-          <option value="relative">Group offset</option>
-        </select>
-      </label>
-      <label>
-        Size
-        <select
-          aria-label="Quantize size"
-          value={options.size}
-          disabled={disabled}
-          onChange={(e) => {
-            const size = e.target.value as QuantizeGrid;
-            patch({ size });
-            if (!size.startsWith("mixed")) {
-              useStudio.setState({ snap: 1920 / Number(size) });
-            }
-          }}
-        >
-          {quantizeGrids.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          aria-label="Quantize soft strength"
-          checked={options.soft}
-          disabled={disabled}
-          onChange={(e) => patch({ soft: e.target.checked })}
-        />
-        Soft / Strength
-      </label>
-      <label>
-        Tuplet
-        <select
-          aria-label="Quantize tuplet"
-          value={options.tuplet}
-          disabled={disabled || mixed}
-          onChange={(e) => patch({ tuplet: Number(e.target.value) })}
-        >
-          {[0, 3, 5, 7].map((n) => (
-            <option key={n} value={n}>
-              {n || "Off"}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          aria-label="Quantize catch enabled"
-          checked={options.catchEnabled}
-          disabled={disabled}
-          onChange={(e) => patch({ catchEnabled: e.target.checked })}
-        />
-        Catch range
-      </label>
-      <div className="quantize-knobs">
-        {number("strength", "strength", 100, !options.soft)}{" "}
-        {number(
-          "swing",
-          "swing",
-          100,
-          mixed || options.tuplet > 0 || options.target === "lengths",
+      <fieldset className="aq-box">
+        <legend>Grid</legend>
+        <QuantizePreview options={options} />
+        <div className="aq-row">
+          <label className="aq-field">
+            <span>Size</span>
+            <select
+              aria-label="Quantize size"
+              value={options.size}
+              disabled={disabled}
+              onChange={(e) => {
+                const size = e.target.value as QuantizeGrid;
+                patch({ size });
+                if (!size.startsWith("mixed")) {
+                  useStudio.setState({ snap: 1920 / Number(size) });
+                }
+              }}
+            >
+              {quantizeGrids.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="aq-field aq-narrow">
+            <span>Tuplet</span>
+            <select
+              aria-label="Quantize tuplet"
+              value={options.tuplet}
+              disabled={disabled || mixed}
+              onChange={(e) => patch({ tuplet: Number(e.target.value) })}
+            >
+              {[0, 3, 5, 7].map((n) => (
+                <option key={n} value={n}>
+                  {n || "Off"}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </fieldset>
+      <fieldset className="aq-box">
+        <legend>Affects</legend>
+        <div className="aq-row">
+          <label className="aq-field">
+            <span>Target</span>
+            <select
+              aria-label="Quantize target"
+              value={options.target}
+              disabled={disabled}
+              onChange={(e) =>
+                patch({
+                  target: e.target.value as QuantizeOptions["target"],
+                  ...(e.target.value !== "starts"
+                    ? { mode: "yamaha" as const }
+                    : {}),
+                })
+              }
+            >
+              <option value="starts">Note starts</option>
+              <option value="ends">Note ends</option>
+              <option value="lengths">Note lengths</option>
+              <option value="both">Starts and ends</option>
+            </select>
+          </label>
+          <label className="aq-field">
+            <span>Mode</span>
+            <select
+              aria-label="Quantize mode"
+              disabled={disabled || options.target !== "starts"}
+              value={options.mode}
+              onChange={(e) =>
+                patch({ mode: e.target.value as QuantizeOptions["mode"] })
+              }
+            >
+              <option value="yamaha">Yamaha events · keep pattern</option>
+              <option value="relative">Group offset</option>
+            </select>
+          </label>
+        </div>
+        {toggle(
+          "Move controllers with note starts",
+          "Move controllers with note starts",
+          options.moveControllers,
+          (v) => patch({ moveControllers: v }),
+          options.target === "ends" || options.target === "lengths",
         )}
-        {number("catch percent", "catchPercent", 100, !options.catchEnabled, 1)}
-        {number("safe ticks", "safeRange", 960)}
-        {number("rough ticks", "rough", 120)}
-      </div>{" "}
-      <label>
-        <input
-          type="checkbox"
-          aria-label="Move controllers with note starts"
-          checked={options.moveControllers}
+      </fieldset>
+      <fieldset className="aq-box">
+        <legend>Feel</legend>
+        <div className="aq-toggles">
+          {toggle(
+            "Soft / Strength",
+            "Quantize soft strength",
+            options.soft,
+            (v) => patch({ soft: v }),
+          )}
+          {toggle(
+            "Catch range",
+            "Quantize catch enabled",
+            options.catchEnabled,
+            (v) => patch({ catchEnabled: v }),
+          )}
+        </div>
+        <div className="quantize-knobs">
+          {number("strength", "strength", 100, !options.soft)}{" "}
+          {number(
+            "swing",
+            "swing",
+            100,
+            mixed || options.tuplet > 0 || options.target === "lengths",
+          )}
+          {number("catch percent", "catchPercent", 100, !options.catchEnabled, 1)}
+          {number("safe ticks", "safeRange", 960)}
+          {number("rough ticks", "rough", 120)}
+        </div>
+      </fieldset>
+      <div className="aq-actions">
+        {toggle("Auto apply", "Quantize auto apply", auto, setAuto)}
+        <button
+          type="button"
+          className="aq-reset"
           disabled={
-            disabled ||
-            options.target === "ends" ||
-            options.target === "lengths"
+            disabled || !(baseline?.notes.length || baseline?.events.length)
           }
-          onChange={(e) => patch({ moveControllers: e.target.checked })}
-        />
-        Move controllers
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          aria-label="Quantize auto apply"
-          checked={auto}
-          disabled={disabled}
-          onChange={(e) => setAuto(e.target.checked)}
-        />
-        Auto apply
-      </label>
-      <button disabled={disabled || !notes.length} onClick={() => execute()}>
-        {ids.length ? "Quantize selection" : "Quantize whole part"}
-      </button>
-      <button
-        disabled={
-          disabled || !(baseline?.notes.length || baseline?.events.length)
-        }
-        onClick={() => execute(true)}
-      >
-        Reset original
-      </button>
+          onClick={() => execute(true)}
+        >
+          Reset original
+        </button>
+        <button
+          type="button"
+          className="aq-apply"
+          disabled={disabled || !notes.length}
+          onClick={() => execute()}
+        >
+          {ids.length ? "Quantize selection" : "Quantize whole part"}
+        </button>
+      </div>
       <small>
         Timing changes keep pitch and velocity. Reset restores original timing,
         including moved CC and pitch bend.

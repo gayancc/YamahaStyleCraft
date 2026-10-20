@@ -14,7 +14,7 @@ execFileSync(
   ["build", "--locked", "-p", "genos-core", "--example", "midi_probe"],
   { cwd: root, stdio: "inherit" },
 );
-const docs = path.resolve(root, "../docs/development/reports/genos-hardware");
+const docs = path.resolve(process.env.GENOS_VERIFY_REPORT_DIR ?? path.join(root, "../docs/development/reports/genos-hardware"));
 const sty = path.resolve(
   root,
   "../docs/research/experiments/fixtures/08.3-4-ACOUSTIC-control.STY",

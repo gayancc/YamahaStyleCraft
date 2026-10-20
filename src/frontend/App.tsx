@@ -1,6 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { FloatingToolWindow } from "./FloatingToolWindow";
-import { StudioMenu } from "./StudioMenu";
+import { MenuGroup, StudioMenu } from "./StudioMenu";
+import { WindowControls, titlebarDragProps } from "./WindowControls";
+import {
+  cycleModalFocus,
+  focusableControls,
+  restoreEditorFocus,
+} from "./modal";
 import { ParameterControl, formatPan } from "./ParameterControl";
 import { quantizeGridForTicks } from "./quantizeGrid";
 import {
@@ -10,7 +16,8 @@ import {
   midiLevelSegments,
 } from "./midiLevel";
 import type { ReactNode } from "react";
-import { open, save, confirm } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { askConfirm } from "./confirmDialog";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -38,6 +45,7 @@ import {
   AudioLines,
   Repeat2,
   CircleHelp,
+  Circle,
   CircleDot,
   OctagonAlert,
   Bell,
@@ -52,6 +60,7 @@ import {
   PictureInPicture2,
   Paintbrush,
   Eraser,
+  Plus,
 } from "lucide-react";
 import { currentUiState, useStudio } from "./store";
 import type { StudioTool } from "./store";
@@ -65,6 +74,7 @@ import type {
   Prefs,
   RecentEntryView,
   Route,
+  Section,
   TransportStatus,
   View,
 } from "./contracts";
@@ -83,8 +93,10 @@ import { InitialEffects, type EffectSelection } from "./InitialEffects";
 import { LivePreview } from "./LivePreview";
 import { ChordPreview } from "./ChordPreview";
 import { ChordStrip } from "./ChordStrip";
+import { activityBins } from "./partActivity";
+import { TempoField } from "./TempoField";
+import { TimeSignature } from "./TimeSignature";
 import { RecordingMidiDialog, type RecDataMode } from "./RecordingMidiDialog";
-import { sortSections } from "./sectionOrder";
 import {
   broadcastMidiOwnership,
   broadcastMixerSync,
@@ -101,6 +113,11 @@ import {
   pitchBendRangeSemitones,
 } from "./MixerPanel";
 import { NoteFxPanel } from "./NoteFxPanel";
+import { EMPTY_HINT, hintForElement, parseHint } from "./hints";
+import { layoutSections, sectionGridColumns } from "./sectionSlots";
+import type { SectionSlot, SlotGroupName } from "./sectionSlots";
+import { AddSection } from "./AddSection";
+import type { ControlHint } from "./hints";
 import { ExpansionRecovery } from "./ExpansionRecovery";
 import { metronomeAtTick, playCountIn, resetMetronome } from "./metronome";
 
@@ -129,23 +146,35 @@ function IconButton({
   children,
   onClick,
   disabled = false,
-  active = false,
+  active,
+  className = "",
 }: {
   label: string;
   children: ReactNode;
   onClick: () => void;
   disabled?: boolean;
   active?: boolean;
+  className?: string;
 }) {
+  const { name, shortcut } = parseHint(label);
   return (
     <button
       title={label}
       aria-label={label}
-      className={`icon-button ${active ? "active" : ""}`}
+      aria-pressed={active}
+      className={`icon-button ${active ? "active" : ""} ${className}`.trim()}
       onClick={onClick}
       disabled={disabled}
     >
       {children}
+      <span className="menu-label" aria-hidden="true">
+        {name}
+      </span>
+      {shortcut && (
+        <kbd className="menu-shortcut" aria-hidden="true">
+          {shortcut}
+        </kbd>
+      )}
     </button>
   );
 }
@@ -187,6 +216,10 @@ function NumberField({
         max={max}
         onKeyDown={(e) => {
           e.stopPropagation();
+          if (e.key === "Escape") {
+            e.currentTarget.value = String(value);
+            e.currentTarget.blur();
+          }
           if (e.key === "Enter") e.currentTarget.blur();
         }}
         onBlur={(e) => {
@@ -258,6 +291,10 @@ export function App() {
   const [exchangeOpen, setExchangeOpen] = useState(false);
   const [copyOpen, setCopyOpen] = useState(false);
   const [sectionLengthOpen, setSectionLengthOpen] = useState(false);
+  const [addSlot, setAddSlot] = useState<{
+    slot: SectionSlot<Section>;
+    group: SlotGroupName;
+  } | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [drumsOpen, setDrumsOpen] = useState(false);
@@ -383,15 +420,15 @@ export function App() {
   );
   const allowReplace = async () => {
     if (view?.dirty) {
-      return await confirm("Discard unsaved edits and open another file?", {
+      return await askConfirm("Discard unsaved edits and open another file?", {
         title: "Unsaved Style",
-        kind: "warning",
+        confirmLabel: "Discard and open",
       });
     }
     if (hasRetainedCapture) {
-      return await confirm("Discard the retained MIDI capture take?", {
+      return await askConfirm("Discard the retained MIDI capture take?", {
         title: "Retained capture",
-        kind: "warning",
+        confirmLabel: "Discard take",
       });
     }
     return true;
@@ -789,6 +826,8 @@ export function App() {
     try {
       setDevices(await invoke<Devices>("scan_devices"));
     } catch (e) {
+      // Browser preview has no Tauri IPC — keep the panel usable without a banner.
+      if (!isTauri()) return;
       useStudio.setState({ error: String(e) });
     }
   };
@@ -867,10 +906,11 @@ export function App() {
   const stop = async () => {
     try {
       const elapsed = transport.elapsedMs;
-      await invoke("stop");
+      if (isTauri()) await invoke("stop");
       setTransport((t) => ({ ...t, playing: false }));
       applyPark(elapsed);
     } catch (e) {
+      if (!isTauri()) return;
       useStudio.setState({ error: String(e) });
     }
   };
@@ -1187,13 +1227,13 @@ export function App() {
       if (dirty || retained) {
         e.preventDefault();
         if (
-          await confirm(
+          await askConfirm(
             dirty
               ? "Close and discard unsaved changes?"
               : "Close and discard the retained MIDI capture take?",
             {
               title: dirty ? "Unsaved Style" : "Retained capture",
-              kind: "warning",
+              confirmLabel: "Discard and close",
             },
           )
         ) {
@@ -1220,12 +1260,14 @@ export function App() {
       exchangeOpen ||
       copyOpen ||
       sectionLengthOpen ||
+      addSlot ||
       libraryOpen ||
       voiceOpen ||
       drumsOpen ||
       effectsOpen ||
       livePreviewOpen ||
       chordPreviewOpen ||
+      recordingMidiOpen ||
       sourcesRoute
     ) {
       if (e.key === "Escape" && !recovery) {
@@ -1234,6 +1276,7 @@ export function App() {
             exchangeOpen ||
             copyOpen ||
             sectionLengthOpen ||
+            addSlot ||
             libraryOpen ||
             voiceOpen ||
             drumsOpen ||
@@ -1252,6 +1295,7 @@ export function App() {
         setExchangeOpen(false);
         setCopyOpen(false);
         setSectionLengthOpen(false);
+        setAddSlot(null);
         setLibraryOpen(false);
         setVoiceOpen(false);
         setDrumsOpen(false);
@@ -1263,7 +1307,10 @@ export function App() {
       }
       return;
     }
-    const input = (e.target as HTMLElement).closest("input,textarea,select");
+    const input =
+      e.target instanceof Element
+        ? e.target.closest("input,textarea,select")
+        : null;
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && e.key.toLowerCase() === "o") {
       e.preventDefault();
@@ -1334,7 +1381,6 @@ export function App() {
   }, []);
   useEffect(() => {
     if (
-      !deviceOpen &&
       !diagnostics &&
       !recovery &&
       !composerOpen &&
@@ -1345,32 +1391,24 @@ export function App() {
       return;
     const previous = document.activeElement as HTMLElement | null;
     const modal = document.querySelector<HTMLElement>('[aria-modal="true"]');
-    const controls = () =>
-      Array.from(
-        modal?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex="0"]',
-        ) ?? [],
-      );
-    controls()[0]?.focus();
+    if (!modal) return;
+    focusableControls(modal)[0]?.focus();
     const trap = (e: KeyboardEvent) => {
-      if (e.key !== "Tab") return;
-      const els = controls(),
-        first = els[0],
-        last = els.at(-1);
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last?.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first?.focus();
-      }
+      cycleModalFocus(e, modal);
     };
     window.addEventListener("keydown", trap, true);
     return () => {
       window.removeEventListener("keydown", trap, true);
-      previous?.focus();
+      restoreEditorFocus(previous);
     };
-  }, [deviceOpen, diagnostics, recovery, composerOpen]);
+  }, [
+    diagnostics,
+    recovery,
+    composerOpen,
+    expansionOpen,
+    limitsOpen,
+    helpOpen,
+  ]);
   const cc = (ch: number, controller: number, value: number) => {
     if (!view || !section) return;
     if (mixerApplyAll) {
@@ -1473,24 +1511,23 @@ export function App() {
   const channelNotes = sectionNotes.filter((n) => n.channel === channel);
   const noteIndex = channelNotes.findIndex((n) => n.id === note?.id);
   const editingDisabled = busy || transport.playing;
-  const [controlHint, setControlHint] = useState("");
+  const [controlHint, setControlHint] = useState<ControlHint>(EMPTY_HINT);
   return (
     <div
       className="app"
       style={{ zoom: uiScale }}
       onPointerOver={(e) => {
         const el = (e.target as HTMLElement).closest<HTMLElement>(
-          "[title],button[aria-label],input[aria-label],select[aria-label],[role=slider]",
+          "[data-hint],[title],button[aria-label],input[aria-label],select[aria-label],[role=slider]",
         );
-        setControlHint(el?.title || el?.getAttribute("aria-label") || "");
+        setControlHint(hintForElement(el));
       }}
       onFocusCapture={(e) => {
-        const el = e.target as HTMLElement;
-        setControlHint(el.title || el.getAttribute("aria-label") || "");
+        setControlHint(hintForElement(e.target as HTMLElement));
       }}
-      onPointerLeave={() => setControlHint("")}
+      onPointerLeave={() => setControlHint(EMPTY_HINT)}
     >
-      <header className="titlebar">
+      <header className="titlebar" {...titlebarDragProps()}>
         <div className="brand" title="Genos Style Studio">
           <AudioLines size={18} />
           <span>
@@ -1499,6 +1536,7 @@ export function App() {
         </div>
         <div className="file-actions">
           <StudioMenu label="File">
+            <MenuGroup label="Project" />
             <button onClick={() => void openFile()} disabled={busy}>
               <FolderOpen size={14} /> Open
             </button>
@@ -1523,6 +1561,7 @@ export function App() {
             >
               <Save size={14} />
             </IconButton>
+            <MenuGroup label="Export" />
             <IconButton
               label="Export Style (Ctrl+Shift+S)"
               onClick={() => void saveFile(false)}
@@ -1590,233 +1629,11 @@ export function App() {
         >
           <span className={`connection-dot ${output ? "connected" : ""}`} />
           <span className="output-select-name">
-            {output?.name ?? "Select MIDI output"}
+            {output?.name ?? "MIDI out"}
           </span>
           <ChevronRight size={12} />
         </button>
         <div className="titlebar-tools">
-          <StudioMenu label="Studio">
-            {" "}
-            <span
-              className={`midi-in-light${midiInFlash ? " on" : ""}${
-                monitoring || capturing ? " armed" : ""
-              }`}
-              title={
-                midiInFlash
-                  ? "MIDI IN activity"
-                  : monitoring || capturing
-                    ? "MIDI IN (waiting)"
-                    : "MIDI IN (idle)"
-              }
-              aria-label={midiInFlash ? "MIDI IN active" : "MIDI IN inactive"}
-              role="status"
-            />
-            <button
-              type="button"
-              className={`midi-owner-btn${midiActive ? " active" : ""}`}
-              title={
-                midiActive
-                  ? "MIDI active here — only this project window drives hardware"
-                  : "Use MIDI here — stop play/record in the other window first"
-              }
-              aria-label={midiActive ? "MIDI active here" : "Use MIDI here"}
-              aria-pressed={midiActive}
-              onClick={() => {
-                if (midiActive) return;
-                void claimMidiHere();
-              }}
-            >
-              {midiActive
-                ? "MIDI control: this project"
-                : "Use MIDI in this project"}
-            </button>
-            <IconButton
-              label="Expansion Pack Recovery"
-              onClick={() => setExpansionOpen(true)}
-            >
-              <PackageOpen size={15} />
-            </IconButton>
-            <IconButton
-              label="Feature inventory / limits"
-              onClick={() => setLimitsOpen(true)}
-            >
-              <ListTree size={15} />
-            </IconButton>
-            <IconButton
-              label="Recording & MIDI settings"
-              onClick={() => setRecordingMidiOpen(true)}
-            >
-              <AudioLines size={15} />
-            </IconButton>
-            <IconButton label="Help" onClick={() => setHelpOpen(true)}>
-              <CircleHelp size={15} />
-            </IconButton>
-            <IconButton
-              label="MIDI device settings"
-              onClick={() => {
-                setDeviceOpen(true);
-                void scan();
-              }}
-            >
-              <Settings2 size={15} />
-            </IconButton>
-          </StudioMenu>
-        </div>
-      </header>
-      <div className="toolbar">
-        <div className="transport">
-          <div className="transport-primary" aria-label="Playback controls">
-            {" "}
-            <IconButton
-              label="Move cursor to section start (W)"
-              onClick={() => {
-                if (!section) return;
-                setParkedTick(section.start);
-                useStudio.setState({ message: "Cursor at section start" });
-              }}
-              disabled={!section || transport.playing}
-            >
-              <SkipBack size={15} />
-            </IconButton>{" "}
-            <IconButton
-              label="Stop / release notes (Escape)"
-              onClick={() => void stop()}
-              disabled={!transport.playing}
-            >
-              <Square size={14} />
-            </IconButton>{" "}
-            <IconButton
-              label={
-                parkedTick != null &&
-                section &&
-                parkedTick > section.start &&
-                parkedTick < section.end
-                  ? "Play from parked cursor (Space)"
-                  : "Play source notes (Space)"
-              }
-              onClick={() => void play()}
-              disabled={!view || busy}
-              active={transport.playing}
-            >
-              <Play size={18} fill="currentColor" />
-            </IconButton>{" "}
-            <IconButton
-              label="Record / capture (arm R first)"
-              onClick={() => {
-                if (capturing) return;
-                if (!monitorName || armedChannel == null) {
-                  setDeviceOpen(true);
-                  void scan();
-                  useStudio.setState({
-                    message:
-                      armedChannel == null
-                        ? "Arm a part with R, then Start capture"
-                        : "Select MIDI input, then Start capture",
-                  });
-                  return;
-                }
-                void startCapture();
-              }}
-              disabled={!view || busy || transport.playing}
-              active={capturing}
-            >
-              <CircleDot size={15} />
-            </IconButton>{" "}
-            <IconButton
-              label="Loop section"
-              onClick={() => setLoop(!loop)}
-              active={loop}
-            >
-              <Repeat2 size={16} />
-            </IconButton>
-          </div>{" "}
-          <div className="time-readout">
-            {Math.floor(transport.elapsedMs / 60000)
-              .toString()
-              .padStart(2, "0")}
-            :
-            {Math.floor((transport.elapsedMs / 1000) % 60)
-              .toString()
-              .padStart(2, "0")}
-            .
-            <span>
-              {(transport.elapsedMs % 1000).toString().padStart(3, "0")}
-            </span>
-          </div>
-          <div className="transport-timing">
-            {" "}
-            <label className="tempo" title="Edit tempo">
-              <input
-                aria-label="Tempo BPM"
-                type="number"
-                min={20}
-                max={400}
-                step={0.01}
-                disabled={!view || editingDisabled}
-                key={view ? `t-${view.revision}-${view.tempo}` : "t"}
-                defaultValue={view ? Number(view.tempo.toFixed(2)) : undefined}
-                onBlur={(e) => {
-                  if (!view) return;
-                  const n = Number(e.target.value);
-                  if (
-                    Number.isFinite(n) &&
-                    n >= 20 &&
-                    n <= 400 &&
-                    Math.abs(n - view.tempo) > 0.001
-                  ) {
-                    void applyTempoMeter(n, view.numerator, view.denominator);
-                  } else {
-                    e.target.value = String(Number(view.tempo.toFixed(2)));
-                  }
-                }}
-              />
-              <span>BPM</span>
-            </label>
-            <div className="meter meter-edit">
-              <input
-                aria-label="Meter numerator"
-                type="number"
-                min={1}
-                max={16}
-                disabled={!view || editingDisabled}
-                key={view ? `n-${view.revision}-${view.numerator}` : "n"}
-                defaultValue={view?.numerator}
-                onBlur={(e) => {
-                  if (!view) return;
-                  const n = Number(e.target.value);
-                  if (
-                    Number.isSafeInteger(n) &&
-                    n >= 1 &&
-                    n <= 16 &&
-                    n !== view.numerator
-                  ) {
-                    void applyTempoMeter(view.tempo, n, view.denominator);
-                  } else {
-                    e.target.value = String(view.numerator);
-                  }
-                }}
-              />
-              <span>/</span>
-              <select
-                aria-label="Meter denominator"
-                disabled={!view || editingDisabled}
-                value={view?.denominator ?? 4}
-                onChange={(e) => {
-                  if (!view) return;
-                  const d = Number(e.target.value);
-                  if (d !== view.denominator) {
-                    void applyTempoMeter(view.tempo, view.numerator, d);
-                  }
-                }}
-              >
-                {[1, 2, 4, 8, 16].map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
           <div className="transport-preview">
             <StudioMenu label="Chord preview">
               {" "}
@@ -1918,16 +1735,283 @@ export function App() {
               </div>
             </div>
           </StudioMenu>
+          <StudioMenu label="Studio">
+            {" "}
+            <span
+              className={`midi-in-light${midiInFlash ? " on" : ""}${
+                monitoring || capturing ? " armed" : ""
+              }`}
+              title={
+                midiInFlash
+                  ? "MIDI IN activity"
+                  : monitoring || capturing
+                    ? "MIDI IN (waiting)"
+                    : "MIDI IN (idle)"
+              }
+              aria-label={midiInFlash ? "MIDI IN active" : "MIDI IN inactive"}
+              role="status"
+            />
+            <button
+              type="button"
+              className={`midi-owner-btn${midiActive ? " active" : ""}`}
+              title={
+                midiActive
+                  ? "MIDI active here — only this project window drives hardware"
+                  : "Use MIDI here — stop play/record in the other window first"
+              }
+              aria-label={midiActive ? "MIDI active here" : "Use MIDI here"}
+              aria-pressed={midiActive}
+              onClick={() => {
+                if (midiActive) return;
+                void claimMidiHere();
+              }}
+            >
+              {midiActive
+                ? "MIDI control: this project"
+                : "Use MIDI in this project"}
+            </button>
+            <IconButton
+              label="Expansion Pack Recovery"
+              onClick={() => setExpansionOpen(true)}
+            >
+              <PackageOpen size={15} />
+            </IconButton>
+            <IconButton
+              label="Feature inventory / limits"
+              onClick={() => setLimitsOpen(true)}
+            >
+              <ListTree size={15} />
+            </IconButton>
+            <IconButton
+              label="Recording & MIDI settings"
+              onClick={() => setRecordingMidiOpen(true)}
+            >
+              <AudioLines size={15} />
+            </IconButton>
+            <IconButton label="Help" onClick={() => setHelpOpen(true)}>
+              <CircleHelp size={15} />
+            </IconButton>
+            <IconButton
+              label="MIDI device settings"
+              onClick={() => {
+                setDeviceOpen(true);
+                void scan();
+              }}
+            >
+              <Settings2 size={15} />
+            </IconButton>
+          </StudioMenu>
         </div>
-      </div>
-      {error && (
-        <div className="error" role="alert">
-          <span>{error}</span>
-          <IconButton label="Dismiss error" onClick={state.clearError}>
-            <X size={15} />
-          </IconButton>
+        <WindowControls />
+      </header>
+      <div className="toolbar topbar">
+        <div className="transport">
+          <div className="fl-transport" role="group" aria-label="Playback controls">
+            <div className="fl-capsule">
+            <IconButton
+              className="play-btn"
+              label={
+                parkedTick != null &&
+                section &&
+                parkedTick > section.start &&
+                parkedTick < section.end
+                  ? "Play from parked cursor (Space)"
+                  : "Play source notes (Space)"
+              }
+              onClick={() => void play()}
+              disabled={!view || busy}
+              active={transport.playing}
+            >
+              <Play size={18} fill="currentColor" />
+            </IconButton>
+            <IconButton
+              className="stop-btn"
+              label="Stop / release notes (Escape)"
+              onClick={() => void stop()}
+              disabled={!transport.playing}
+            >
+              <Square size={14} />
+            </IconButton>
+            </div>
+            <IconButton
+              className="rec-btn"
+              label="Record / capture (arm R first)"
+              onClick={() => {
+                if (capturing) return;
+                if (!monitorName || armedChannel == null) {
+                  setDeviceOpen(true);
+                  void scan();
+                  useStudio.setState({
+                    message:
+                      armedChannel == null
+                        ? "Arm a part with R, then Start capture"
+                        : "Select MIDI input, then Start capture",
+                  });
+                  return;
+                }
+                void startCapture();
+              }}
+              disabled={!view || busy || transport.playing}
+              active={capturing}
+            >
+              <Circle size={16} fill="currentColor" />
+            </IconButton>
+          <div className="transport-timing fl-tempo">
+            {" "}
+            <TempoField
+              tempo={view?.tempo ?? null}
+              revision={view?.revision ?? 0}
+              disabled={!view || editingDisabled}
+              onCommit={(bpm) =>
+                view && void applyTempoMeter(bpm, view.numerator, view.denominator)
+              }
+            />
+            <span className="tempo-unit">BPM</span>
+          </div>
+          <TimeSignature
+            numerator={view?.numerator ?? 4}
+            denominator={view?.denominator ?? 4}
+            disabled={!view || editingDisabled}
+            onApply={(n, d) =>
+              view && void applyTempoMeter(view.tempo, n, d)
+            }
+          />
+          <div className="time-readout">
+            {Math.floor(transport.elapsedMs / 60000)
+              .toString()
+              .padStart(2, "0")}
+            :
+            {Math.floor((transport.elapsedMs / 1000) % 60)
+              .toString()
+              .padStart(2, "0")}
+            .
+            <span>
+              {(transport.elapsedMs % 1000).toString().padStart(3, "0")}
+            </span>
+          </div>
+          <div className="fl-extra">
+            <IconButton
+              label="Move cursor to section start (W)"
+              onClick={() => {
+                if (!section) return;
+                setParkedTick(section.start);
+                useStudio.setState({ message: "Cursor at section start" });
+              }}
+              disabled={!section || transport.playing}
+            >
+              <SkipBack size={15} />
+            </IconButton>
+            <IconButton
+              label="Loop section"
+              onClick={() => setLoop(!loop)}
+              active={loop}
+            >
+              <Repeat2 size={16} />
+            </IconButton>
+          </div>
+          </div>
         </div>
+      {view && (
+        <section className="sections-strip">
+            <nav
+              aria-label="Style sections"
+              className="section-bar"
+              style={{
+                gridTemplateColumns: sectionGridColumns(
+                  layoutSections(view.sections),
+                ),
+              }}
+            >
+              {(() => {
+                const layout = layoutSections(view.sections);
+                const barsOf = (s: (typeof view.sections)[number]) =>
+                  (
+                    (s.end - s.start) /
+                    (((view.ppq * 4) / view.denominator) * view.numerator)
+                  ).toLocaleString(undefined, { maximumFractionDigits: 1 });
+                const chip = (
+                  s: (typeof view.sections)[number],
+                  text: string,
+                ) => {
+                  const hasNotes = view.notes.some(
+                    (n) => n.start >= s.start && n.start < s.end,
+                  );
+                  const bars = barsOf(s);
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => {
+                        if (transport.playing) void stop();
+                        state.section(s.id);
+                      }}
+                      aria-pressed={s.id === sectionId}
+                      className={`section-chip ${s.id === sectionId ? "selected" : ""}${hasNotes ? "" : " empty-section"}`}
+                      title={
+                        (text === s.label ? s.label : `${text} · ${s.label}`) +
+                        ` · ${bars} bars${hasNotes ? "" : " (empty)"}`
+                      }
+                    >
+                      <span>{text}</span>
+                      <small>
+                        {bars}b{!hasNotes ? " ·∅" : ""}
+                      </small>
+                    </button>
+                  );
+                };
+                return (
+                  <>
+                    {layout.groups.map((group, gi) => (
+                      <Fragment key={group.name}>
+                        {gi > 0 && (
+                          <span className="section-sep" aria-hidden="true" />
+                        )}
+                      <div
+                        role="group"
+                        aria-label={group.name}
+                        className="section-group"
+                      >
+                        {group.slots.map((slot) =>
+                          slot.section ? (
+                            chip(slot.section, slot.label)
+                          ) : (
+                            <button
+                              key={slot.key}
+                              type="button"
+                              disabled={busy || transport.playing}
+                              className="section-chip empty-slot"
+                              aria-label={`Add ${slot.label} (not in this Style)`}
+                              title={`${slot.label} · not in this Style · click to add`}
+                              onClick={() =>
+                                setAddSlot({ slot, group: group.name })
+                              }
+                            >
+                              <span>{slot.label}</span>
+                              <Plus size={10} aria-hidden="true" />
+                            </button>
+                          ),
+                        )}
+                      </div>
+                      </Fragment>
+                    ))}
+                    {layout.extra.length > 0 && (
+                      <>
+                      <span className="section-sep" aria-hidden="true" />
+                      <div
+                        role="group"
+                        aria-label="Other sections"
+                        className="section-group"
+                      >
+                        {layout.extra.map((s) => chip(s, s.label))}
+                      </div>
+                      </>
+                    )}
+                  </>
+                );
+              })()}
+            </nav>
+          </section>
       )}
+      </div>
       {!view ? (
         <main className="empty">
           <div className="empty-score">
@@ -1999,71 +2083,6 @@ export function App() {
         </main>
       ) : (
         <>
-          <section className="sections-strip">
-            <nav aria-label="Style sections">
-              {sortSections(view.sections).map((s) => {
-                const hasNotes = view.notes.some(
-                  (n) => n.start >= s.start && n.start < s.end,
-                );
-                const bars = (
-                  (s.end - s.start) /
-                  (((view.ppq * 4) / view.denominator) * view.numerator)
-                ).toLocaleString(undefined, { maximumFractionDigits: 1 });
-                return (
-                  <button
-                    key={s.id}
-                    onClick={() => {
-                      if (transport.playing) void stop();
-                      state.section(s.id);
-                    }}
-                    className={`section-chip ${s.id === sectionId ? "selected" : ""}${hasNotes ? "" : " empty-section"}`}
-                    title={
-                      hasNotes
-                        ? `${s.label} · ${bars} bars`
-                        : `${s.label} · ${bars} bars (empty)`
-                    }
-                  >
-                    <span>{s.label}</span>
-                    <small>
-                      {bars}b{!hasNotes ? " ·∅" : ""}
-                    </small>
-                  </button>
-                );
-              })}
-            </nav>
-            <div className="section-heading-meta">
-              <span title={`${view.format} · ${view.ppq} PPQN`}>
-                {view.format}
-              </span>
-              <button
-                type="button"
-                className="ghost"
-                disabled={busy || transport.playing || view.sections.length < 2}
-                title="Copy notes and controllers into another section"
-                onClick={() => setCopyOpen(true)}
-              >
-                Copy
-              </button>
-              <button
-                type="button"
-                className="ghost"
-                disabled={busy || transport.playing}
-                title="Fill/Break length or Shorten Section"
-                onClick={() => setSectionLengthOpen(true)}
-              >
-                Length
-              </button>
-              <button
-                type="button"
-                className="ghost"
-                disabled={busy || transport.playing}
-                title="Import notes from another Style file"
-                onClick={() => setLibraryOpen(true)}
-              >
-                Library
-              </button>
-            </div>
-          </section>
           <main
             className={`workspace${inspectorHidden ? " inspector-collapsed" : ""}`}
           >
@@ -2092,11 +2111,15 @@ export function App() {
                       <button
                         type="button"
                         className="track-select"
+                        title={`${role(ch)} · CH${ch} · ${
+                          sectionNotes.filter((n) => n.channel === ch).length
+                        } notes${route ? ` · → ch ${route.destination}` : ""}`}
                         onClick={() => state.setChannel(ch)}
                       >
                         <span
-                          className="track-stripe"
-                          style={{ background: colors[(ch - 9 + 16) % 8] }}
+                          className="track-led"
+                          aria-hidden="true"
+                          title={isMuted ? "Muted" : "Audible"}
                         />
                         <span className="channel-number">
                           {String(ch).padStart(2, "0")}
@@ -2112,7 +2135,27 @@ export function App() {
                             {route ? ` · → ch ${route.destination}` : ""}
                             {isArmed ? " · armed" : ""}
                           </small>
+                          {section && (
+                            <span className="part-activity" aria-hidden="true">
+                              {activityBins(
+                                sectionNotes.filter((n) => n.channel === ch),
+                                section.start,
+                                section.end,
+                              ).map((h, i) => (
+                                <i
+                                  key={i}
+                                  className={h > 0 ? "on" : undefined}
+                                  style={{ height: `${Math.max(10, h * 100)}%` }}
+                                />
+                              ))}
+                            </span>
+                          )}
                         </span>
+                        <span
+                          className="track-stripe"
+                          aria-hidden="true"
+                          style={{ background: colors[(ch - 9 + 16) % 8] }}
+                        />
                       </button>
                       <div className="track-msr mute-solo">
                         <button
@@ -2221,6 +2264,7 @@ export function App() {
                 <div className="view-tabs">
                   <button
                     className={tab === "notes" ? "active" : ""}
+                    aria-pressed={tab === "notes"}
                     onClick={() => setTab("notes")}
                   >
                     <Music2 size={15} />
@@ -2228,6 +2272,7 @@ export function App() {
                   </button>
                   <button
                     className={tab === "mixer" ? "active" : ""}
+                    aria-pressed={tab === "mixer"}
                     onClick={() => setTab("mixer")}
                   >
                     <SlidersHorizontal size={15} />
@@ -2570,11 +2615,42 @@ export function App() {
                     Hide
                   </button>
                 </div>
+                <div
+                  className="section-tools"
+                  role="group"
+                  aria-label="Section tools"
+                >
+                  <button
+                    type="button"
+                    disabled={busy || transport.playing || view.sections.length < 2}
+                    title="Copy notes and controllers into another section"
+                    onClick={() => setCopyOpen(true)}
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || transport.playing}
+                    title="Fill/Break length or Shorten Section"
+                    onClick={() => setSectionLengthOpen(true)}
+                  >
+                    Length
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || transport.playing}
+                    title="Import notes from another Style file"
+                    onClick={() => setLibraryOpen(true)}
+                  >
+                    Library
+                  </button>
+                </div>
                 <div className="inspector-tabs">
                   {(["note", "casm", "events"] as const).map((t) => (
                     <button
                       key={t}
                       className={inspector === t ? "active" : ""}
+                      aria-pressed={inspector === t}
                       onClick={() => setInspector(t)}
                     >
                       {t === "casm"
@@ -2777,14 +2853,26 @@ export function App() {
                       >
                         Chord preview
                       </button>
-                      <details className="midi-bank-details">
-                        <summary>MIDI voice address</summary>{" "}
-                        <p className="muted">
-                          Numeric MIDI address at section start. Drum kits use
-                          the factory DrumKit category — not SysEx
-                          Drum Setup. Reverb/chorus Apply sends verified
-                          system-effect SysEx.
-                        </p>
+                      <details
+                        className="midi-bank-details"
+                        onToggle={(e) => {
+                          const el = e.currentTarget;
+                          if (!el.open) return;
+                          requestAnimationFrame(() => {
+                            el.scrollIntoView({
+                              block: "nearest",
+                              behavior: "smooth",
+                            });
+                          });
+                        }}
+                      >
+                        <summary>
+                          MIDI voice address
+                          <HelpTip
+                            label="MIDI voice address help"
+                            tip="Numeric MIDI address at section start. Drum kits use the factory DrumKit category — not SysEx Drum Setup. Reverb/chorus Apply sends verified system-effect SysEx."
+                          />
+                        </summary>
                         <NumberField
                           label="Bank MSB · CC 0"
                           value={valueAt(channel, 0xb0, 0)}
@@ -2862,13 +2950,42 @@ export function App() {
         </>
       )}
       <footer className="statusbar">
+        {error ? (
+          <div className="hint-bar" data-tone="error" role="alert">
+            <span className="hint-name" title={error}>
+              {error}
+            </span>
+            <button
+              type="button"
+              className="hint-dismiss"
+              aria-label="Dismiss error"
+              onClick={state.clearError}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ) : (
+          <div
+            className="hint-bar"
+            data-empty={controlHint.name ? undefined : "true"}
+            aria-hidden="true"
+          >
+            <span className="hint-name">{controlHint.name || "Hint bar"}</span>
+            {controlHint.value && (
+              <span className="hint-value">{controlHint.value}</span>
+            )}
+            {controlHint.shortcut && (
+              <kbd className="hint-shortcut">{controlHint.shortcut}</kbd>
+            )}
+          </div>
+        )}
         <span className={`connection-dot ${busy ? "" : "connected"}`} />
         <span>
           {busy
             ? "Processing..."
             : transport.playing
               ? "Playing source notes"
-              : controlHint || state.message}
+              : state.message}
         </span>
         {initialEffects?.view === view &&
           initialEffects?.output === output &&
@@ -3060,6 +3177,14 @@ export function App() {
           onClose={() => setCopyOpen(false)}
         />
       )}
+      {addSlot && view && (
+        <AddSection
+          view={view}
+          slot={addSlot.slot}
+          group={addSlot.group}
+          onClose={() => setAddSlot(null)}
+        />
+      )}
       {sectionLengthOpen && section && view && (
         <SectionLength
           key={`len-${section.id}`}
@@ -3173,93 +3298,99 @@ export function App() {
               are cleared; section layout, CASM and controllers stay with the
               reference so export remains possible (EV-0142 / EV-0171).
             </p>
-            <label className="field">
-              <span>Project name</span>
-              <input
-                aria-label="Project name"
-                value={composer.name}
-                onChange={(e) =>
-                  setComposer((c) => ({ ...c, name: e.target.value }))
-                }
-              />
-            </label>
-            <div className="composer-grid">
+            <fieldset className="fl-section fl-rows">
+              <legend>Project</legend>
               <label className="field">
-                <span>Tempo · BPM</span>
+                <span>Project name</span>
                 <input
-                  aria-label="Tempo BPM"
-                  type="number"
-                  min={20}
-                  max={400}
-                  value={composer.tempoBpm}
+                  aria-label="Project name"
+                  value={composer.name}
                   onChange={(e) =>
-                    setComposer((c) => ({
-                      ...c,
-                      tempoBpm: Number(e.target.value),
-                    }))
+                    setComposer((c) => ({ ...c, name: e.target.value }))
                   }
                 />
               </label>
-              <label className="field">
-                <span>Meter</span>
-                <div className="meter-inputs">
+              <>
+                <label className="field">
+                  <span>Tempo · BPM</span>
                   <input
-                    aria-label="Meter numerator"
+                    aria-label="Tempo BPM"
                     type="number"
-                    min={1}
-                    max={16}
-                    value={composer.numerator}
+                    min={20}
+                    max={400}
+                    value={composer.tempoBpm}
                     onChange={(e) =>
                       setComposer((c) => ({
                         ...c,
-                        numerator: Number(e.target.value),
+                        tempoBpm: Number(e.target.value),
                       }))
                     }
                   />
-                  <span>/</span>
-                  <select
-                    aria-label="Meter denominator"
-                    value={composer.denominator}
-                    onChange={(e) =>
-                      setComposer((c) => ({
-                        ...c,
-                        denominator: Number(e.target.value),
-                      }))
-                    }
-                  >
-                    {[1, 2, 4, 8, 16].map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
+                </label>
+                <label className="field">
+                  <span>Meter</span>
+                  <div className="meter-inputs">
+                    <input
+                      aria-label="Meter numerator"
+                      type="number"
+                      min={1}
+                      max={16}
+                      value={composer.numerator}
+                      onChange={(e) =>
+                        setComposer((c) => ({
+                          ...c,
+                          numerator: Number(e.target.value),
+                        }))
+                      }
+                    />
+                    <span>/</span>
+                    <select
+                      aria-label="Meter denominator"
+                      value={composer.denominator}
+                      onChange={(e) =>
+                        setComposer((c) => ({
+                          ...c,
+                          denominator: Number(e.target.value),
+                        }))
+                      }
+                    >
+                      {[1, 2, 4, 8, 16].map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </label>
+                <label className="field">
+                  <span>Format</span>
+                  <select aria-label="Style format" value="SFF2" disabled>
+                    <option value="SFF2">SFF2</option>
                   </select>
+                </label>
+              </>
+            </fieldset>
+            <fieldset className="fl-section fl-rows">
+              <legend>Reference scaffold</legend>
+              <label className="field">
+                <span>Reference Style scaffold</span>
+                <div className="reference-row">
+                  <input
+                    aria-label="Reference Style path"
+                    readOnly
+                    value={composer.referencePath}
+                    placeholder="Required · choose a Style file"
+                  />
+                  <button type="button" onClick={() => void pickReference()}>
+                    Choose…
+                  </button>
                 </div>
               </label>
-              <label className="field">
-                <span>Format</span>
-                <select aria-label="Style format" value="SFF2" disabled>
-                  <option value="SFF2">SFF2</option>
-                </select>
-              </label>
-            </div>
-            <label className="field">
-              <span>Reference Style scaffold</span>
-              <div className="reference-row">
-                <input
-                  aria-label="Reference Style path"
-                  readOnly
-                  value={composer.referencePath}
-                  placeholder="Required · choose a Style file"
-                />
-                <button type="button" onClick={() => void pickReference()}>
-                  Choose…
-                </button>
-              </div>
-            </label>
-            <p className="muted">
-              Default blank layout without a scaffold cannot export STY. SFF1
-              blank authoring remains blocked pending verified conversion.
-            </p>
+              <p className="muted">
+                Default blank layout without a scaffold cannot export STY. SFF1
+                blank authoring remains blocked pending verified conversion.
+              </p>
+            </fieldset>
             <div className="modal-actions">
               <button
                 type="button"
@@ -3589,26 +3720,29 @@ export function App() {
                   const retained = !!(
                     captureSnap?.eventCount || captureSnap?.markers.length
                   );
-                  if (
-                    retained &&
-                    !window.confirm(
-                      "Cancel take? Discard retained capture events and markers.",
-                    )
-                  ) {
-                    return;
-                  }
-                  void invoke("clear_capture")
-                    .then(() =>
-                      setCaptureSnap({
-                        recording: false,
-                        portName: monitorName || null,
-                        events: [],
-                        markers: [],
-                        eventCount: 0,
-                        droppedEvents: 0,
-                      }),
-                    )
-                    .catch(() => undefined);
+                  void (async () => {
+                    if (
+                      retained &&
+                      !(await askConfirm(
+                        "Cancel take? Discard retained capture events and markers.",
+                        { title: "Retained capture", confirmLabel: "Discard take" },
+                      ))
+                    ) {
+                      return;
+                    }
+                    await invoke("clear_capture")
+                      .then(() =>
+                        setCaptureSnap({
+                          recording: false,
+                          portName: monitorName || null,
+                          events: [],
+                          markers: [],
+                          eventCount: 0,
+                          droppedEvents: 0,
+                        }),
+                      )
+                      .catch(() => undefined);
+                  })();
                 }}
               >
                 Cancel take
@@ -3691,64 +3825,70 @@ export function App() {
                 <X size={18} />
               </IconButton>
             </div>
-            <p>
-              GenosStyleStudio edits Yamaha Styles with source timing preserved.
-              It is an independent editor - not Style File Maker.
-            </p>
-            <h3>Shortcuts</h3>
-            <ul className="help-list">
-              <li>
-                <kbd>Ctrl</kbd>+<kbd>O</kbd> Open · <kbd>Ctrl</kbd>+<kbd>N</kbd>{" "}
-                New blank · <kbd>Ctrl</kbd>+<kbd>S</kbd> Save project ·{" "}
-                <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd> Open project
-              </li>
-              <li>
-                <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd> Undo / Redo · Space
-                Play/Stop when a section is open
-              </li>
-              <li>
-                Piano: right-click deletes · hold right ~1s for note properties
-                · Shift+right for menu · Ghosts = all pitches of the source
-              </li>
-              <li>
-                Controller lane: Linear/Ease/Step drag shows a yellow mid-handle
-                while shaping the curve
-              </li>
-            </ul>
-            <h3>Recording &amp; chord preview</h3>
-            <ul className="help-list">
-              <li>
-                Arm a part with <kbd>R</kbd>, then Rec/capture. Mute/Solo filter
-                overdub playback. Cancel take discards a retained capture. While
-                recording, Controller to record writes CC into the take (mouse).
-                Test click checks PC-audio metronome (not MIDI out).
-              </li>
-              <li>
-                Chord preview MIDI LH uses the monitor input with optional MIDI
-                channel and left-hand upper note (default B3 / 59), matching
-                SFM’s software LH range filter — not a verified Genos hardware
-                split point.
-              </li>
-            </ul>
-            <h3>Known limits</h3>
-            <ul className="help-list">
-              <li>
-                Capture applies notes plus CC/PC/bend into the section; raw MIDI
-                export keeps SysEx. No automatic Style/CASM analyze-build.
-              </li>
-              <li>
-                Live Style preview adds supported Ctb2 routing and a chord
-                progression. Full Yamaha arranger chord playback, SFF1
-                conversion, and Auto-fix CASM (SFM JSON role presets) are out of
-                scope. Voice/effect catalogs need the supported Genos v2.00 Data
-                List.
-              </li>
-              <li>
-                Hardware Genos LH split confirmation, drum sound remap, pitch
-                bend range uses Genos RPN 0,0 (Mixer); section Tempo (BPM) lane
-                uses SMF meta FF 51.
-              </li>
-            </ul>
+            <div className="modal-scroll-body">
+              <p>
+                GenosStyleStudio edits Yamaha Styles with source timing
+                preserved. It is an independent editor - not Style File Maker.
+              </p>
+              <h3>Shortcuts</h3>
+              <ul className="help-list">
+                <li>
+                  <kbd>Ctrl</kbd>+<kbd>O</kbd> Open · <kbd>Ctrl</kbd>+
+                  <kbd>N</kbd> New blank · <kbd>Ctrl</kbd>+<kbd>S</kbd> Save
+                  project · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd> Open
+                  project
+                </li>
+                <li>
+                  <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd> Undo / Redo ·
+                  Space Play/Stop when a section is open
+                </li>
+                <li>
+                  Piano: right-click deletes · hold right ~1s for note
+                  properties · Shift+right for menu · Ghosts = all pitches of
+                  the source
+                </li>
+                <li>
+                  Controller lane: Linear/Ease/Step drag shows a yellow
+                  mid-handle while shaping the curve
+                </li>
+              </ul>
+              <h3>Recording &amp; chord preview</h3>
+              <ul className="help-list">
+                <li>
+                  Arm a part with <kbd>R</kbd>, then Rec/capture. Mute/Solo
+                  filter overdub playback. Cancel take discards a retained
+                  capture. While recording, Controller to record writes CC into
+                  the take (mouse). Test click checks PC-audio metronome (not
+                  MIDI out).
+                </li>
+                <li>
+                  Chord preview MIDI LH uses the monitor input with optional
+                  MIDI channel and left-hand upper note (default B3 / 59),
+                  matching SFM’s software LH range filter — not a verified Genos
+                  hardware split point.
+                </li>
+              </ul>
+              <h3>Known limits</h3>
+              <ul className="help-list">
+                <li>
+                  Capture applies notes plus CC/PC/bend into the section; raw
+                  MIDI export keeps SysEx. No automatic Style/CASM
+                  analyze-build.
+                </li>
+                <li>
+                  Live Style preview adds supported Ctb2 routing and a chord
+                  progression. Full Yamaha arranger chord playback, SFF1
+                  conversion, and Auto-Fill CASM (SFM JSON role presets) are out
+                  of scope. Voice/effect catalogs need the supported Genos v2.00
+                  Data List.
+                </li>
+                <li>
+                  Hardware Genos LH split confirmation, drum sound remap, pitch
+                  bend range uses Genos RPN 0,0 (Mixer); section Tempo (BPM)
+                  lane uses SMF meta FF 51.
+                </li>
+              </ul>
+            </div>
             <div className="modal-actions">
               <button className="primary" onClick={() => setHelpOpen(false)}>
                 Close
@@ -3760,7 +3900,7 @@ export function App() {
       {limitsOpen && (
         <div className="modal-backdrop" onClick={() => setLimitsOpen(false)}>
           <section
-            className="modal"
+            className="modal limits-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="limits-title"
@@ -3775,89 +3915,91 @@ export function App() {
                 <X size={18} />
               </IconButton>
             </div>
-            <p>
-              Baseline status for the 35 known REA surfaces. Blocked items stay
-              gated - GenosStyleStudio does not invent Yamaha algorithms.
-            </p>
-            <ul className="help-list inventory-list">
-              <li>
-                <strong>Implemented (tested scope):</strong> F001-F015, F017
-                named/numeric voice, F018 Genos v2.00 Data List import, F019
-                DrumKit picker + supported Genos initial-header scalar editing,
-                bounded ch9/10 audition, F020 mixer CC7/10/11/91/93, F021 Effect
-                Type List + reverb/chorus live apply and initial-header file
-                editing + opt-in initial type/Return playback, F022-F023, F024
-                manual study and limited routed progression playback, F025
-                play/audition, F026 capture+apply notes (+ armed part remap),
-                F028 CSV/JSON, F029 notes-only MIDI exchange, F031
-                Help/inventory, F032 panic/release, F033 prefs/recovery,
-                F007/F016 source+Ctb2 CASM, Mixer mute/solo/arm, timed EQ
-                High/Low NRPN automation lanes.
-              </li>
-              <li>
-                <strong>Partial (expansion packs):</strong> PPI/PQI section map
-                + PACK MIDI voice map → voice picker; PPF extract + structural
-                rewrite; VPRS header; SME VWST decrypt (needs offline SME seed)
-                and YEM-import validation remain open.
-              </li>
-              <li>
-                <strong>Gated - no invent:</strong> F019 sound remaps / advanced
-                fields / Genos2 / native setup MIDI preview and hardware
-                acceptance, F021 variation apply + Parameter List /
-                detailed/later effect replay, F024 full Yamaha-equivalent
-                playback / hardware retarget / expansion qualification, F027
-                Style/analyze-build from capture (no Style builder oracle), F029
-                DAW session round-trip, F030 SFF1 conversion (EV-0171 scaffold /
-                conversion blocked).
-              </li>
-              <li>
-                <strong>Excluded:</strong> F034 proprietary licensing.
-              </li>
-              <li>
-                <strong>Hardware F035:</strong> Fresh 78 paired input notes,
-                audible notes/Stop, source passage and dry/wet reverb contrast
-                (direct and saved-file startup) confirmed on the connected
-                Genos. Routed C–Am–F–G playback, edited notes/controllers, CASM
-                source root and initial effect contrast are user-confirmed
-                through the app, including a voice change and bounded
-                RealDrumKit channel10/key42 volume/pan/pitch. USB Style loading
-                was tested separately. Full Yamaha arranger equivalence, clock
-                and latency qualification remain open.
-              </li>
-            </ul>
-            <div
-              className="ui-scale-row"
-              role="group"
-              aria-label="Interface size"
-            >
-              <span>Interface size</span>
-              <button
-                type="button"
-                aria-label="Decrease interface size"
-                disabled={uiScale <= 0.85}
-                onClick={() => bumpUiScale(-0.05)}
+            <div className="modal-scroll-body">
+              <p>
+                Baseline status for the 35 known REA surfaces. Blocked items
+                stay gated - GenosStyleStudio does not invent Yamaha algorithms.
+              </p>
+              <ul className="help-list inventory-list">
+                <li>
+                  <strong>Implemented (tested scope):</strong> F001-F015, F017
+                  named/numeric voice, F018 Genos v2.00 Data List import, F019
+                  DrumKit picker + supported Genos initial-header scalar
+                  editing, bounded ch9/10 audition, F020 mixer CC7/10/11/91/93,
+                  F021 Effect Type List + reverb/chorus live apply and
+                  initial-header file editing + opt-in initial type/Return
+                  playback, F022-F023, F024 manual study and limited routed
+                  progression playback, F025 play/audition, F026 capture+apply
+                  notes (+ armed part remap), F028 CSV/JSON, F029 notes-only
+                  MIDI exchange, F031 Help/inventory, F032 panic/release, F033
+                  prefs/recovery, F007/F016 source+Ctb2 CASM, Mixer
+                  mute/solo/arm, timed EQ High/Low NRPN automation lanes.
+                </li>
+                <li>
+                  <strong>Partial (expansion packs):</strong> PPI/PQI section
+                  map + PACK MIDI voice map → voice picker; PPF extract +
+                  structural rewrite; VPRS header; SME VWST decrypt (needs
+                  offline SME seed) and YEM-import validation remain open.
+                </li>
+                <li>
+                  <strong>Gated - no invent:</strong> F019 sound remaps /
+                  advanced fields / Genos2 / native setup MIDI preview and
+                  hardware acceptance, F021 variation apply + Parameter List /
+                  detailed/later effect replay, F024 full Yamaha-equivalent
+                  playback / hardware retarget / expansion qualification, F027
+                  Style/analyze-build from capture (no Style builder oracle),
+                  F029 DAW session round-trip, F030 SFF1 conversion (EV-0171
+                  scaffold / conversion blocked).
+                </li>
+                <li>
+                  <strong>Excluded:</strong> F034 proprietary licensing.
+                </li>
+                <li>
+                  <strong>Hardware F035:</strong> Fresh 78 paired input notes,
+                  audible notes/Stop, source passage and dry/wet reverb contrast
+                  (direct and saved-file startup) confirmed on the connected
+                  Genos. Routed C–Am–F–G playback, edited notes/controllers,
+                  CASM source root and initial effect contrast are
+                  user-confirmed through the app, including a voice change and
+                  bounded RealDrumKit channel10/key42 volume/pan/pitch. USB
+                  Style loading was tested separately. Full Yamaha arranger
+                  equivalence, clock and latency qualification remain open.
+                </li>
+              </ul>
+              <div
+                className="ui-scale-row"
+                role="group"
+                aria-label="Interface size"
               >
-                A−
-              </button>
-              <button
-                type="button"
-                aria-label="Reset interface size to 100%"
-                onClick={() => {
-                  setUiScale(1);
-                  void persistPrefs({ uiScale: 1 });
-                }}
-              >
-                100%
-              </button>
-              <button
-                type="button"
-                aria-label="Increase interface size"
-                disabled={uiScale >= 1.25}
-                onClick={() => bumpUiScale(0.05)}
-              >
-                A+
-              </button>
-              <small>{Math.round(uiScale * 100)}%</small>
+                <span>Interface size</span>
+                <button
+                  type="button"
+                  aria-label="Decrease interface size"
+                  disabled={uiScale <= 0.85}
+                  onClick={() => bumpUiScale(-0.05)}
+                >
+                  A−
+                </button>
+                <button
+                  type="button"
+                  aria-label="Reset interface size to 100%"
+                  onClick={() => {
+                    setUiScale(1);
+                    void persistPrefs({ uiScale: 1 });
+                  }}
+                >
+                  100%
+                </button>
+                <button
+                  type="button"
+                  aria-label="Increase interface size"
+                  disabled={uiScale >= 1.25}
+                  onClick={() => bumpUiScale(0.05)}
+                >
+                  A+
+                </button>
+                <small>{Math.round(uiScale * 100)}%</small>
+              </div>
             </div>
             <div className="modal-actions">
               <button className="primary" onClick={() => setLimitsOpen(false)}>

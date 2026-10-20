@@ -1,0 +1,397 @@
+/* FL dialog kit.
+   One set of rules for every Genos dialog (.modal) so they read as FL Studio settings dialogs.
+   Evidence (rea-2026-10-20/fl-dialog-general-settings-screen.png, FL-E4):
+   caption strip with title and close; boxed sections whose header is a darker band with an
+   inline muted note; control on the left with its label to the right; flat dark input wells;
+   orange LED toggles; compact 22px controls. Colors come from the shared ramp. */
+
+.modal-backdrop {
+  background: rgb(11 20 25 / 0.58);
+  backdrop-filter: none;
+}
+.modal {
+  --dlg-pad: 14px;
+  padding: 0 var(--dlg-pad) 0;
+  background: var(--fl-s5);
+  border: 1px solid var(--fl-s0);
+  border-radius: 0;
+  box-shadow: 3px 3px 0 rgb(0 0 0 / 0.38);
+  animation: none;
+}
+
+/* Caption strip: sticky so it stays visible while the body scrolls. */
+.modal > .modal-title,
+.modal > .modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+  margin: 0 calc(var(--dlg-pad) * -1) 12px;
+  padding: 0 4px 0 12px;
+  background: var(--fl-s7);
+  border-bottom: 1px solid var(--fl-s1);
+}
+.modal > .modal-title > h2,
+.modal > .modal-header h2,
+.modal > h2 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fl-t1);
+}
+.modal > .modal-title > button,
+.modal > .modal-header > button {
+  width: 22px;
+  height: 20px;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--fl-t2);
+  font-size: 15px;
+  line-height: 1;
+}
+.modal > .modal-title > button:hover,
+.modal > .modal-header > button:hover {
+  background: var(--fl-s9);
+  color: var(--fl-t0);
+}
+.modal > h2 {
+  margin: 0 calc(var(--dlg-pad) * -1) 12px;
+  padding: 5px 12px;
+  background: var(--fl-s7);
+  border-bottom: 1px solid var(--fl-s1);
+}
+
+/* Footer strip with the action buttons. */
+.modal > .modal-actions,
+.modal > footer.modal-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin: 12px calc(var(--dlg-pad) * -1) 0;
+  padding: 8px var(--dlg-pad);
+  gap: 6px;
+  background: var(--fl-s6);
+  border-top: 1px solid var(--fl-s1);
+}
+
+/* Notes: small muted captions, never body text. */
+.modal > p,
+.modal .fl-note {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fl-t3);
+}
+.modal .fl-note {
+  margin: 4px 0 6px;
+}
+.modal h3 {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fl-t1);
+}
+
+/* Boxed sections: the legend becomes a full-width header band inside the box. */
+.modal fieldset {
+  min-width: 0;
+  margin: 0 0 10px;
+  padding: 0 10px 8px;
+  background: var(--fl-s4);
+  border: 1px solid var(--fl-s1);
+  border-radius: 0;
+}
+.modal fieldset > legend {
+  float: left;
+  width: calc(100% + 20px);
+  box-sizing: border-box;
+  margin: 0 -10px 8px;
+  padding: 3px 10px;
+  background: var(--fl-s3);
+  border-bottom: 1px solid var(--fl-s1);
+  font-size: 11px;
+  color: var(--fl-t2);
+}
+.modal fieldset > legend + * {
+  clear: both;
+}
+/* A wrapper fieldset that only groups a disabled state is not a visible section. */
+.modal fieldset.fl-plain {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+/* Stacked fields (default): compact label above a flat well. */
+.modal .field {
+  gap: 3px;
+  margin: 0 0 8px;
+}
+.modal .field > span {
+  font-size: 11px;
+  color: var(--fl-t2);
+}
+/* Rows (opt-in via .fl-rows, and Source tracks): control on the left, label to its right,
+   as in FL Settings. */
+.fl-rows > label:not(.check),
+.fl-rows > .field,
+.source-fields .field {
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+}
+.fl-rows > label:not(.check) > span,
+.fl-rows > .field > span,
+.source-fields .field > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fl-t2);
+}
+.fl-rows > label:not(.check) > :not(span),
+.fl-rows > .field > :not(span),
+.source-fields .field > :not(span) {
+  flex: 0 1 200px;
+  min-width: 0;
+}
+.fl-rows > label.check {
+  margin: 0 0 4px;
+}
+.fl-rows .capture-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 2px 0 4px;
+}
+.fl-rows .capture-options label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fl-t2);
+}
+.fl-rows .capture-options input {
+  width: 64px;
+}
+.fl-rows .meter-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.fl-rows .reference-row {
+  display: flex;
+  gap: 6px;
+}
+
+/* Flat dark input wells. */
+.modal input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.modal select,
+.modal textarea {
+  height: 22px;
+  padding: 0 6px;
+  background: var(--fl-s1);
+  border: 1px solid var(--fl-s0);
+  border-radius: 2px;
+  color: var(--fl-t1);
+  font-size: 12px;
+}
+.modal .field input:not([type="checkbox"]):not([type="radio"]),
+.modal .field select {
+  height: 22px;
+  width: 100%;
+}
+.modal fieldset > p:not(.fl-note) {
+  font-size: 11.5px;
+  color: var(--fl-t3);
+}
+.modal textarea {
+  height: auto;
+  padding: 4px 6px;
+}
+
+/* Buttons: flat raised mid-gray, 22px. */
+.modal button {
+  min-height: 22px;
+  padding: 0 10px;
+  background: var(--fl-s8);
+  border: 1px solid var(--fl-s1);
+  border-radius: 2px;
+  color: var(--fl-t1);
+  font-size: 12px;
+}
+.modal button:hover:not(:disabled) {
+  background: var(--fl-s9);
+}
+.modal button:disabled {
+  opacity: 0.5;
+}
+.modal button.primary {
+  background: var(--accent);
+  border-color: #7a5a24;
+  color: #1a1205;
+  font-weight: 600;
+}
+.modal button.primary:hover:not(:disabled) {
+  background: #efc47f;
+}
+.modal button[aria-pressed="true"] {
+  background: var(--fl-s1);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* LED toggles: checkbox and radio inputs. */
+.modal input[type="checkbox"],
+.modal input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  background: var(--fl-s1);
+  border: 1px solid var(--fl-s0);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px var(--fl-s4);
+  cursor: pointer;
+}
+.modal input[type="checkbox"]:checked,
+.modal input[type="radio"]:checked {
+  background: radial-gradient(circle at 40% 35%, #ffe2b0, var(--accent) 55%, #b97b2a);
+  box-shadow:
+    inset 0 0 0 2px var(--fl-s4),
+    0 0 4px rgb(227 181 108 / 0.55);
+}
+.modal input[type="checkbox"]:disabled,
+.modal input[type="radio"]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.modal label:has(> input[type="checkbox"]),
+.modal label:has(> input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fl-t1);
+  cursor: pointer;
+}
+
+/* Source tracks: the exemplar layout built from the kit. */
+.source-tracks-modal > .source-body {
+  padding-right: 4px;
+}
+.source-tracks-modal .fl-row-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.source-tracks-modal .fl-row-actions > button {
+  flex: 0 0 auto;
+}
+.source-tracks-modal .fl-row-actions > .fl-note {
+  margin: 0;
+}
+.source-tracks-modal .source-fields {
+  gap: 0 20px;
+}
+.source-tracks-modal .source-roots {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px 8px;
+  margin-bottom: 6px;
+}
+.source-tracks-modal .source-roots label {
+  min-width: 0;
+}
+.source-tracks-modal .source-regions {
+  gap: 0;
+  margin: 2px 0 6px;
+}
+.source-tracks-modal .source-regions button {
+  flex: 1 1 0;
+  border-radius: 0;
+}
+.source-tracks-modal .source-regions button:first-child {
+  border-radius: 2px 0 0 2px;
+}
+.source-tracks-modal .source-regions button:last-child {
+  border-radius: 0 2px 2px 0;
+}
+.source-tracks-modal .source-zone {
+  margin: 4px 0 8px;
+  font-size: 11.5px;
+  color: var(--fl-t3);
+}
+.source-tracks-modal .source-chords {
+  padding: 0 0 8px;
+  margin: 0 0 10px;
+  background: var(--fl-s4);
+  border: 1px solid var(--fl-s1);
+}
+.source-tracks-modal .source-chords > summary {
+  padding: 3px 10px;
+  margin-bottom: 8px;
+  background: var(--fl-s3);
+  border-bottom: 1px solid var(--fl-s1);
+  font-size: 11px;
+  color: var(--fl-t2);
+}
+.source-tracks-modal .source-chords > :not(summary) {
+  margin-left: 10px;
+  margin-right: 10px;
+}
+.source-tracks-modal .source-groups {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+.source-tracks-modal .chord-grid {
+  gap: 6px 10px;
+}
+.source-tracks-modal .source-error {
+  margin: 8px 0 0;
+}
+
+/* MIDI exchange: header and footer are the kit's caption and footer strips; the body keeps its
+   own breathing room and the action row inside it sits clear of the note below. */
+.midi-exchange-modal {
+  gap: 0;
+}
+.midi-exchange-modal > .modal-title > .exchange-scope {
+  margin: 0;
+  font-size: 11.5px;
+}
+.midi-exchange-modal .exchange-body {
+  padding: 0 4px 4px 0;
+}
+.midi-exchange-modal .exchange-body > .exchange-actions {
+  margin: 10px 0 8px;
+}
+.midi-exchange-modal > footer.modal-actions {
+  margin-top: 12px;
+}
+
+/* App confirmation: the kit's caption strip and footer around a plain message. */
+.confirm-modal {
+  width: min(420px, calc(100vw - 40px));
+}
+.confirm-modal > .confirm-message {
+  margin: 4px 0 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fl-t1);
+}
+.confirm-backdrop {
+  z-index: 1000;
+}

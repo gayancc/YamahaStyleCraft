@@ -305,7 +305,7 @@ pub fn extract_pack_item(
     std::fs::create_dir_all(dest_dir)?;
     let buf = read_pack_item_bytes(path, item)?;
     let out = dest_dir.join(name);
-    std::fs::write(&out, buf)?;
+    crate::project::write_new(&out, &buf)?;
     Ok(out)
 }
 
