@@ -5,6 +5,7 @@ import type { Note, Section, View } from "./contracts";
 import { useStudio } from "./store";
 import { Music2, RotateCcw, Check, X } from "lucide-react";
 import { ParameterControl } from "./ParameterControl";
+import { PitchPicker } from "./PitchPicker";
 import { meterAt } from "./pianoEditing";
 import {
   formatNoteTime,
@@ -194,20 +195,13 @@ export function NoteProperties({
           className="note-utility-controls"
         >
           <div className="note-utility-timing">
-            <label className="note-utility-pitch">
+            <div className="note-utility-pitch">
               <span>Pitch</span>
-              <select
-                aria-label="Note properties pitch"
-                value={draft.pitch}
-                onChange={(e) => change("pitch", e.target.value)}
-              >
-                {Array.from({ length: 128 }, (_, pitch) => (
-                  <option key={pitch} value={pitch}>
-                    {pitchName(pitch)} · {pitch}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <PitchPicker
+                value={Number(draft.pitch)}
+                onChange={(p) => change("pitch", String(p))}
+              />
+            </div>
             <label className="note-utility-readout">
               <span>Start</span>
               <input

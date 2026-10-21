@@ -1,1 +1,8 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="color-scheme" content="dark"/><title>GenosStyleStudio</title></head><body><div id="root"></div><script type="module" src="/frontend/main.tsx"></script></body></html>
+<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="color-scheme" content="dark"/><title>GenosStyleStudio</title>
+<style>
+html,body{margin:0;background:#0b1419}
+#splash{position:fixed;inset:0;z-index:99999;overflow:hidden;background:#0b1419;--r:-200px;-webkit-mask-image:radial-gradient(circle at 50% 50%,transparent var(--r),#000 calc(var(--r) + 160px));mask-image:radial-gradient(circle at 50% 50%,transparent var(--r),#000 calc(var(--r) + 160px))}
+#splash canvas{position:absolute;inset:0;width:100%;height:100%}
+#splash .sub{position:absolute;left:0;right:0;top:calc(50% + clamp(34px,7vw,92px));text-align:center;font:600 clamp(10px,1.2vw,14px) "Segoe UI",system-ui,sans-serif;color:#9fb4ba;letter-spacing:.9em;padding-left:.9em;opacity:0;transition:opacity 1.2s ease,letter-spacing 2.2s cubic-bezier(.2,.8,.2,1),padding-left 2.2s cubic-bezier(.2,.8,.2,1)}
+#splash .sub.on{opacity:1;letter-spacing:.6em;padding-left:.6em}
+</style></head><body><div id="splash" aria-hidden="true"><canvas></canvas><div class="sub">STYLE STUDIO</div></div><div id="root"></div><script type="module" src="/frontend/splash.ts"></script><script type="module" src="/frontend/main.tsx"></script></body></html>

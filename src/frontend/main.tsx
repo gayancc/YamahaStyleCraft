@@ -22,6 +22,18 @@ import "./flButtons.css";
 // Cancel the default action without stopping our piano/menu handlers.
 document.addEventListener("contextmenu", (event) => event.preventDefault(), { capture: true });
 
+// A desktop app, not a web page: refresh shortcuts would reload the webview, drop the open project
+// and replay the start-up splash.
+document.addEventListener(
+  "keydown",
+  (event) => {
+    const reload =
+      event.key === "F5" || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r");
+    if (reload) event.preventDefault();
+  },
+  { capture: true },
+);
+
 const label = docLabelFromUrl();
 if (label !== "main") {
   useStudio.setState({ docLabel: label });
@@ -47,3 +59,6 @@ ReactDOM.createRoot(root).render(
     <ConfirmHost />
   </React.StrictMode>,
 );
+
+// Let the start-up splash finish its animation, then fade it away over the mounted UI.
+requestAnimationFrame(() => requestAnimationFrame(() => window.__genosSplash?.dismiss()));
