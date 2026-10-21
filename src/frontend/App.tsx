@@ -94,6 +94,7 @@ import { LivePreview } from "./LivePreview";
 import { ChordPreview } from "./ChordPreview";
 import { ChordStrip } from "./ChordStrip";
 import { activityBins } from "./partActivity";
+import { TimeReadout } from "./TimeReadout";
 import { TempoField } from "./TempoField";
 import { TimeSignature } from "./TimeSignature";
 import { RecordingMidiDialog, type RecDataMode } from "./RecordingMidiDialog";
@@ -1876,19 +1877,10 @@ export function App() {
               view && void applyTempoMeter(view.tempo, n, d)
             }
           />
-          <div className="time-readout">
-            {Math.floor(transport.elapsedMs / 60000)
-              .toString()
-              .padStart(2, "0")}
-            :
-            {Math.floor((transport.elapsedMs / 1000) % 60)
-              .toString()
-              .padStart(2, "0")}
-            .
-            <span>
-              {(transport.elapsedMs % 1000).toString().padStart(3, "0")}
-            </span>
-          </div>
+          <TimeReadout
+            elapsedMs={transport.elapsedMs}
+            playing={transport.playing}
+          />
           <div className="fl-extra">
             <IconButton
               label="Move cursor to section start (W)"

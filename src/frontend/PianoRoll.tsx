@@ -56,6 +56,35 @@ interface Gesture {
 }
 
 type NotePropsPanel = { x: number; y: number; id: number };
+interface Box {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+/** Bounding box of the selected notes as drawn right now (follows a live drag preview). */
+function selectionBounds(
+  notes: readonly Note[],
+  ids: ReadonlySet<number>,
+  rect: (n: Note) => { x: number; y: number; w: number; h: number },
+): { box: Box; count: number } | null {
+  let box: Box | null = null;
+  let count = 0;
+  for (const n of notes) {
+    if (!ids.has(n.id)) continue;
+    const q = rect(n);
+    count += 1;
+    box = box
+      ? {
+          l: Math.min(box.l, q.x),
+          t: Math.min(box.t, q.y),
+          r: Math.max(box.r, q.x + q.w),
+          b: Math.max(box.b, q.y + q.h + 1),
+        }
+      : { l: q.x, t: q.y, r: q.x + q.w, b: q.y + q.h + 1 };
+  }
+  return box ? { box, count } : null;
+}
 export function PianoRoll({
   disabled = false,
   onAudition,
@@ -407,6 +436,19 @@ export function PianoRoll({
         ctx.fillText(pitchName(n.pitch), r.x + 5, r.y + 12);
       }
     }
+    const frame =
+      gesture?.mode === "marquee"
+        ? null
+        : selectionBounds(notes, selectedSet, rect);
+    if (frame && frame.count > 1) {
+      const { l, t, r: right, b } = frame.box;
+      ctx.fillStyle = "#e7b96a14";
+      ctx.strokeStyle = "#e7b96aaa";
+      ctx.setLineDash([4, 3]);
+      ctx.fillRect(l - 3, t - 3, right - l + 6, b - t + 6);
+      ctx.strokeRect(l - 3.5, t - 3.5, right - l + 7, b - t + 7);
+      ctx.setLineDash([]);
+    }
     ctx.restore();
     ctx.fillStyle = "#22262a";
     ctx.fillRect(0, 0, size.w, RULER);
@@ -551,6 +593,12 @@ export function PianoRoll({
       ],
     });
   };
+  const insideSelection = (x: number, y: number) => {
+    const frame = selectionBounds(notes, selectedSet, rect);
+    if (!frame || frame.count < 2) return false;
+    const { l, t, r: right, b } = frame.box;
+    return x >= l - 3 && x <= right + 3 && y >= t - 3 && y <= b + 3;
+  };
   const down = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (![0, 1, 2].includes(e.button) || busy || disabled) return;
     setMenu(null);
@@ -670,6 +718,23 @@ export function PianoRoll({
         ids,
         note: n,
       };
+    } else if (
+      tool === "select" &&
+      !e.shiftKey &&
+      selected.length > 1 &&
+      insideSelection(x, y)
+    ) {
+      // Grab the selected group by its frame, not just by a note: drag moves them all.
+      const first = notes.find((q) => selectedSet.has(q.id)) as Note;
+      anchor.current = {
+        mode: "move",
+        x,
+        y,
+        dx: 0,
+        dy: 0,
+        ids: selected,
+        note: first,
+      };
     } else {
       if (!e.shiftKey) select([]);
       anchor.current = {
@@ -694,6 +759,9 @@ export function PianoRoll({
         e.currentTarget.style.cursor =
           x > r.x + r.w - 7 || x < r.x + 4 ? "ew-resize" : "move";
         e.currentTarget.title = `${pitchName(n.pitch)} · tick ${n.start - (section?.start ?? 0)} · length ${n.duration} · velocity ${n.velocity}`;
+      } else if (tool === "select" && selected.length > 1 && insideSelection(x, y)) {
+        e.currentTarget.style.cursor = "move";
+        e.currentTarget.title = "Drag to move the selected notes";
       } else {
         e.currentTarget.style.cursor =
           x < KEY
@@ -815,6 +883,7 @@ export function PianoRoll({
               Math.max(...ns.map((n) => 1 - n.duration)),
               Math.min(...ns.map((n) => section.end - n.start - n.duration)),
             );
+    if (a.mode !== "marquee" && dt === a.dx && dy === a.dy) return;
     const g = { ...a, dx: dt, dy };
     anchor.current = g;
     setGesture(g);

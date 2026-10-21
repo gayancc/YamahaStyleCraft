@@ -46,6 +46,8 @@ struct Studio {
     projects: HashMap<String, ProjectDoc>,
     /// SFM-VIEW-TRANSPORT-MIDI-OWNER: only one project window owns MIDI hardware.
     midi_owner: String,
+    /// The main window was closed while project windows stayed open.
+    main_closed: bool,
 }
 impl Default for Studio {
     fn default() -> Self {
@@ -61,6 +63,7 @@ impl Default for Studio {
             pending_live: None,
             projects: HashMap::new(),
             midi_owner: "main".into(),
+            main_closed: false,
         }
     }
 }
@@ -85,10 +88,19 @@ fn read_note_clipboard(
 }
 /// Reject MIDI hardware ops when another project window holds the lease.
 fn require_midi_owner(s: &Studio, doc_label: &str) -> Result<(), String> {
-    if s.midi_owner == doc_label {
+    if s.midi_owner == doc_label || !midi_owner_is_open(s) {
         Ok(())
     } else {
         Err("MIDI belongs to another project window. Choose Use MIDI here first.".into())
+    }
+}
+/// The lease holder still has a window: the main window, or an open project window. A lease held
+/// by a project window that has since been closed is stale and never blocks anyone.
+fn midi_owner_is_open(s: &Studio) -> bool {
+    if s.midi_owner == "main" {
+        !s.main_closed
+    } else {
+        s.projects.contains_key(&s.midi_owner)
     }
 }
 /// Document generation counter — main uses `Studio.epoch`; project-N uses `ProjectDoc.epoch`.
@@ -1248,7 +1260,7 @@ fn play(
         )
         .map_err(error)
 }
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MidiOwnership {
     owner: String,
@@ -1264,7 +1276,7 @@ fn midi_ownership(
     let s = state.lock().map_err(error)?;
     Ok(MidiOwnership {
         owner: s.midi_owner.clone(),
-        active: s.midi_owner == label,
+        active: s.midi_owner == label || !midi_owner_is_open(&s),
         windows: 1 + s.projects.len(),
     })
 }
@@ -2158,9 +2170,48 @@ fn main() {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 let state = window.state::<Shared>();
                 let mut s = state.lock().unwrap_or_else(|p| p.into_inner());
+                let label = window.label().to_string();
+                let mut released = None;
+                if label == "main" {
+                    s.main_closed = true;
+                }
+                if label == "main" || label.starts_with("project-") {
+                    // A closed window releases its document and any MIDI lease.
+                    if label != "main" {
+                        s.projects.remove(&label);
+                    }
+                    if s.midi_owner == label {
+                        let mut open: Vec<String> = s.projects.keys().cloned().collect();
+                        open.sort();
+                        let next = if s.main_closed {
+                            open.into_iter().next()
+                        } else {
+                            Some("main".to_string())
+                        };
+                        if let Some(next) = next {
+                            s.midi_owner = next;
+                            released = Some((
+                                s.midi_owner.clone(),
+                                s.projects.len() + usize::from(!s.main_closed),
+                            ));
+                        }
+                    }
+                }
                 s.transport.stop();
                 s.monitor.stop();
                 s.capture.stop();
+                drop(s);
+                if let Some((owner, windows)) = released {
+                    // Tell the remaining windows who holds MIDI now.
+                    let _ = window.app_handle().emit(
+                        "studio://midi-ownership",
+                        MidiOwnership {
+                            owner,
+                            active: true,
+                            windows,
+                        },
+                    );
+                }
             }
         })
         .run(tauri::generate_context!())
@@ -2264,5 +2315,37 @@ mod exchange_preview_tests {
             assert!(take_exchange(&mut s, &secondary).is_err());
             assert_eq!(take_exchange(&mut s, &main).unwrap().doc_label, "main");
         }
+    }
+}
+
+#[cfg(test)]
+mod midi_lease_tests {
+    use super::*;
+
+    #[test]
+    fn main_owns_midi_by_default() {
+        let s = Studio::default();
+        assert!(require_midi_owner(&s, "main").is_ok());
+        assert!(midi_owner_is_open(&s));
+    }
+
+    #[test]
+    fn lease_held_by_a_closed_main_window_never_blocks_a_project_window() {
+        let s = Studio {
+            main_closed: true,
+            ..Default::default()
+        };
+        assert!(!midi_owner_is_open(&s));
+        assert!(require_midi_owner(&s, "project-2").is_ok());
+    }
+
+    #[test]
+    fn lease_held_by_a_closed_project_window_never_blocks() {
+        let s = Studio {
+            midi_owner: "project-2".into(),
+            ..Default::default()
+        };
+        assert!(!midi_owner_is_open(&s));
+        assert!(require_midi_owner(&s, "main").is_ok());
     }
 }

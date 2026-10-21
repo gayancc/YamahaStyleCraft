@@ -837,3 +837,19 @@
   padding: 3px 2px;
   justify-content: center;
 }
+
+/* Fixed-width digit cells: the readout never shifts sideways while the time changes. The light
+   system font has proportional digits, so each digit is centred in a cell of constant width. */
+.time-readout .digit {
+  display: inline-block;
+  width: 0.54em;
+  font-style: normal;
+  text-align: center;
+}
+.time-readout {
+  font-variant-numeric: tabular-nums;
+  justify-content: center;
+}
+.app {
+  font-variant-numeric: tabular-nums;
+}
