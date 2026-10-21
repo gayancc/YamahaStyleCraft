@@ -50,11 +50,11 @@ import {
   OctagonAlert,
   Bell,
   FileJson,
-  ListTree,
   PackageOpen,
   SkipBack,
   SkipForward,
   TextCursor,
+  Trash2,
   Hand,
   AppWindow,
   PictureInPicture2,
@@ -194,12 +194,14 @@ function HelpTip({ tip, label }: { tip: string; label: string }) {
 }
 function NumberField({
   label,
+  shortLabel,
   value,
   min = 0,
   max = 127,
   onCommit,
 }: {
   label: string;
+  shortLabel?: string;
   value: number;
   min?: number;
   max?: number;
@@ -207,7 +209,7 @@ function NumberField({
 }) {
   return (
     <label className="field">
-      <span>{label}</span>
+      <span title={label}>{shortLabel ?? label}</span>
       <input
         aria-label={label}
         type="number"
@@ -329,7 +331,6 @@ export function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [recordingMidiOpen, setRecordingMidiOpen] = useState(false);
   const [expansionOpen, setExpansionOpen] = useState(false);
-  const [limitsOpen, setLimitsOpen] = useState(false);
   const [uiScale, setUiScale] = useState(1);
   const [noteColors, setNoteColors] = useState<string[]>(() => [
     ...DEFAULT_NOTE_COLORS,
@@ -1256,7 +1257,6 @@ export function App() {
       recovery ||
       composerOpen ||
       helpOpen ||
-      limitsOpen ||
       expansionOpen ||
       exchangeOpen ||
       copyOpen ||
@@ -1291,7 +1291,6 @@ export function App() {
         setDiagnostics(false);
         setComposerOpen(false);
         setHelpOpen(false);
-        setLimitsOpen(false);
         setExpansionOpen(false);
         setExchangeOpen(false);
         setCopyOpen(false);
@@ -1386,7 +1385,6 @@ export function App() {
       !recovery &&
       !composerOpen &&
       !expansionOpen &&
-      !limitsOpen &&
       !helpOpen
     )
       return;
@@ -1402,14 +1400,7 @@ export function App() {
       window.removeEventListener("keydown", trap, true);
       restoreEditorFocus(previous);
     };
-  }, [
-    diagnostics,
-    recovery,
-    composerOpen,
-    expansionOpen,
-    limitsOpen,
-    helpOpen,
-  ]);
+  }, [diagnostics, recovery, composerOpen, expansionOpen, helpOpen]);
   const cc = (ch: number, controller: number, value: number) => {
     if (!view || !section) return;
     if (mixerApplyAll) {
@@ -1778,12 +1769,6 @@ export function App() {
               <PackageOpen size={15} />
             </IconButton>
             <IconButton
-              label="Feature inventory / limits"
-              onClick={() => setLimitsOpen(true)}
-            >
-              <ListTree size={15} />
-            </IconButton>
-            <IconButton
               label="Recording & MIDI settings"
               onClick={() => setRecordingMidiOpen(true)}
             >
@@ -1807,32 +1792,36 @@ export function App() {
       </header>
       <div className="toolbar topbar">
         <div className="transport">
-          <div className="fl-transport" role="group" aria-label="Playback controls">
+          <div
+            className="fl-transport"
+            role="group"
+            aria-label="Playback controls"
+          >
             <div className="fl-capsule">
-            <IconButton
-              className="play-btn"
-              label={
-                parkedTick != null &&
-                section &&
-                parkedTick > section.start &&
-                parkedTick < section.end
-                  ? "Play from parked cursor (Space)"
-                  : "Play source notes (Space)"
-              }
-              onClick={() => void play()}
-              disabled={!view || busy}
-              active={transport.playing}
-            >
-              <Play size={18} fill="currentColor" />
-            </IconButton>
-            <IconButton
-              className="stop-btn"
-              label="Stop / release notes (Escape)"
-              onClick={() => void stop()}
-              disabled={!transport.playing}
-            >
-              <Square size={14} />
-            </IconButton>
+              <IconButton
+                className="play-btn"
+                label={
+                  parkedTick != null &&
+                  section &&
+                  parkedTick > section.start &&
+                  parkedTick < section.end
+                    ? "Play from parked cursor (Space)"
+                    : "Play source notes (Space)"
+                }
+                onClick={() => void play()}
+                disabled={!view || busy}
+                active={transport.playing}
+              >
+                <Play size={18} fill="currentColor" />
+              </IconButton>
+              <IconButton
+                className="stop-btn"
+                label="Stop / release notes (Escape)"
+                onClick={() => void stop()}
+                disabled={!transport.playing}
+              >
+                <Square size={14} />
+              </IconButton>
             </div>
             <IconButton
               className="rec-btn"
@@ -1857,54 +1846,53 @@ export function App() {
             >
               <Circle size={16} fill="currentColor" />
             </IconButton>
-          <div className="transport-timing fl-tempo">
-            {" "}
-            <TempoField
-              tempo={view?.tempo ?? null}
-              revision={view?.revision ?? 0}
+            <div className="transport-timing fl-tempo">
+              {" "}
+              <TempoField
+                tempo={view?.tempo ?? null}
+                revision={view?.revision ?? 0}
+                disabled={!view || editingDisabled}
+                onCommit={(bpm) =>
+                  view &&
+                  void applyTempoMeter(bpm, view.numerator, view.denominator)
+                }
+              />
+              <span className="tempo-unit">BPM</span>
+            </div>
+            <TimeSignature
+              numerator={view?.numerator ?? 4}
+              denominator={view?.denominator ?? 4}
               disabled={!view || editingDisabled}
-              onCommit={(bpm) =>
-                view && void applyTempoMeter(bpm, view.numerator, view.denominator)
-              }
+              onApply={(n, d) => view && void applyTempoMeter(view.tempo, n, d)}
             />
-            <span className="tempo-unit">BPM</span>
-          </div>
-          <TimeSignature
-            numerator={view?.numerator ?? 4}
-            denominator={view?.denominator ?? 4}
-            disabled={!view || editingDisabled}
-            onApply={(n, d) =>
-              view && void applyTempoMeter(view.tempo, n, d)
-            }
-          />
-          <TimeReadout
-            elapsedMs={transport.elapsedMs}
-            playing={transport.playing}
-          />
-          <div className="fl-extra">
-            <IconButton
-              label="Move cursor to section start (W)"
-              onClick={() => {
-                if (!section) return;
-                setParkedTick(section.start);
-                useStudio.setState({ message: "Cursor at section start" });
-              }}
-              disabled={!section || transport.playing}
-            >
-              <SkipBack size={15} />
-            </IconButton>
-            <IconButton
-              label="Loop section"
-              onClick={() => setLoop(!loop)}
-              active={loop}
-            >
-              <Repeat2 size={16} />
-            </IconButton>
-          </div>
+            <TimeReadout
+              elapsedMs={transport.elapsedMs}
+              playing={transport.playing}
+            />
+            <div className="fl-extra">
+              <IconButton
+                label="Move cursor to section start (W)"
+                onClick={() => {
+                  if (!section) return;
+                  setParkedTick(section.start);
+                  useStudio.setState({ message: "Cursor at section start" });
+                }}
+                disabled={!section || transport.playing}
+              >
+                <SkipBack size={15} />
+              </IconButton>
+              <IconButton
+                label="Loop section"
+                onClick={() => setLoop(!loop)}
+                active={loop}
+              >
+                <Repeat2 size={16} />
+              </IconButton>
+            </div>
           </div>
         </div>
-      {view && (
-        <section className="sections-strip">
+        {view && (
+          <section className="sections-strip">
             <nav
               aria-label="Style sections"
               className="section-bar"
@@ -1957,44 +1945,44 @@ export function App() {
                         {gi > 0 && (
                           <span className="section-sep" aria-hidden="true" />
                         )}
-                      <div
-                        role="group"
-                        aria-label={group.name}
-                        className="section-group"
-                      >
-                        {group.slots.map((slot) =>
-                          slot.section ? (
-                            chip(slot.section, slot.label)
-                          ) : (
-                            <button
-                              key={slot.key}
-                              type="button"
-                              disabled={busy || transport.playing}
-                              className="section-chip empty-slot"
-                              aria-label={`Add ${slot.label} (not in this Style)`}
-                              title={`${slot.label} · not in this Style · click to add`}
-                              onClick={() =>
-                                setAddSlot({ slot, group: group.name })
-                              }
-                            >
-                              <span>{slot.label}</span>
-                              <Plus size={10} aria-hidden="true" />
-                            </button>
-                          ),
-                        )}
-                      </div>
+                        <div
+                          role="group"
+                          aria-label={group.name}
+                          className="section-group"
+                        >
+                          {group.slots.map((slot) =>
+                            slot.section ? (
+                              chip(slot.section, slot.label)
+                            ) : (
+                              <button
+                                key={slot.key}
+                                type="button"
+                                disabled={busy || transport.playing}
+                                className="section-chip empty-slot"
+                                aria-label={`Add ${slot.label} (not in this Style)`}
+                                title={`${slot.label} · not in this Style · click to add`}
+                                onClick={() =>
+                                  setAddSlot({ slot, group: group.name })
+                                }
+                              >
+                                <span>{slot.label}</span>
+                                <Plus size={10} aria-hidden="true" />
+                              </button>
+                            ),
+                          )}
+                        </div>
                       </Fragment>
                     ))}
                     {layout.extra.length > 0 && (
                       <>
-                      <span className="section-sep" aria-hidden="true" />
-                      <div
-                        role="group"
-                        aria-label="Other sections"
-                        className="section-group"
-                      >
-                        {layout.extra.map((s) => chip(s, s.label))}
-                      </div>
+                        <span className="section-sep" aria-hidden="true" />
+                        <div
+                          role="group"
+                          aria-label="Other sections"
+                          className="section-group"
+                        >
+                          {layout.extra.map((s) => chip(s, s.label))}
+                        </div>
                       </>
                     )}
                   </>
@@ -2002,7 +1990,7 @@ export function App() {
               })()}
             </nav>
           </section>
-      )}
+        )}
       </div>
       {!view ? (
         <main className="empty">
@@ -2137,7 +2125,9 @@ export function App() {
                                 <i
                                   key={i}
                                   className={h > 0 ? "on" : undefined}
-                                  style={{ height: `${Math.max(10, h * 100)}%` }}
+                                  style={{
+                                    height: `${Math.max(10, h * 100)}%`,
+                                  }}
                                 />
                               ))}
                             </span>
@@ -2614,7 +2604,9 @@ export function App() {
                 >
                   <button
                     type="button"
-                    disabled={busy || transport.playing || view.sections.length < 2}
+                    disabled={
+                      busy || transport.playing || view.sections.length < 2
+                    }
                     title="Copy notes and controllers into another section"
                     onClick={() => setCopyOpen(true)}
                   >
@@ -2656,7 +2648,7 @@ export function App() {
                 <fieldset disabled={editingDisabled} className="inspector-body">
                   {inspector === "note" ? (
                     <>
-                      <div className="note-navigation">
+                      <div className="insp-head">
                         <IconButton
                           label="Previous note"
                           disabled={noteIndex <= 0}
@@ -2666,11 +2658,18 @@ export function App() {
                         >
                           <ChevronLeft size={14} />
                         </IconButton>
-                        <span>
-                          {noteIndex < 0
-                            ? "No selection"
-                            : `${noteIndex + 1} of ${channelNotes.length}`}
-                        </span>
+                        <div className={`insp-title${note ? "" : " empty"}`}>
+                          {note ? (
+                            <>
+                              <strong>{pitchName(note.pitch)}</strong>
+                              <small>
+                                {noteIndex + 1} of {channelNotes.length}
+                              </small>
+                            </>
+                          ) : (
+                            <small>No selection</small>
+                          )}
+                        </div>
                         <IconButton
                           label="Next note"
                           disabled={
@@ -2683,15 +2682,39 @@ export function App() {
                         >
                           <ChevronRight size={14} />
                         </IconButton>
+                        {note && (
+                          <button
+                            type="button"
+                            className="danger-link"
+                            aria-label={
+                              selected.length === 1
+                                ? "Delete note"
+                                : "Delete selection"
+                            }
+                            title={
+                              selected.length === 1
+                                ? "Delete note"
+                                : "Delete selection"
+                            }
+                            onClick={() =>
+                              void state.edit({
+                                type: "deleteNotes",
+                                ids: selected,
+                              })
+                            }
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
                       </div>
-                      <h3>{note ? pitchName(note.pitch) : "Note selection"}</h3>
-                      <p className="muted">
+                      <p className="insp-sub">
                         {selected.length
                           ? `${selected.length} selected · source ch ${channel}`
                           : "Select a note in the piano roll to inspect its timing and velocity."}
                       </p>
                       {note && section && (
-                        <>
+                        <section className="insp-section">
+                          <header>Note</header>
                           <div
                             className="note-attributes"
                             key={`${sectionId}:${selected.join(",")}`}
@@ -2710,6 +2733,7 @@ export function App() {
                             />
                             <NumberField
                               label="Start tick (section)"
+                              shortLabel="Start"
                               value={note.start - section.start}
                               max={section.end - section.start - 1}
                               onCommit={(n) =>
@@ -2723,6 +2747,7 @@ export function App() {
                             />
                             <NumberField
                               label="Duration ticks"
+                              shortLabel="Length"
                               value={note.duration}
                               min={1}
                               max={section.end - section.start}
@@ -2752,101 +2777,91 @@ export function App() {
                               }
                             />
                           </div>
-                          <button
-                            className="danger-link"
-                            onClick={() =>
-                              void state.edit({
-                                type: "deleteNotes",
-                                ids: selected,
-                              })
-                            }
-                          >
-                            Delete{" "}
-                            {selected.length === 1 ? "note" : "selection"}
-                          </button>
-                          {view && (
-                            <>
-                              <div className="inspector-divider" />
-                              <details className="note-effects-disclosure">
-                                <summary>Note effects</summary>{" "}
-                                <NoteFxPanel
-                                  view={view}
-                                  section={section}
-                                  channel={channel}
-                                  notes={sectionNotes.filter((n) =>
-                                    selected.includes(n.id),
-                                  )}
-                                  disabled={
-                                    editingDisabled || busy || capturing
-                                  }
-                                  onApply={({ controller, points, remove }) =>
-                                    void state.edit({
-                                      type: "controllerPoints",
-                                      section: section.id,
-                                      channel,
-                                      controller,
-                                      points,
-                                      remove,
-                                    })
-                                  }
-                                  onClear={({ controller, remove }) =>
-                                    void state.edit({
-                                      type: "controllerPoints",
-                                      section: section.id,
-                                      channel,
-                                      controller,
-                                      remove,
-                                    })
-                                  }
-                                />
-                              </details>
-                            </>
+                        </section>
+                      )}
+                      {note && section && view && (
+                        <details className="insp-section insp-collapse note-effects-disclosure">
+                          <summary>Note effects</summary>
+                          <div className="insp-pad">
+                            <NoteFxPanel
+                              view={view}
+                              section={section}
+                              channel={channel}
+                              notes={sectionNotes.filter((n) =>
+                                selected.includes(n.id),
+                              )}
+                              disabled={editingDisabled || busy || capturing}
+                              onApply={({ controller, points, remove }) =>
+                                void state.edit({
+                                  type: "controllerPoints",
+                                  section: section.id,
+                                  channel,
+                                  controller,
+                                  points,
+                                  remove,
+                                })
+                              }
+                              onClear={({ controller, remove }) =>
+                                void state.edit({
+                                  type: "controllerPoints",
+                                  section: section.id,
+                                  channel,
+                                  controller,
+                                  remove,
+                                })
+                              }
+                            />
+                          </div>
+                        </details>
+                      )}
+                      <section className="insp-section">
+                        <header>Voice bank</header>
+                        <div className="insp-pad">
+                          {section && (
+                            <VoiceName
+                              section={section}
+                              channel={channel}
+                              onOpen={() => setVoiceOpen(true)}
+                            />
                           )}
-                        </>
-                      )}
-                      <div className="inspector-divider" />
-                      <h3>Voice bank</h3>
-                      {section && (
-                        <VoiceName
-                          section={section}
-                          channel={channel}
-                          onOpen={() => setVoiceOpen(true)}
-                        />
-                      )}
-                      {section && (channel === 9 || channel === 10) && (
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={() => setDrumsOpen(true)}
-                        >
-                          Drum kits (Ch 9–10)
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => setEffectsOpen(true)}
-                      >
-                        Effect types
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => setExchangeOpen(true)}
-                        disabled={!section}
-                      >
-                        MIDI exchange
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => setChordPreviewOpen(true)}
-                        disabled={!section}
-                      >
-                        Chord preview
-                      </button>
+                          <div className="insp-tools">
+                            {section && (channel === 9 || channel === 10) && (
+                              <button
+                                type="button"
+                                className="secondary"
+                                onClick={() => setDrumsOpen(true)}
+                              >
+                                Drum kits (Ch 9–10)
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="secondary"
+                              onClick={() => setEffectsOpen(true)}
+                            >
+                              Effect types
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              onClick={() => setExchangeOpen(true)}
+                              disabled={!section}
+                            >
+                              MIDI exchange
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              onClick={() => setChordPreviewOpen(true)}
+                              disabled={!section}
+                            >
+                              Chord preview
+                            </button>
+                          </div>
+                        </div>
+                      </section>
                       <details
-                        className="midi-bank-details"
+                        className="midi-bank-details insp-section insp-collapse"
                         onToggle={(e) => {
                           const el = e.currentTarget;
                           if (!el.open) return;
@@ -2865,25 +2880,33 @@ export function App() {
                             tip="Numeric MIDI address at section start. Drum kits use the factory DrumKit category — not SysEx Drum Setup. Reverb/chorus Apply sends verified system-effect SysEx."
                           />
                         </summary>
-                        <NumberField
-                          label="Bank MSB · CC 0"
-                          value={valueAt(channel, 0xb0, 0)}
-                          onCommit={(n) => cc(channel, 0, n)}
-                        />
-                        <NumberField
-                          label="Bank LSB · CC 32"
-                          value={valueAt(channel, 0xb0, 32)}
-                          onCommit={(n) => cc(channel, 32, n)}
-                        />
-                        <NumberField
-                          label="Program · 1-128"
-                          value={valueAt(channel, 0xc0, undefined, 0) + 1}
-                          min={1}
-                          max={128}
-                          onCommit={(n) =>
-                            setDiscrete(channel, [0xc0 | (channel - 1), n - 1])
-                          }
-                        />
+                        <div className="insp-pad">
+                          <NumberField
+                            label="Bank MSB · CC 0"
+                            shortLabel="Bank MSB"
+                            value={valueAt(channel, 0xb0, 0)}
+                            onCommit={(n) => cc(channel, 0, n)}
+                          />
+                          <NumberField
+                            label="Bank LSB · CC 32"
+                            shortLabel="Bank LSB"
+                            value={valueAt(channel, 0xb0, 32)}
+                            onCommit={(n) => cc(channel, 32, n)}
+                          />
+                          <NumberField
+                            label="Program · 1-128"
+                            shortLabel="Program"
+                            value={valueAt(channel, 0xc0, undefined, 0) + 1}
+                            min={1}
+                            max={128}
+                            onCommit={(n) =>
+                              setDiscrete(channel, [
+                                0xc0 | (channel - 1),
+                                n - 1,
+                              ])
+                            }
+                          />
+                        </div>
                       </details>
                     </>
                   ) : inspector === "casm" ? (
@@ -3118,6 +3141,8 @@ export function App() {
           key={`${section.id}-${channel}`}
           section={section}
           channel={channel}
+          midiInput={monitorName || undefined}
+          monitoringActive={monitoring}
           onClose={() => setVoiceOpen(false)}
         />
       )}
@@ -3717,7 +3742,10 @@ export function App() {
                       retained &&
                       !(await askConfirm(
                         "Cancel take? Discard retained capture events and markers.",
-                        { title: "Retained capture", confirmLabel: "Discard take" },
+                        {
+                          title: "Retained capture",
+                          confirmLabel: "Discard take",
+                        },
                       ))
                     ) {
                       return;
@@ -3880,84 +3908,6 @@ export function App() {
                   lane uses SMF meta FF 51.
                 </li>
               </ul>
-            </div>
-            <div className="modal-actions">
-              <button className="primary" onClick={() => setHelpOpen(false)}>
-                Close
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-      {limitsOpen && (
-        <div className="modal-backdrop" onClick={() => setLimitsOpen(false)}>
-          <section
-            className="modal limits-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="limits-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-title">
-              <h2 id="limits-title">Feature inventory</h2>
-              <IconButton
-                label="Close feature inventory"
-                onClick={() => setLimitsOpen(false)}
-              >
-                <X size={18} />
-              </IconButton>
-            </div>
-            <div className="modal-scroll-body">
-              <p>
-                Baseline status for the 35 known REA surfaces. Blocked items
-                stay gated - GenosStyleStudio does not invent Yamaha algorithms.
-              </p>
-              <ul className="help-list inventory-list">
-                <li>
-                  <strong>Implemented (tested scope):</strong> F001-F015, F017
-                  named/numeric voice, F018 Genos v2.00 Data List import, F019
-                  DrumKit picker + supported Genos initial-header scalar
-                  editing, bounded ch9/10 audition, F020 mixer CC7/10/11/91/93,
-                  F021 Effect Type List + reverb/chorus live apply and
-                  initial-header file editing + opt-in initial type/Return
-                  playback, F022-F023, F024 manual study and limited routed
-                  progression playback, F025 play/audition, F026 capture+apply
-                  notes (+ armed part remap), F028 CSV/JSON, F029 notes-only
-                  MIDI exchange, F031 Help/inventory, F032 panic/release, F033
-                  prefs/recovery, F007/F016 source+Ctb2 CASM, Mixer
-                  mute/solo/arm, timed EQ High/Low NRPN automation lanes.
-                </li>
-                <li>
-                  <strong>Partial (expansion packs):</strong> PPI/PQI section
-                  map + PACK MIDI voice map → voice picker; PPF extract +
-                  structural rewrite; VPRS header; SME VWST decrypt (needs
-                  offline SME seed) and YEM-import validation remain open.
-                </li>
-                <li>
-                  <strong>Gated - no invent:</strong> F019 sound remaps /
-                  advanced fields / Genos2 / native setup MIDI preview and
-                  hardware acceptance, F021 variation apply + Parameter List /
-                  detailed/later effect replay, F024 full Yamaha-equivalent
-                  playback / hardware retarget / expansion qualification, F027
-                  Style/analyze-build from capture (no Style builder oracle),
-                  F029 DAW session round-trip, F030 SFF1 conversion (EV-0171
-                  scaffold / conversion blocked).
-                </li>
-                <li>
-                  <strong>Excluded:</strong> F034 proprietary licensing.
-                </li>
-                <li>
-                  <strong>Hardware F035:</strong> Fresh 78 paired input notes,
-                  audible notes/Stop, source passage and dry/wet reverb contrast
-                  (direct and saved-file startup) confirmed on the connected
-                  Genos. Routed C–Am–F–G playback, edited notes/controllers,
-                  CASM source root and initial effect contrast are
-                  user-confirmed through the app, including a voice change and
-                  bounded RealDrumKit channel10/key42 volume/pan/pitch. USB
-                  Style loading was tested separately. Full Yamaha arranger
-                  equivalence, clock and latency qualification remain open.
-                </li>
-              </ul>
               <div
                 className="ui-scale-row"
                 role="group"
@@ -3994,7 +3944,7 @@ export function App() {
               </div>
             </div>
             <div className="modal-actions">
-              <button className="primary" onClick={() => setLimitsOpen(false)}>
+              <button className="primary" onClick={() => setHelpOpen(false)}>
                 Close
               </button>
             </div>
@@ -4399,12 +4349,15 @@ function EventInspector({
             }
           />
           <button
+            type="button"
             className="danger-link"
+            aria-label="Delete note"
+            title="Delete note"
             onClick={() =>
               void edit({ type: "deleteNotes", ids: [selectedNote.id] })
             }
           >
-            Delete note
+            <Trash2 size={14} />
           </button>
         </>
       )}
@@ -4447,10 +4400,13 @@ function EventInspector({
             />
           ))}
           <button
+            type="button"
             className="danger-link"
+            aria-label="Delete event"
+            title="Delete event"
             onClick={() => void edit({ type: "deleteEvent", id: event.id })}
           >
-            Delete event
+            <Trash2 size={14} />
           </button>
         </>
       )}

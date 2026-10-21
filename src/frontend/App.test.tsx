@@ -793,17 +793,6 @@ describe("real IPC wiring with isolated test mocks", () => {
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Add Intro 2" })).toBeNull();
   });
-  it("opens feature inventory listing gated surfaces", () => {
-    render(<App />);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Feature inventory / limits" }),
-    );
-    expect(
-      screen.getByRole("heading", { name: "Feature inventory" }),
-    ).toBeTruthy();
-    expect(screen.getByText(/F027/i)).toBeTruthy();
-    expect(screen.getByText(/EV-0171/i)).toBeTruthy();
-  });
   it("opens MIDI connections with input monitor help tip", async () => {
     mocks.invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "scan_devices") {

@@ -597,6 +597,66 @@ fn validate_expansion_guitar_profiles(
     expansion_guitar::validate_expansion_guitar_profiles(&profiles).map_err(error)
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstalledPacks {
+    source_path: String,
+    voices: Vec<genos_core::expansion::InstalledVoice>,
+    #[serde(default)]
+    skipped: usize,
+}
+
+fn installed_packs_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data(app)?.join("installed-packs.json"))
+}
+
+fn scan_and_cache(app: &tauri::AppHandle, path: &str) -> Result<InstalledPacks, String> {
+    let (voices, skipped) =
+        genos_core::expansion::installed_voices(Path::new(path)).map_err(error)?;
+    let packs = InstalledPacks {
+        source_path: path.to_string(),
+        voices,
+        skipped,
+    };
+    let file = installed_packs_file(app)?;
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir).map_err(error)?;
+    }
+    std::fs::write(&file, serde_json::to_vec(&packs).map_err(error)?).map_err(error)?;
+    Ok(packs)
+}
+
+/// Read every voice and kit from a Yamaha Expansion Manager installation file and remember it.
+#[tauri::command]
+async fn scan_installed_packs(app: tauri::AppHandle, path: String) -> Result<InstalledPacks, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_and_cache(&app, &path))
+        .await
+        .map_err(error)?
+}
+
+/// The remembered installed-pack voices. When the installation file is still on disk it is read
+/// again, so packs added since the last launch appear without any action.
+#[tauri::command]
+async fn load_installed_packs(app: tauri::AppHandle) -> Result<Option<InstalledPacks>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let file = installed_packs_file(&app)?;
+        let Ok(bytes) = std::fs::read(&file) else {
+            return Ok(None);
+        };
+        let Ok(cached) = serde_json::from_slice::<InstalledPacks>(&bytes) else {
+            return Ok(None);
+        };
+        if Path::new(&cached.source_path).is_file() {
+            if let Ok(fresh) = scan_and_cache(&app, &cached.source_path) {
+                return Ok(Some(fresh));
+            }
+        }
+        Ok(Some(cached))
+    })
+    .await
+    .map_err(error)?
+}
+
 #[tauri::command]
 fn analyze_expansion_pack(
     ppi_path: Option<String>,
@@ -2162,6 +2222,8 @@ fn main() {
             validate_expansion_guitar_profiles,
             expansion_guitar_candidate_phase1,
             analyze_expansion_pack,
+            scan_installed_packs,
+            load_installed_packs,
             extract_expansion_resource,
             extract_all_expansion_resources,
             rewrite_expansion_ppf

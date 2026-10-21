@@ -4,6 +4,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { PackageOpen, FolderOpen, FileSearch, Download, X } from "lucide-react";
 import { useStudio } from "./store";
+import { mergeVoices } from "./installedPacks";
 import type { CatalogVoice } from "./contracts";
 
 type Capability = { category: string; status: string; detail: string };
@@ -51,9 +52,18 @@ type RecoveryReport = {
   vprs?: {
     banner?: string;
     note: string;
-    header?: { field0: number; field1: number; field2: number; dataBase: number };
+    header?: {
+      field0: number;
+      field1: number;
+      field2: number;
+      dataBase: number;
+    };
   };
-  waveIndex?: { path: string; entries: { waveKey: string; startAddress: number; waveSize: number }[]; note: string };
+  waveIndex?: {
+    path: string;
+    entries: { waveKey: string; startAddress: number; waveSize: number }[];
+    note: string;
+  };
   voiceMaps?: {
     packTitle?: string;
     itemTitle?: string;
@@ -99,7 +109,8 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
     setError(null);
     setExtractMsg(null);
     try {
-      if (!isTauri()) throw new Error("Expansion recovery requires the desktop app");
+      if (!isTauri())
+        throw new Error("Expansion recovery requires the desktop app");
       const next = await invoke<RecoveryReport>("analyze_expansion_pack", {
         ppiPath,
         n27Path,
@@ -119,8 +130,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
             category: "Expansion",
             subcategory: map.packTitle ?? map.itemTitle ?? "-",
             name:
-              map.itemTitle ??
-              `Expansion ${a.msb}/${a.lsb}/${a.program + 1}`,
+              map.itemTitle ?? `Expansion ${a.msb}/${a.lsb}/${a.program + 1}`,
             msb: a.msb,
             lsb: a.lsb,
             program: a.program,
@@ -129,7 +139,9 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
           });
         }
       }
-      setExpansionVoices(voices);
+      setExpansionVoices(
+        mergeVoices(useStudio.getState().expansionVoices, voices),
+      );
     } catch (e) {
       setReport(null);
       setError(String(e));
@@ -269,7 +281,13 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={() => { if (!busy) onClose(); }}>
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onClick={() => {
+        if (!busy) onClose();
+      }}
+    >
       <div
         className="modal expansion-recovery"
         role="dialog"
@@ -288,7 +306,12 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
           <h2 id="expansion-recovery-title">
             <PackageOpen size={18} /> Expansion Pack Recovery
           </h2>
-          <button className="icon-button" aria-label="Close" disabled={busy} onClick={onClose}>
+          <button
+            className="icon-button"
+            aria-label="Close"
+            disabled={busy}
+            onClick={onClose}
+          >
             <X size={16} />
           </button>
         </header>
@@ -324,7 +347,9 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
           <li>
             <strong>2. Instrument information (optional)</strong>
             <div className="recovery-row">
-              <code>{n27Path ?? "Optional .n27 — not required to read packages"}</code>
+              <code>
+                {n27Path ?? "Optional .n27 — not required to read packages"}
+              </code>
               <button
                 disabled={busy}
                 onClick={() =>
@@ -347,9 +372,9 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
               <button
                 disabled={busy}
                 onClick={() =>
-                  void pick([{ name: "Pack Project", extensions: ["ppf"] }]).then(
-                    (p) => p && changeInput(() => setPpfPath(p)),
-                  )
+                  void pick([
+                    { name: "Pack Project", extensions: ["ppf"] },
+                  ]).then((p) => p && changeInput(() => setPpfPath(p)))
                 }
               >
                 <FolderOpen size={14} /> Select
@@ -383,7 +408,9 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                 spellCheck={false}
                 placeholder="32 hex chars — offline SME seed (Model Encryption)"
                 value={encryptionKeyHex}
-                onChange={(e) => changeInput(() => setEncryptionKeyHex(e.target.value))}
+                onChange={(e) =>
+                  changeInput(() => setEncryptionKeyHex(e.target.value))
+                }
                 disabled={busy}
               />
             </div>
@@ -409,8 +436,9 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
               <section>
                 <h3>Instrument</h3>
                 <p>
-                  {report.instrument.modelName} · {report.instrument.compositeId}{" "}
-                  · format {report.instrument.packInstallDataFormatType}
+                  {report.instrument.modelName} ·{" "}
+                  {report.instrument.compositeId} · format{" "}
+                  {report.instrument.packInstallDataFormatType}
                 </p>
               </section>
             )}
@@ -497,10 +525,14 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
               <section>
                 <h3>
                   Installation · {report.installation.header.model ?? "?"} ·{" "}
-                  {(report.installation.fileSize / (1024 * 1024)).toFixed(1)} MiB
+                  {(report.installation.fileSize / (1024 * 1024)).toFixed(1)}{" "}
+                  MiB
                 </h3>
                 <div className="recovery-row" style={{ marginBottom: 8 }}>
-                  <button disabled={busy || !ppiPath} onClick={() => void extractAllPpi()}>
+                  <button
+                    disabled={busy || !ppiPath}
+                    onClick={() => void extractAllPpi()}
+                  >
                     <Download size={13} /> Extract all pack items
                   </button>
                 </div>
@@ -513,14 +545,14 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                 </div>
                 <div className="pack-list">
                   {report.installation.packs.map((pack, pIdx) => {
-                    const base = report.installation!.packs
-                      .slice(0, pIdx)
+                    const base = report
+                      .installation!.packs.slice(0, pIdx)
                       .reduce((n, p) => n + p.items.length, 0);
                     return (
                       <details key={`${pack.title}-${pIdx}`}>
                         <summary>
-                          {pack.title ?? "(untitled pack)"} · {pack.items.length}{" "}
-                          items
+                          {pack.title ?? "(untitled pack)"} ·{" "}
+                          {pack.items.length} items
                         </summary>
                         <ul>
                           {pack.items.map((item, iIdx) => {
@@ -540,9 +572,7 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                                   onClick={() => void extractPpi(resourceIndex)}
                                 >
                                   <Download size={13} /> Extract
-                                  {item.extension
-                                    ? ` .${item.extension}`
-                                    : ""}
+                                  {item.extension ? ` .${item.extension}` : ""}
                                 </button>
                               </li>
                             );
@@ -562,7 +592,10 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
                   {report.project.resources.length} resources
                 </h3>
                 <div className="recovery-row" style={{ marginBottom: 8 }}>
-                  <button disabled={busy || !ppfPath} onClick={() => void extractAllPpf()}>
+                  <button
+                    disabled={busy || !ppfPath}
+                    onClick={() => void extractAllPpf()}
+                  >
                     <Download size={13} /> Extract all resources
                   </button>
                   <button disabled={busy} onClick={() => void rewritePpf()}>
@@ -592,9 +625,17 @@ export function ExpansionRecovery({ onClose }: { onClose: () => void }) {
             <section>
               <h3>PPF reconstruction</h3>
               <p>
-                {report.capabilities.some((c) => c.status === "keyed-decrypt-ready")
+                {report.capabilities.some(
+                  (c) => c.status === "keyed-decrypt-ready",
+                )
                   ? "SME decrypt is ready: supply VWST offsets (from a YEM .waves index) via extract kind=vwst."
-                  : report.blockers.some((b) => b.includes("encryptionkey") || b.includes("SME seed") || b.includes("samples") || b.includes("offline"))
+                  : report.blockers.some(
+                        (b) =>
+                          b.includes("encryptionkey") ||
+                          b.includes("SME seed") ||
+                          b.includes("samples") ||
+                          b.includes("offline"),
+                      )
                     ? "Blocked for installation-only recovery: VWST still needs the offline SME seed (or a source .ppf)."
                     : report.project
                       ? "A lossless copy of the source .ppf is available. Installation-to-project reconstruction and YEM import acceptance remain unverified."

@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Pencil, Trash2 } from "lucide-react";
 import { useStudio } from "./store";
 import { FloatingToolWindow } from "./FloatingToolWindow";
+import { UserVoiceEditor } from "./UserVoiceEditor";
+import { isUserVoice } from "./userVoices";
+import { importInstalledPacks, isKit } from "./installedPacks";
 import type {
   CatalogSummary,
   CatalogVoice,
@@ -53,13 +57,18 @@ export function VoiceName({
 export function VoiceBrowser({
   section,
   channel,
+  midiInput,
+  monitoringActive = false,
   onClose,
 }: {
   section: Section;
   channel: number;
+  midiInput?: string;
+  monitoringActive?: boolean;
   onClose: () => void;
 }) {
-  const { view, expansionVoices } = useStudio();
+  const { view, expansionVoices, userVoices, setUserVoices } = useStudio();
+  const [editing, setEditing] = useState<CatalogVoice | "new" | null>(null);
   const [original] = useState(view!);
   const [catalog, setCatalog] = useState<CatalogSummary | null>(null);
   const [current, setCurrent] = useState<CatalogVoice | null>(null);
@@ -80,8 +89,12 @@ export function VoiceBrowser({
   close.current = onClose;
   const stale = view !== original;
   const args = { section: section.id, channel, revision: original.revision };
-  const expansionMatches = expansionVoices.filter(
+  const extraVoices = [...userVoices, ...expansionVoices];
+  const extraKinds = ["all", "expansion", "voices", "drums"];
+  const expansionMatches = extraVoices.filter(
     (v) =>
+      (kind !== "drums" || isKit(v)) &&
+      (kind !== "voices" || !isKit(v)) &&
       (!category || category === v.category) &&
       query
         .toLowerCase()
@@ -165,7 +178,7 @@ export function VoiceBrowser({
       live = false;
       clearTimeout(timer);
     };
-  }, [query, catalog, kind, category, offset, expansionVoices]);
+  }, [query, catalog, kind, category, offset, expansionVoices, userVoices]);
   const run = async (action: () => Promise<void>) => {
     if (working.current || useStudio.getState().busy) return;
     working.current = true;
@@ -219,7 +232,7 @@ export function VoiceBrowser({
         lsb: selected.lsb,
         program: selected.program,
       };
-      const next = expansionVoices.includes(selected)
+      const next = extraVoices.includes(selected)
         ? await invoke<View>("edit_document", {
             revision: original.revision,
             docLabel: "main",
@@ -271,35 +284,122 @@ export function VoiceBrowser({
               </p>
             </div>
           </details>
-          {kind === "all" && expansionMatches.length > 0 && (
-            <div className="voice-results" aria-label="Expansion pack voices">
-              <p className="muted">
-                {expansionMatches.length} expansion address
-                {expansionMatches.length === 1 ? "" : "es"} from pack recovery
-              </p>
-              {expansionMatches.map((v) => (
+          {extraKinds.includes(kind) && (
+            <div
+              className={`voice-results my-voices${kind === "expansion" ? " tall" : ""}`}
+              aria-label="My and expansion voices"
+            >
+              <div className="my-voices-head">
+                <p className="muted">
+                  {expansionMatches.length
+                    ? `${expansionMatches.length} custom / expansion voice${expansionMatches.length === 1 ? "" : "s"}`
+                    : "Import your installed expansion packs to list their voices and kits here."}
+                </p>
                 <button
-                  key={`exp-${v.msb}-${v.lsb}-${v.program}`}
-                  aria-pressed={selected === v}
+                  type="button"
                   disabled={pending || stale}
-                  onClick={() => {
-                    setSelected(v);
-                    setError(null);
-                  }}
+                  title="Read every voice and kit from your Expansion Manager installation file (e.g. Genos_PackInstallData.pqi)"
+                  onClick={() =>
+                    void run(async () => {
+                      const packs = await importInstalledPacks();
+                      if (packs)
+                        useStudio.setState({
+                          message: `${packs.voices.length} installed voices and kits imported`,
+                        });
+                    })
+                  }
                 >
-                  <span>
-                    <strong>{v.name}</strong>
-                    <small>
-                      {v.category}
-                      {v.subcategory !== "-"
-                        ? ` / ${v.subcategory}`
-                        : ""} · {v.voiceType}
-                    </small>
-                  </span>
-                  <span className="voice-address">
-                    {v.msb} / {v.lsb} / {v.program + 1}
-                  </span>
+                  Import installed packs…
                 </button>
+                <button
+                  type="button"
+                  disabled={pending || stale || editing !== null}
+                  onClick={() => setEditing("new")}
+                >
+                  + Add voice
+                </button>
+              </div>
+              {editing !== null && (
+                <UserVoiceEditor
+                  initial={editing === "new" ? null : editing}
+                  midiInput={midiInput}
+                  monitoringActive={monitoringActive}
+                  onCancel={() => setEditing(null)}
+                  onSave={(voice) => {
+                    const without =
+                      editing === "new"
+                        ? userVoices
+                        : userVoices.filter((v) => v !== editing);
+                    const clash = without.some(
+                      (v) =>
+                        v.msb === voice.msb &&
+                        v.lsb === voice.lsb &&
+                        v.program === voice.program,
+                    );
+                    if (clash) {
+                      setError("A saved voice already uses that bank/program.");
+                      return;
+                    }
+                    setError(null);
+                    setUserVoices([...without, voice]);
+                    setSelected(null);
+                    setEditing(null);
+                  }}
+                />
+              )}
+              {expansionMatches.map((v) => (
+                <div
+                  className="voice-row"
+                  key={`exp-${v.voiceType}-${v.msb}-${v.lsb}-${v.program}`}
+                >
+                  <button
+                    aria-pressed={selected === v}
+                    disabled={pending || stale}
+                    onClick={() => {
+                      setSelected(v);
+                      setError(null);
+                    }}
+                  >
+                    <span>
+                      <strong>{v.name}</strong>
+                      <small>
+                        {v.category}
+                        {v.subcategory !== "-"
+                          ? ` / ${v.subcategory}`
+                          : ""} · {isKit(v) ? "Kit" : "Voice"}
+                      </small>
+                    </span>
+                    <span className="voice-address">
+                      {v.msb} / {v.lsb} / {v.program + 1}
+                    </span>
+                  </button>
+                  {isUserVoice(v) && (
+                    <span className="voice-row-tools">
+                      <button
+                        type="button"
+                        aria-label={`Edit ${v.name}`}
+                        title="Edit"
+                        disabled={pending || editing !== null}
+                        onClick={() => setEditing(v)}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-link"
+                        aria-label={`Remove ${v.name}`}
+                        title="Remove from my voices"
+                        disabled={pending}
+                        onClick={() => {
+                          if (selected === v) setSelected(null);
+                          setUserVoices(userVoices.filter((u) => u !== v));
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </span>
+                  )}
+                </div>
               ))}
             </div>
           )}
@@ -346,9 +446,7 @@ export function VoiceBrowser({
                     <option value="xg">XG / GM</option>
                     <option value="gm2">GM2</option>
                     <option value="drums">Drum / SFX kits</option>
-                    {expansionVoices.length > 0 && (
-                      <option value="expansion">Expansion / User</option>
-                    )}
+                    <option value="expansion">My voices / Expansion</option>
                   </select>
                 </label>
                 <label>
@@ -368,13 +466,16 @@ export function VoiceBrowser({
                         {name}
                       </option>
                     ))}
+                    {userVoices.length > 0 && (
+                      <option value="My voices">My voices</option>
+                    )}
                     {expansionVoices.length > 0 && (
                       <option value="Expansion">Expansion</option>
                     )}
                   </select>
                 </label>
               </div>
-              <p className="muted" role="status">
+              <p className="muted" role="status" hidden={kind === "expansion"}>
                 {searching
                   ? "Searching…"
                   : result
@@ -385,6 +486,7 @@ export function VoiceBrowser({
               </p>
               <div
                 className="voice-results"
+                hidden={kind === "expansion"}
                 aria-label="Voice results"
                 aria-busy={searching}
               >
@@ -420,6 +522,7 @@ export function VoiceBrowser({
               </div>
               <nav
                 className="voice-page-controls"
+                hidden={kind === "expansion"}
                 aria-label="Voice result pages"
               >
                 <button

@@ -1210,12 +1210,33 @@ input[type="number"] {
   background: var(--fl-s7);
   margin: 22px 0;
 }
-.danger-link {
-  border: 0;
+button.danger-link,
+.app button.danger-link {
+  box-sizing: border-box;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  padding: 0;
+  gap: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
   background: transparent;
-  color: #c89a88;
-  font-size: 11px;
-  padding-left: 0;
+  color: #d8806c;
+  cursor: pointer;
+}
+button.danger-link:hover:not(:disabled),
+.app button.danger-link:hover:not(:disabled) {
+  background: rgb(216 128 108 / 0.16);
+  border-color: rgb(216 128 108 / 0.45);
+  color: #f0a08c;
+}
+button.danger-link svg {
+  display: block;
+  flex: none;
 }
 .integrity {
   border-top: 1px solid var(--fl-s7);
@@ -2236,8 +2257,7 @@ kbd {
     max-width: 118px;
   }
 }
-.app .modal.help-modal,
-.app .modal.limits-modal {
+.app .modal.help-modal {
   width: min(560px, calc(100vw - 40px));
   max-height: calc(100dvh / var(--ui-scale, 1) - 48px);
   height: auto;
@@ -2249,22 +2269,19 @@ kbd {
 .help-modal .help-list {
   overflow-wrap: anywhere;
 }
-.app .modal.help-modal > .modal-title,
-.app .modal.limits-modal > .modal-title {
+.app .modal.help-modal > .modal-title > .modal-title {
   position: static;
   flex-shrink: 0;
   margin-bottom: 0;
 }
-.app .modal.help-modal > .modal-scroll-body,
-.app .modal.limits-modal > .modal-scroll-body {
+.app .modal.help-modal > .modal-scroll-body > .modal-scroll-body {
   overflow-y: auto;
   min-height: 0;
   flex: 1 1 auto;
   padding-right: 4px;
   padding-bottom: 4px;
 }
-.app .modal.help-modal > .modal-actions,
-.app .modal.limits-modal > .modal-actions {
+.app .modal.help-modal > .modal-actions > .modal-actions {
   flex-shrink: 0;
   margin-top: 0;
   padding-top: 8px;
@@ -2786,4 +2803,15 @@ kbd {
 .error-banner {
   color: #d98989;
   font-size: 13px;
+}
+.note-fx-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 8px;
+}
+.note-fx-actions button {
+  width: 100%;
+  margin: 0;
 }

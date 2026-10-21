@@ -4,6 +4,7 @@
 //! of Yamaha Expansion Manager and ConvUVx fixtures. Unknown fields stay unknown.
 
 pub mod iff;
+pub mod installed_voices;
 pub mod n27;
 pub mod ppf;
 pub mod ppi;
@@ -13,6 +14,7 @@ pub mod voice_map;
 pub mod vprs;
 pub mod wave_index;
 
+pub use installed_voices::{InstalledVoice, installed_voices};
 pub use n27::{InstrumentInfo, parse_n27};
 pub use ppf::{PpfPackage, PpfResource, PpfWriteResource, parse_ppf, rewrite_ppf, write_ppf};
 pub use ppi::{PpiPackage, parse_ppi};

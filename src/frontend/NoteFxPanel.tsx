@@ -186,7 +186,7 @@ export function NoteFxPanel({
         />
         Restore after note
       </label>
-      <div className="modal-actions" style={{ marginTop: 8 }}>
+      <div className="note-fx-actions">
         <button type="button" disabled={!enabled} onClick={apply}>
           Apply to selected notes
         </button>

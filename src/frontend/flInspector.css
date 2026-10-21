@@ -1,0 +1,172 @@
+/* Inspector as an FL-style stack of compact panels: a slim title bar per group, tight rows with the
+   label on the left and a recessed box on the right, and no free-floating headings or dividers. */
+.inspector-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+}
+.inspector-body .insp-head {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 24px 24px;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+}
+.inspector-body .insp-head .icon-button {
+  width: 24px;
+  height: 26px;
+  min-height: 0;
+  padding: 0;
+}
+.inspector-body .insp-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 6px;
+  height: 26px;
+  background: var(--fl-s2);
+  border: 1px solid var(--fl-s1);
+  border-radius: 3px;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.35);
+}
+.inspector-body .insp-title strong {
+  font: 700 15px/26px Consolas, monospace;
+  color: #edcc96;
+  letter-spacing: 0.5px;
+}
+.inspector-body .insp-title small {
+  font: 10px Consolas, monospace;
+  color: var(--fl-t3);
+  white-space: nowrap;
+}
+.inspector-body .insp-head .danger-link {
+  width: 24px;
+  min-width: 24px;
+  height: 26px;
+  min-height: 26px;
+}
+.inspector-body .insp-sub {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--fl-t3);
+}
+.inspector-body .insp-section {
+  margin: 0;
+  background: var(--fl-s3);
+  border: 1px solid var(--fl-s1);
+  border-radius: 3px;
+}
+.inspector-body .insp-section > header,
+.inspector-body .insp-collapse > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 8px;
+  height: 22px;
+  background: var(--fl-s6);
+  border: 0;
+  border-bottom: 1px solid var(--fl-s1);
+  border-radius: 2px 2px 0 0;
+  font: 700 9px/22px "Segoe UI", system-ui, sans-serif;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--fl-t2);
+  cursor: default;
+}
+.inspector-body .insp-collapse > summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+.inspector-body .insp-collapse:not([open]) > summary {
+  border-bottom: 0;
+  border-radius: 2px;
+}
+.inspector-body .insp-collapse > summary:hover {
+  color: var(--fl-t0);
+}
+.inspector-body .insp-pad {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+}
+.inspector-body .insp-pad .field,
+.inspector-body .note-attributes .field {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.inspector-body .field > span {
+  font-size: 10px;
+  color: var(--fl-t3);
+  white-space: nowrap;
+}
+.inspector-body .field input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: 24px;
+  height: 24px;
+  padding: 0 7px;
+  background: var(--fl-s1);
+  border: 1px solid var(--fl-s0);
+  border-radius: 2px;
+  color: #edcc96;
+  font: 12px Consolas, monospace;
+  text-align: right;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.4);
+}
+.inspector-body .note-attributes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px;
+  grid-template-rows: repeat(3, auto);
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px;
+}
+.inspector-body .note-attributes .field:nth-child(1) { grid-area: 1 / 1; }
+.inspector-body .note-attributes .field:nth-child(2) { grid-area: 2 / 1; }
+.inspector-body .note-attributes .field:nth-child(3) { grid-area: 3 / 1; }
+.inspector-body .note-attributes .parameter {
+  grid-area: 1 / 2 / 4 / 3;
+  align-self: center;
+  justify-self: center;
+}
+.inspector-body .insp-tools {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.inspector-body .insp-tools .secondary {
+  width: 100%;
+  min-height: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0 6px;
+  justify-content: center;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector-body .insp-pad .voice-picker {
+  width: 100%;
+  margin: 0;
+}
+.inspector-body .insp-collapse .note-fx-panel h3 {
+  margin: 0 0 4px;
+  font-size: 10px;
+}
+.inspector-body .insp-title.empty small {
+  font: 11px "Segoe UI", system-ui, sans-serif;
+  color: var(--fl-t3);
+  letter-spacing: 0.3px;
+}
+.inspector-body .insp-head .icon-button {
+  box-sizing: border-box;
+  height: 26px;
+  border-radius: 3px;
+}
