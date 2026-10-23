@@ -510,6 +510,7 @@ it("applies controllers-only capture when Record data is Controllers + Voice", a
 });
 
 it("sends no initial effects by default, then includes the reviewed token only after explicit opt-in", async () => {
+  mocks.isTauri = true;
   useStudio.setState({ view, sectionId: 7 });
   mocks.invoke.mockImplementation(async (cmd: string) => {
     if (cmd === "scan_devices")

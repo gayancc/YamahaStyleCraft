@@ -628,7 +628,10 @@ fn scan_and_cache(app: &tauri::AppHandle, path: &str) -> Result<InstalledPacks, 
 
 /// Read every voice and kit from a Yamaha Expansion Manager installation file and remember it.
 #[tauri::command]
-async fn scan_installed_packs(app: tauri::AppHandle, path: String) -> Result<InstalledPacks, String> {
+async fn scan_installed_packs(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<InstalledPacks, String> {
     tauri::async_runtime::spawn_blocking(move || scan_and_cache(&app, &path))
         .await
         .map_err(error)?
@@ -646,10 +649,10 @@ async fn load_installed_packs(app: tauri::AppHandle) -> Result<Option<InstalledP
         let Ok(cached) = serde_json::from_slice::<InstalledPacks>(&bytes) else {
             return Ok(None);
         };
-        if Path::new(&cached.source_path).is_file() {
-            if let Ok(fresh) = scan_and_cache(&app, &cached.source_path) {
-                return Ok(Some(fresh));
-            }
+        if Path::new(&cached.source_path).is_file()
+            && let Ok(fresh) = scan_and_cache(&app, &cached.source_path)
+        {
+            return Ok(Some(fresh));
         }
         Ok(Some(cached))
     })
