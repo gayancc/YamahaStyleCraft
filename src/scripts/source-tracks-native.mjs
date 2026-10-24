@@ -153,6 +153,7 @@ try {
   browser = await chromium.connectOverCDP("http://127.0.0.1:9449");
   const page = browser.contexts()[0].pages()[0];
   await page.waitForSelector(".brand");
+  await page.waitForSelector("#splash", { state: "detached" });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   recovery = await page.evaluate(async () => {

@@ -235,6 +235,8 @@ function start(root: HTMLElement) {
       // Detonate the wordmark and open an iris onto the UI beneath.
       bursting = true;
       burstAt = performance.now();
+      // The iris reveals a live UI; stop the overlay from swallowing input meanwhile.
+      root.style.pointerEvents = "none";
       if (sub) sub.style.opacity = "0";
       const reach = Math.hypot(innerWidth, innerHeight) / 2 + 200;
       const dur = 1100;

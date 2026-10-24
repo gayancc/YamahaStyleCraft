@@ -143,6 +143,7 @@ try {
   try {
     const page = browser.contexts()[0].pages()[0];
     await page.waitForSelector(".brand");
+    await page.waitForSelector("#splash", { state: "detached" });
     const appData = await page.evaluate(() =>
       window.__TAURI_INTERNALS__.invoke("plugin:path|resolve_directory", {
         directory: 14,

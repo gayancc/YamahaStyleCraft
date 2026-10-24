@@ -9,6 +9,7 @@ try {
   const page = browser.contexts()[0].pages()[0];
   await page.reload();
   await page.waitForSelector(".brand");
+  await page.waitForSelector("#splash", { state: "detached" });
   if (
     await page.evaluate(() =>
       window.__TAURI_INTERNALS__.invoke("recovery_status"),
@@ -89,6 +90,8 @@ try {
   await page.keyboard.down('Shift');await page.mouse.click(secondPoint.x,secondPoint.y);await page.keyboard.up('Shift');
   assert.deepEqual(new Set((await state()).selected),new Set([original.id,second.id]));
   const corner={x:Math.min(firstPoint.x,secondPoint.x)-11,y:Math.min(firstPoint.y,secondPoint.y)-10};
+  // With two or more notes selected, dragging inside their padded bounds moves them; start the marquee from a clear selection.
+  await page.evaluate(async()=>{const {useStudio}=await import('/frontend/store.ts');useStudio.setState({selected:[]});});
   await page.mouse.move(corner.x,corner.y);await page.mouse.down();await page.mouse.move(Math.max(firstPoint.x,secondPoint.x)+20,Math.max(firstPoint.y,secondPoint.y)+12,{steps:5});await page.mouse.up();
   assert((await state()).selected.includes(original.id));assert((await state()).selected.includes(second.id));
   // Clear the marquee, select one note, and explicitly quantize an off-grid edit.
@@ -97,7 +100,7 @@ try {
   await expect.poll(async()=>(await get()).start).toBe(6257);
   await page.getByRole('button',{name:'Quantize',exact:true}).click();await expect.poll(async()=>(await get()).start).toBe(6240);
   const lane=await page.locator('canvas.velocity').boundingBox();const vp=await coordinate(await get());
-  await page.mouse.click(vp.x-9,lane.y+77-83/127*55);await expect.poll(async()=>(await get()).velocity).toBe(83);
+  await page.mouse.click(vp.x-9,lane.y+lane.height-8-83/127*(lane.height-24));await expect.poll(async()=>(await get()).velocity).toBe(83);
   await page.getByRole('button',{name:'Undo (Ctrl+Z)',exact:true}).click();await expect.poll(async()=>(await get()).velocity).toBe(original.velocity);
   // Draw a new high note in empty grid, then remove it using the keyboard.
   await page.evaluate(() => {
@@ -126,9 +129,9 @@ try {
     name: "Ch 11 volume",
     exact: true,
   });
-  const oldVolume = Number(await slider.inputValue());
+  const oldVolume = Number(await slider.getAttribute("aria-valuenow"));
   await slider.focus();
-  await slider.press("ArrowRight");
+  await slider.press("ArrowUp");
   await slider.press("Tab");
   await expect
     .poll(

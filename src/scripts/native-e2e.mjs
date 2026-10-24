@@ -14,6 +14,7 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   await page.reload();
   await page.waitForSelector(".brand");
+  await page.waitForSelector("#splash", { state: "detached" });
   if (
     await page.evaluate(() =>
       window.__TAURI_INTERNALS__.invoke("recovery_status"),

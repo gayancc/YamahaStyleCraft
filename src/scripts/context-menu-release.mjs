@@ -24,6 +24,7 @@ try {
   browser=await chromium.connectOverCDP("http://127.0.0.1:9451");
   const page=browser.contexts()[0].pages()[0];
   await page.waitForSelector(".brand",{state:"attached"});
+  await page.waitForSelector("#splash", { state: "detached" });
   assert(!page.url().includes(":1420"),"Release must use embedded assets");
   const native=target=>target.evaluate(()=>window.__TAURI_INTERNALS__.invoke("native_context_menu_enabled"));
   assert.equal(await native(page),false);

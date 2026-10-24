@@ -355,7 +355,7 @@ button {
 }
 /* At large interface sizes a short workspace must scroll, never squeeze the
    editable pitch grid to zero beneath wrapped toolbars and the event lane. */
-@container (max-height: 440px) {
+@container (max-height: 520px) {
   .editor {
     overflow-y: auto;
     scrollbar-width: thin;

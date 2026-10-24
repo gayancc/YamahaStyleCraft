@@ -64,7 +64,7 @@ export async function verifyStudioDesign({ page, ipc, run, results, source, rese
     await size(width,height);
     const layout=await page.evaluate(()=>{
       const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
-      return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,transport:rect('.transport-primary'),piano:rect('.piano-scroll'),footer:rect('.statusbar')};
+      return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,transport:rect('.fl-transport'),piano:rect('.piano-scroll'),footer:rect('.statusbar')};
     });
     assert(layout.transport.right<=width); assert(layout.piano.width>250&&layout.piano.height>160); assert(layout.footer.bottom<=height+1); assert(layout.scrollWidth<=width);
     layouts.push(layout); await page.screenshot({path:path.join(run,`studio-design-${width}.png`)});
@@ -86,7 +86,7 @@ export async function verifyStudioDesign({ page, ipc, run, results, source, rese
   const fileSummary=page.locator('.file-actions > .studio-menu > summary');
   await fileSummary.click(); await expect(page.getByRole('button',{name:'Export Style (Ctrl+Shift+S)',exact:true})).toBeVisible();
   await fileSummary.press('Escape'); await expect(fileSummary.locator('..')).not.toHaveAttribute('open','');
-  const studioSummary=page.locator('.titlebar-tools > .studio-menu > summary');
+  const studioSummary=page.locator('.titlebar-tools > .studio-menu > summary',{hasText:'Studio'});
   await studioSummary.click(); await expect(page.getByRole('button',{name:'MIDI active here',exact:true})).toBeVisible();
   assert.equal(await page.locator('.transport .midi-owner-btn').count(),0);
   await page.locator('.project-title').click(); await expect(studioSummary.locator('..')).not.toHaveAttribute('open','');

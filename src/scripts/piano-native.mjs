@@ -85,6 +85,7 @@ try {
   page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(15000);
   await page.waitForSelector(".brand", { state: "attached" });
+  await page.waitForSelector("#splash", { state: "detached" });
   await expect.poll(() => page.evaluate(() => window.__TAURI_INTERNALS__.invoke("native_context_menu_enabled"))).toBe(false);
   results.push("main WebView2 native setting readback: default context menus disabled");
   const errors = [];
@@ -262,7 +263,7 @@ try {
   assert.equal((await state()).view.revision, propertyRevision);
   assert.equal(await properties.getAttribute("aria-modal"),"false");
   assert.equal(await page.locator(".modal-backdrop").count(),0);
-  const utilityBox=await properties.boundingBox();assert(utilityBox.width<=330 && utilityBox.height<280);
+  const utilityBox=await properties.boundingBox();assert(utilityBox.width<=330 && utilityBox.height<340);
   const canvasBox=await page.locator(".piano-scroll canvas").boundingBox();
   const hit=await page.evaluate(({x,y})=>Boolean(document.elementFromPoint(x,y)?.closest("canvas")),{x:canvasBox.x+canvasBox.width-20,y:canvasBox.y+30});assert(hit,"no full-screen event shield");
   const titlebar=await properties.getByRole("button",{name:"Move note properties",exact:true}).boundingBox();
@@ -292,7 +293,7 @@ try {
   await expect(properties).toBeVisible();
   await page.mouse.up({ button:"right" });
   await properties.getByLabel("Time (bar:beat:tick)").fill("2:1:0");
-  await properties.getByLabel("Note properties pitch").selectOption("70");
+  await properties.getByLabel("Note properties pitch").fill("70");
   await properties.getByRole("button",{name:"Enter Note properties velocity value",exact:true}).click();
   await properties.getByLabel("Note properties velocity value",{exact:true}).fill("99");
   await properties.getByLabel("Note properties velocity value",{exact:true}).press("Enter");

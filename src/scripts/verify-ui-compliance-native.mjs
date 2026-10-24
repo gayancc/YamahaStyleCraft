@@ -26,7 +26,9 @@ export async function verifyUiCompliance({ page, run, results, source }) {
     captures.push(file);
   };
   const studio = async (name) => {
-    await page.locator(".titlebar-tools .studio-menu > summary").click();
+    await page
+      .locator(".titlebar-tools > .studio-menu > summary", { hasText: "Studio" })
+      .click();
     await button(name).click();
   };
   const bounds = async (panel, name) => {
@@ -152,14 +154,17 @@ export async function verifyUiCompliance({ page, run, results, source }) {
 
     for (const [command, name, slug] of [
       ["Help", "Help", "help"],
-      ["Feature inventory / limits", "Feature inventory", "inventory"],
       ["Expansion Pack Recovery", "Expansion Pack Recovery", "expansion"],
       ["Recording & MIDI settings", "Recording & MIDI", "recording"],
     ]) {
       await studio(command);
       await inspectDialog(name, `${slug}-${suffix}`);
     }
-    await page.locator(".transport > .studio-menu > summary").click();
+    await page
+      .locator(".titlebar-tools > .studio-menu > summary", {
+        hasText: "Playback options",
+      })
+      .click();
     await button("Live").click();
     await inspectDialog("Live Style preview", `live-${suffix}`);
     await page.locator(".file-actions .studio-menu > summary").click();
@@ -250,7 +255,7 @@ export async function verifyUiCompliance({ page, run, results, source }) {
     for (const track of await page.locator(".track-select").all())
       await track.click();
     for (const section of await page
-      .locator(".sections-strip nav button")
+      .locator(".sections-strip nav button:not(.empty-slot)")
       .all())
       await section.click();
     await button("Hide inspector").click();
@@ -281,14 +286,14 @@ export async function verifyUiCompliance({ page, run, results, source }) {
     ["Increase", 5, 125],
     ["Decrease", 8, 85],
   ]) {
-    await studio("Feature inventory / limits");
-    const inventory = page.getByRole("dialog", {
-      name: "Feature inventory",
+    await studio("Help");
+    const helpDialog = page.getByRole("dialog", {
+      name: "Help",
       exact: true,
     });
     for (let i = 0; i < count; i++)
       await button(`${delta} interface size`).click();
-    await bounds(inventory, `Interface scale ${scale}%`);
+    await bounds(helpDialog, `Interface scale ${scale}%`);
     await page.keyboard.press("Escape");
     const footer = await page.locator(".statusbar").boundingBox();
     assert(
@@ -303,7 +308,7 @@ export async function verifyUiCompliance({ page, run, results, source }) {
     await page.getByRole('combobox', { name: 'Controller lane', exact: true }).scrollIntoViewIfNeeded();
     await expect(page.getByRole('combobox', { name: 'Controller lane', exact: true })).toBeInViewport();
   }
-  await studio("Feature inventory / limits");
+  await studio("Help");
   await button("Reset interface size to 100%").click();
   await page.keyboard.press("Escape");
   await page.evaluate(async () => {

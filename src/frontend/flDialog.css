@@ -45,10 +45,11 @@
 }
 .modal > .modal-title > button,
 .modal > .modal-header > button {
-  width: 22px;
+  width: auto;
+  min-width: 22px;
   height: 20px;
   min-height: 0;
-  padding: 0;
+  padding: 0 7px;
   background: transparent;
   border: 0;
   color: var(--fl-t2);

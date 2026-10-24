@@ -102,6 +102,7 @@ try {
   page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(15000);
   await page.waitForSelector(".brand");
+  await page.waitForSelector("#splash", { state: "detached" });
   ipc = (command, args = {}) =>
     page.evaluate(
       ({ command, args }) => window.__TAURI_INTERNALS__.invoke(command, args),

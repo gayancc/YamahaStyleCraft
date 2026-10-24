@@ -62,6 +62,7 @@ async function launch(profile) {
   browser = await chromium.connectOverCDP(endpoint);
   page = browser.contexts()[0].pages()[0];
   await page.waitForSelector(".brand", { state: "attached" });
+  await page.waitForSelector("#splash", { state: "detached" });
   assert(!page.url().includes(":1420"), "Use embedded release assets");
   await page.evaluate(() => {
     const invoke = window.__TAURI_INTERNALS__.invoke;
