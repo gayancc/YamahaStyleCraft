@@ -23,7 +23,7 @@ export function DrumKits({
   output: { index: number; name: string } | null;
   onClose: () => void;
 }) {
-  const { view } = useStudio();
+  const { view, docLabel } = useStudio();
   const [native, setNative] = useState(false);
   const [original] = useState(view!);
   const [catalog, setCatalog] = useState<CatalogSummary | null>(null);
@@ -57,6 +57,7 @@ export function DrumKits({
     void invoke<DrumChannelStatus[]>("drum_channel_status", {
       section: section.id,
       revision: original.revision,
+      docLabel,
     })
       .then((value) => {
         if (live) setOwners(value);
@@ -68,7 +69,7 @@ export function DrumKits({
       live = false;
       previous?.focus();
     };
-  }, [original.revision, section.id]);
+  }, [original.revision, section.id, docLabel]);
 
   useEffect(() => {
     let live = true;
@@ -114,6 +115,7 @@ export function DrumKits({
         section: section.id,
         channel: previewChannel,
         revision: original.revision,
+        docLabel,
         address: {
           msb: selected.msb,
           lsb: selected.lsb,

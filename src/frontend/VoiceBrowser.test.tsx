@@ -272,6 +272,7 @@ it("Apply sends one atomic voice address with zero-based program only after conf
     section: 7,
     channel: 11,
     revision: 0,
+    docLabel: "main",
     address: { msb: 104, lsb: 21, program: 0 },
   });
   expect(useStudio.getState().view?.revision).toBe(1);
@@ -390,6 +391,7 @@ it("the inspector resolves named voices again after undo or source changes", asy
       section: 7,
       channel: 11,
       revision: 2,
+      docLabel: "main",
     }),
   );
 });

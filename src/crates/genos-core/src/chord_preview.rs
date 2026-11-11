@@ -175,6 +175,29 @@ pub struct RecognizedChord {
     pub quality: String,
 }
 
+/// Genos Single Finger uses the highest key as the root and up to four lower
+/// keys as modifiers. Black and white keys independently select minor and seventh.
+pub fn recognize_single_finger(notes: &[u8]) -> Option<RecognizedChord> {
+    let keys: BTreeSet<_> = notes.iter().copied().filter(|&note| note <= 127).collect();
+    let mut keys = keys.into_iter().rev();
+    let root = keys.next()? % 12;
+    let (mut black, mut white) = (false, false);
+    for note in keys.take(4) {
+        if matches!(note % 12, 1 | 3 | 6 | 8 | 10) {
+            black = true;
+        } else {
+            white = true;
+        }
+    }
+    let quality = match (black, white) {
+        (false, false) => "Major",
+        (true, false) => "Minor",
+        (false, true) => "7",
+        (true, true) => "m7",
+    };
+    Some(RecognizedChord { root, quality: quality.into() })
+}
+
 /// `recognize(notes)` — match pitch-class set against `TONES` under each root.
 pub fn recognize(notes: &[u8], previous: Option<&RecognizedChord>) -> Option<RecognizedChord> {
     if notes.is_empty() {
@@ -196,7 +219,7 @@ pub fn recognize(notes: &[u8], previous: Option<&RecognizedChord>) -> Option<Rec
         }
     }
     if candidates.is_empty() {
-        return None;
+        return recognize_loose(&pcs, bass);
     }
     candidates.sort_by_key(|c| {
         let bass_penalty = if c.root == bass { 0u8 } else { 1 };
@@ -208,6 +231,144 @@ pub fn recognize(notes: &[u8], previous: Option<&RecognizedChord>) -> Option<Rec
         (bass_penalty, prev_penalty, c.root, c.quality.clone())
     });
     candidates.into_iter().next()
+}
+
+/// Fingered-chord detection like the arranger's: a triad or seventh plus up to two common
+/// tensions (add9, 6th, 11th) still names its basic chord; a bare root+fifth is a major chord.
+fn recognize_loose(pcs: &BTreeSet<u8>, bass: u8) -> Option<RecognizedChord> {
+    if pcs.len() == 2 {
+        let low = *pcs.iter().find(|p| pcs.contains(&((**p + 7) % 12)))?;
+        return Some(RecognizedChord {
+            root: low,
+            quality: "Major".into(),
+        });
+    }
+    let mut best: Option<((u8, usize, usize, u8), RecognizedChord)> = None;
+    for root in 0u8..12 {
+        for quality in QUALITIES {
+            let Some(tones) = tone_degrees(quality) else {
+                continue;
+            };
+            let set: BTreeSet<u8> = tones.iter().map(|t| (t + root) % 12).collect();
+            if !set.is_subset(pcs) {
+                continue;
+            }
+            let extras: Vec<u8> = pcs.difference(&set).map(|p| (p + 12 - root) % 12).collect();
+            if extras.len() > 2 || extras.iter().any(|e| !matches!(e, 2 | 5 | 9)) {
+                continue;
+            }
+            let key = (
+                u8::from(root != bass),
+                extras.len(),
+                usize::MAX - tones.len(),
+                root,
+            );
+            if best.as_ref().is_none_or(|(k, _)| key < *k) {
+                best = Some((
+                    key,
+                    RecognizedChord {
+                        root,
+                        quality: quality.into(),
+                    },
+                ));
+            }
+        }
+    }
+    best.map(|(_, chord)| chord)
+}
+
+fn xf_root(byte: u8) -> Option<u8> {
+    let base = *[
+        None,
+        Some(0u8),
+        Some(2),
+        Some(4),
+        Some(5),
+        Some(7),
+        Some(9),
+        Some(11),
+    ]
+    .get((byte & 0x0f) as usize)?;
+    let accidental = byte >> 4;
+    if accidental > 6 {
+        return None;
+    }
+    let shift = i16::from(accidental) - 3;
+    Some((i16::from(base?) + shift).rem_euclid(12) as u8)
+}
+
+fn xf_quality(code: u8) -> Option<&'static str> {
+    Some(match code {
+        0x00 | 0x01 | 0x04 | 0x06 | 0x22 | 0x23 => "Major",
+        0x02 | 0x03 | 0x05 => "Maj7",
+        0x07 => "aug",
+        0x08 | 0x09 | 0x0c | 0x0f | 0x10 => "Minor",
+        0x0a | 0x0d | 0x0e => "m7",
+        0x0b => "m7b5",
+        0x11 | 0x12 => "dim",
+        0x13 | 0x15..=0x1f => "7",
+        0x14 | 0x20 => "sus4",
+        0x21 => "sus2",
+        _ => return None,
+    })
+}
+
+/// Yamaha XF chord message `F0 43 7E ss rr tt bb bt F7`, with subtype 00 or
+/// Genos mixer transmit subtype 02 and an optional slash bass.
+pub fn xf_chord(data: &[u8]) -> Option<(RecognizedChord, Option<u8>)> {
+    let chord = xf_live_chord(data)?;
+    Some((
+        RecognizedChord {
+            root: chord.root,
+            quality: chord.quality,
+        },
+        chord.bass,
+    ))
+}
+
+pub(crate) fn xf_live_chord(data: &[u8]) -> Option<crate::midi::LiveChord> {
+    if data.len() != 9
+        || data[..3] != [0xf0, 0x43, 0x7e]
+        || !matches!(data[3], 0x00 | 0x02)
+        || data[8] != 0xf7
+        || data[4..8].iter().any(|&byte| byte > 0x7f)
+    {
+        return None;
+    }
+    let root = xf_root(data[4])?;
+    let bass_root = if data[6] == 0x7f { None } else { Some(xf_root(data[6])?) };
+    if crate::firmware_ntt::configured().is_ok_and(|tables| tables.is_some()) {
+        use crate::firmware_ntt::CHORD_TYPE_COUNT;
+
+        let ordinary = if data[5] < CHORD_TYPE_COUNT { data[5] } else { 0 };
+        let alternate = match data[7] {
+            127 if bass_root.is_some() => 30,
+            value if value < CHORD_TYPE_COUNT => value,
+            _ => ordinary,
+        };
+        let quality = |id| match id {
+            0 | 2 | 7 | 8 | 10 | 11 | 17 | 19 | 32 | 33 => xf_quality(id).unwrap().to_owned(),
+            _ => format!("Genos:{id}"),
+        };
+        return Some(crate::midi::LiveChord {
+            root,
+            quality: quality(ordinary),
+            bass: bass_root.filter(|bass| *bass != root),
+            bass_quality: (alternate != ordinary).then(|| quality(alternate)),
+        });
+    }
+    let quality = xf_quality(data[5])?.to_string();
+    // Keep only exact Bass quality IDs represented by the routed preview.
+    let bass_quality = bass_root
+        .filter(|_| matches!(data[7], 0 | 2 | 7 | 8 | 10 | 11 | 17 | 19 | 32 | 33))
+        .and_then(|_| xf_quality(data[7]))
+        .map(str::to_owned);
+    Some(crate::midi::LiveChord {
+        root,
+        quality,
+        bass: bass_root.filter(|b| *b != root),
+        bass_quality,
+    })
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -273,6 +434,13 @@ pub struct PitchRule<'a> {
     pub bass: i8,
     /// When set, apply expansion layout: 0..=95 guitar, 96..=127 fixed.
     pub expansion_layout: bool,
+}
+
+impl PitchRule<'_> {
+    pub(crate) fn exceeds_firmware_high_key(&self) -> bool {
+        // The routed converter loads the original High Key byte as signed.
+        self.high_key.is_some_and(|key| i16::from(self.target_root) > i16::from(key as i8))
+    }
 }
 
 impl Default for PitchRule<'static> {
@@ -661,6 +829,185 @@ mod tests {
     #[test]
     fn equal_quality_is_identity() {
         assert_eq!(transpose_degree(7, "Major", "Major", true).unwrap(), 7);
+    }
+
+    #[test]
+    fn recognize_tolerates_tensions_and_power_chords() {
+        // Cadd9, C6/9-ish voicings and Cmaj9 still name their basic chord.
+        let hit = recognize(&[48, 55, 62, 64], None).unwrap();
+        assert_eq!((hit.root, hit.quality.as_str()), (0, "Major"));
+        let hit = recognize(&[48, 52, 55, 59, 62], None).unwrap();
+        assert_eq!((hit.root, hit.quality.as_str()), (0, "Maj7"));
+        let hit = recognize(&[43, 50], None).unwrap();
+        assert_eq!((hit.root, hit.quality.as_str()), (7, "Major"));
+        assert!(recognize(&[60, 61, 62, 63, 64], None).is_none());
+    }
+    #[test]
+    fn xf_chord_message_decodes_root_quality_and_slash_bass() {
+        // Eb minor 7 over Gb: root 0x32 (flat E), type 0x0A, bass 0x33... flat G.
+        let (chord, bass) =
+            xf_chord(&[0xf0, 0x43, 0x7e, 0x00, 0x23, 0x0a, 0x25, 0x00, 0xf7]).unwrap();
+        assert_eq!(
+            (chord.root, chord.quality.as_str(), bass),
+            (3, "m7", Some(6))
+        );
+        let (chord, bass) =
+            xf_chord(&[0xf0, 0x43, 0x7e, 0x00, 0x31, 0x00, 0x7f, 0x7f, 0xf7]).unwrap();
+        assert_eq!(
+            (chord.root, chord.quality.as_str(), bass),
+            (0, "Major", None)
+        );
+        assert!(xf_chord(&[0xf0, 0x43, 0x7e, 0x01, 0x31, 0x00, 0x7f, 0x7f, 0xf7]).is_none());
+    }
+
+    #[test]
+    fn xf_chord_requires_a_complete_four_field_sysex_packet() {
+        let packet = [0xf0, 0x43, 0x7e, 0x02, 0x31, 0, 0x32, 8, 0xf7];
+        assert!(xf_chord(&packet).is_some());
+        assert!(xf_chord(&packet[..8]).is_none());
+
+        let mut extended = packet.to_vec();
+        extended.insert(8, 0);
+        assert!(xf_chord(&extended).is_none());
+
+        for (index, byte) in [(3, 0x03), (5, 0x80), (7, 0xf7), (8, 0)] {
+            let mut invalid = packet;
+            invalid[index] = byte;
+            assert!(xf_chord(&invalid).is_none(), "field {index}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the local Genos XF wire replay"]
+    fn xf_roots_match_firmware_replay() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            ordinary: u8,
+            bass: u8,
+            decoded: Option<(u8, Option<u8>)>,
+        }
+        let path = std::env::var_os("GENOS_XF_WIRE_REPLAY").unwrap();
+        let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(cases.len(), 384);
+        for case in cases {
+            let actual = xf_live_chord(&[0xf0, 0x43, 0x7e, 0, case.ordinary, 0, case.bass, 8, 0xf7])
+                .map(|chord| (chord.root, chord.bass));
+            let expected = case.decoded.map(|(root, bass)| (root, bass.filter(|bass| *bass != root)));
+            assert_eq!(actual, expected, "root {:#04x}, bass {:#04x}", case.ordinary, case.bass);
+        }
+    }
+
+    fn assert_xf_pairs_match_firmware(variable: &str, count: usize) {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            input: [u8; 4],
+            normalized_pair: [u8; 4],
+        }
+
+        let path = std::env::var_os(variable).unwrap();
+        let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(cases.len(), count);
+        for case in cases {
+            let [root, ordinary, bass, alternate] = case.input;
+            for subtype in [0, 2] {
+                let chord = xf_live_chord(&[
+                    0xf0, 0x43, 0x7e, subtype, root, ordinary, bass, alternate, 0xf7,
+                ])
+                .unwrap();
+                let target_type = crate::live_preview::target_type;
+                let actual = [
+                    chord.root,
+                    target_type(&chord.quality).unwrap(),
+                    chord.bass.unwrap_or(chord.root),
+                    target_type(chord.bass_quality.as_deref().unwrap_or(&chord.quality)).unwrap(),
+                ];
+                assert_eq!(actual, case.normalized_pair, "subtype {subtype}, {:?}", case.input);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the local Genos XF MIDI type replay and firmware tables"]
+    fn xf_types_match_firmware_replay() {
+        assert_xf_pairs_match_firmware("GENOS_XF_TYPE_REPLAY", 4_500);
+        let packet = [0xf0, 0x43, 0x7e, 2, 0x31, 0x22, 0x31, 0x22, 0xf7];
+        let chord = xf_live_chord(&packet).unwrap();
+        assert_eq!(chord.root, 0);
+        assert_eq!(crate::live_preview::target_type(&chord.quality), Some(34));
+        assert!(chord.bass.is_none() && chord.bass_quality.is_none());
+    }
+
+    #[test]
+    #[ignore = "requires the local Genos XF transpose replay and firmware tables"]
+    fn xf_spelling_pairs_match_firmware_replay() {
+        assert_xf_pairs_match_firmware("GENOS_XF_TRANSPOSE_REPLAY", 2_450);
+    }
+
+    #[test]
+    fn xf_chord_keeps_an_explicit_quality_even_at_the_same_root() {
+        let mut message = [0xf0, 0x43, 0x7e, 0, 0x31, 0, 0x31, 8, 0xf7];
+        let chord = xf_live_chord(&message).unwrap();
+        assert_eq!(chord.bass, None);
+        assert_eq!(chord.bass_quality.as_deref(), Some("Minor"));
+        message[7] = 127;
+        let expected = crate::firmware_ntt::configured()
+            .is_ok_and(|tables| tables.is_some())
+            .then_some("Genos:30");
+        assert_eq!(xf_live_chord(&message).unwrap().bass_quality.as_deref(), expected);
+    }
+    #[test]
+    #[ignore = "requires the local Single Finger firmware replay"]
+    fn single_finger_matches_firmware_replay() {
+        let path = std::env::var_os("GENOS_SINGLE_FINGER_REPLAY").unwrap();
+        let cases: Vec<(Vec<u8>, u8, u8)> =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(cases.len(), 464 + 128 + 8128 + 48);
+        for (notes, root, quality) in cases {
+            let expected = match quality {
+                0 => "Major",
+                8 => "Minor",
+                10 => "m7",
+                19 => "7",
+                _ => panic!("Unexpected firmware type {quality}"),
+            };
+            let actual = recognize_single_finger(&notes).unwrap();
+            assert_eq!((actual.root, actual.quality.as_str()), (root, expected), "{notes:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the local Multi Finger firmware replay"]
+    fn held_note_recognizer_compares_with_multi_finger_replay() {
+        let path = std::env::var_os("GENOS_MULTI_FINGER_REPLAY").unwrap();
+        let cases: Vec<(String, Vec<u8>, u8, u8)> =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let mut counts = BTreeMap::<String, (usize, usize)>::new();
+        for (group, notes, root, quality) in cases {
+            let expected_quality = match quality {
+                0 => "Major",
+                1 => "Genos:1",
+                8 => "Minor",
+                10 => "m7",
+                19 => "7",
+                _ => panic!("Unexpected firmware type {quality}"),
+            };
+            let actual = recognize(&notes, None);
+            let counts = counts.entry(group).or_default();
+            counts.0 += 1;
+            counts.1 += usize::from(
+                actual.is_some_and(|chord| chord.root == root && chord.quality == expected_quality),
+            );
+        }
+        assert_eq!(
+            counts,
+            BTreeMap::from([
+                ("inversion".into(), (120, 108)),
+                ("pair".into(), (24, 0)),
+                ("root-position".into(), (48, 48)),
+                ("single".into(), (12, 0)),
+            ]),
+            "Held-note recognition changed relative to the Multi Finger firmware baseline"
+        );
     }
 
     #[test]

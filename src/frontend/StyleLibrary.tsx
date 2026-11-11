@@ -301,7 +301,7 @@ export function StyleLibrary({
 
   const stopPreview = async () => {
     try {
-      await invoke("stop");
+      await invoke("stop", { docLabel });
     } catch {
       /* ignore */
     }

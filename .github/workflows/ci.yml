@@ -1,0 +1,47 @@
+# Pull-request / push checks for the Windows desktop workspace.
+
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src -> target
+
+      - name: Install frontend dependencies
+        working-directory: src
+        run: npm ci
+
+      - name: Frontend verify
+        working-directory: src
+        run: npm run verify
+
+      - name: Rust tests
+        working-directory: src
+        run: cargo test --workspace --all-targets

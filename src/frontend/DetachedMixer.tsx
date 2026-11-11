@@ -46,8 +46,6 @@ export function DetachedMixer() {
   }, [view]);
 
   const applySync = (p: ViewSyncPayload) => {
-    const mine = useStudio.getState().docLabel;
-    if (p.docLabel && p.docLabel !== mine) return;
     useStudio.setState({
       view: p.view,
       sectionId: p.sectionId,
@@ -70,10 +68,11 @@ export function DetachedMixer() {
 
   useEffect(() => {
     let live = true;
+    let receivedView = false;
     const docLabel = useStudio.getState().docLabel;
     void invoke<View>("session_view", { docLabel })
       .then((v) => {
-        if (!live) return;
+        if (!live || receivedView) return;
         useStudio.setState({
           view: v,
           sectionId:
@@ -89,27 +88,29 @@ export function DetachedMixer() {
         setError(null);
       })
       .catch((e) => {
-        if (live) setError(String(e));
+        if (live && !receivedView) setError(String(e));
       });
     let unlistenView: (() => void) | undefined;
     let unlistenMixer: (() => void) | undefined;
     void listenViewSync((p) => {
-      if (live) {
-        applySync(p);
-        setError(null);
-      }
+      if (!live || (p.docLabel ?? "main") !== docLabel) return;
+      receivedView = true;
+      applySync(p);
+      setError(null);
     }).then((u) => {
-      unlistenView = u;
+      if (live) unlistenView = u;
+      else u();
     });
     void listenMixerSync((p: MixerSyncPayload) => {
       if (!live) return;
-      if (p.docLabel && p.docLabel !== docLabel) return;
+      if ((p.docLabel ?? "main") !== docLabel) return;
       setMuted(p.muted);
       setSolo(p.solo);
       setArmedChannel(p.armedChannel);
       setMixerApplyAll(p.mixerApplyAll);
     }).then((u) => {
-      unlistenMixer = u;
+      if (live) unlistenMixer = u;
+      else u();
     });
     void getCurrentWebviewWindow().setTitle(
       docLabel === "main"
@@ -130,7 +131,9 @@ export function DetachedMixer() {
     }
     let live = true;
     const poll = () => {
-      void invoke<{ playing: boolean; elapsedMs: number }>("transport_status")
+      void invoke<{ playing: boolean; elapsedMs: number }>("transport_status", {
+        docLabel: useStudio.getState().docLabel,
+      })
         .then((t) => {
           if (!live) return;
           setPlayhead(

@@ -62,10 +62,15 @@ assert.equal(
   "Preserve any running user app before installer testing",
 );
 
-const setup = path.join(
-  root,
-  "target/release/bundle/nsis/GenosStyleStudio_0.1.0_x64-setup.exe",
-);
+const nsisDir = path.join(root, "target/release/bundle/nsis");
+const setup =
+  fs
+    .readdirSync(nsisDir)
+    .filter((n) => /-setup\.exe$/i.test(n))
+    .map((n) => path.join(nsisDir, n))
+    .sort()
+    .at(-1) ?? path.join(nsisDir, "missing-setup.exe");
+assert(fs.existsSync(setup), `NSIS installer not found under ${nsisDir}`);
 let app;
 let finalReport;
 const preserved = new Map();

@@ -159,5 +159,35 @@ export async function verifyClipboardNative({
   await destination.screenshot({
     path: path.join(run, "clipboard-1920-project.png"),
   });
-  // The owning application is closed by the harness; no user window is touched.
+  const section = (await state()).view.sections[0].id;
+  const csvPath = path.join(run, "project-section.csv");
+  const jsonPath = path.join(run, "project-section.json");
+  await destination.evaluate(async ({ section, label, csvPath, jsonPath }) => {
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    await invoke("export_section_csv", { section, docLabel: label, path: csvPath });
+    await invoke("export_section_json", { section, docLabel: label, path: jsonPath });
+  }, { section, label, csvPath, jsonPath });
+  assert.equal(fs.readFileSync(csvPath, "utf8").trimEnd().split("\n").length, 3);
+  const snapshot = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+  assert.equal(snapshot.ppq, 1920);
+  assert.equal(snapshot.notes.length, 2);
+  results.push("secondary project CSV and JSON exports use its own session");
+  await destination.evaluate(async (docLabel) => {
+    const { openDetachedPianoRoll, openDetachedMixer } = await import("/frontend/detach.ts");
+    await openDetachedPianoRoll(docLabel);
+    await openDetachedMixer(docLabel);
+  }, label);
+  const childPages = () => browser.contexts().flatMap((context) => context.pages())
+    .filter((child) => {
+      const params = new URL(child.url()).searchParams;
+      return params.get("doc") === label && params.has("detach");
+    });
+  await expect.poll(() => childPages().length).toBe(2);
+  const closed = [destination, ...childPages()].map((target) => target.waitForEvent("close"));
+  await destination.evaluate((label) => {
+    setTimeout(() => void window.__TAURI_INTERNALS__.invoke("plugin:window|destroy", { label }), 50);
+  }, label);
+  await Promise.all(closed);
+  assert(!page.isClosed());
+  results.push("closing a project destroys its detached Piano Roll and Mixer only");
 }

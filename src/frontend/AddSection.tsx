@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Section, View } from "./contracts";
 import { restoreEditorFocus, trapModalFocus } from "./modal";
+import { meterAt } from "./pianoEditing";
 import {
+  sectionInsertionTick,
   defaultSlotBars,
   layoutSections,
-  slotKeyFor,
   type SectionSlot,
   type SlotGroupName,
 } from "./sectionSlots";
@@ -13,8 +14,7 @@ import { useStudio } from "./store";
 type Fit = "keep" | "repeat" | "fit";
 
 function barsOf(view: View, section: Section): number {
-  const bar = ((view.ppq * 4) / view.denominator) * view.numerator;
-  return Math.max(1, Math.round((section.end - section.start) / bar));
+  return (section.end - section.start) / meterAt(view, section.start).bar;
 }
 
 /** Adds a Genos panel section the loaded Style does not have: empty, or a copy of an existing
@@ -40,9 +40,10 @@ export function AddSection({
   const layout = useMemo(() => layoutSections(view.sections), [view.sections]);
   const present = useMemo(
     () =>
-      layout.groups
-        .flatMap((g) => g.slots)
-        .flatMap((s) => (s.section ? [s.section] : [])),
+      [
+        ...layout.groups.flatMap((g) => g.slots).flatMap((s) => (s.section ? [s.section] : [])),
+        ...layout.extra,
+      ],
     [layout],
   );
   const sameFamily = useMemo(
@@ -69,25 +70,36 @@ export function AddSection({
   }, []);
 
   const source = present.find((s) => s.id === copyFrom) ?? null;
-  const sourceBars = source ? barsOf(view, source) : 0;
+  const insertAt = sectionInsertionTick(view.sections, slot.yamahaLabel);
+  const destinationMeter = insertAt
+    ? meterAt(view, insertAt - 1)
+    : { bar: view.ppq * 4, denominator: 4 };
+  const destinationBar = destinationMeter.bar;
+  const sourceTicks = source ? source.end - source.start : 0;
+  const destinationTicks = bars * destinationBar;
   const autoFit: Fit =
-    !copy || bars === sourceBars
+    !copy || destinationTicks === sourceTicks
       ? "keep"
-      : bars > sourceBars && bars % sourceBars === 0
+      : destinationTicks > sourceTicks && destinationTicks % sourceTicks === 0
         ? "repeat"
         : "fit";
   const validBars = Number.isInteger(bars) && bars >= 1 && bars <= maxBars;
   const problem = !present.length
     ? "This Style has no section to base the new one on."
-    : !validBars
-      ? `Length must be 1–${maxBars} bars.`
-      : null;
+    : destinationMeter.denominator > 32 || !Number.isInteger(destinationBar) || destinationBar <= 0
+      ? "The insertion point needs a supported meter with whole ticks per bar."
+      : !validBars
+        ? `Length must be 1–${maxBars} bars.`
+        : null;
 
   const chooseCopy = (id: number) => {
     setCopyFrom(id);
     setCasmFrom(id);
     const chosen = present.find((s) => s.id === id);
-    if (chosen) setBars(Math.min(maxBars, barsOf(view, chosen)));
+    if (chosen) {
+      const length = (chosen.end - chosen.start) / destinationBar;
+      setBars(Math.min(maxBars, Math.max(1, Math.ceil(length))));
+    }
     setFit(null);
   };
   const toggleCopy = (on: boolean) => {
@@ -118,7 +130,7 @@ export function AddSection({
       return;
     }
     const added = state.view?.sections.find(
-      (s) => slotKeyFor(s.label) === slot.key,
+      (s) => s.label === slot.yamahaLabel,
     );
     if (added) state.section(added.id);
     close.current();
@@ -215,7 +227,7 @@ export function AddSection({
                   >
                     {present.map((s) => (
                       <option key={s.id} value={s.id}>
-                        {s.label} · {barsOf(view, s)} bars
+                        {s.label} · {Number(barsOf(view, s).toFixed(2))} bars
                       </option>
                     ))}
                   </select>

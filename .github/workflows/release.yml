@@ -1,0 +1,114 @@
+# Build the Windows NSIS installer and attach it to a GitHub Release.
+#
+# Triggers:
+#   - Push a version tag: git tag v0.1.0 && git push origin v0.1.0
+#   - Actions → Release → Run workflow (manual dry-run or draft cut)
+#
+# Bump versions first with: cd src && npm run bump -- 0.1.1
+# Releases are created as drafts/prereleases until you publish them in GitHub.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: Create a draft GitHub release
+        type: boolean
+        default: true
+      prerelease:
+        description: Mark the GitHub release as prerelease
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-nsis:
+    name: Windows NSIS installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src -> target
+
+      - name: Install frontend dependencies
+        working-directory: src
+        run: npm ci
+
+      - name: Read app version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Get-Content src/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if (-not $v) { throw "Could not read version from tauri.conf.json" }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=v$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Check tag matches app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $expected = "v${{ steps.version.outputs.version }}"
+          $actual = "${{ github.ref_name }}"
+          if ($actual -ne $expected) {
+            throw "Tag '$actual' must match app version tag '$expected'. Run: cd src; npm run bump -- <version>"
+          }
+
+      - name: Build NSIS installer
+        working-directory: src
+        run: npm run package
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GenosStyleStudio-${{ steps.version.outputs.version }}-windows-x64-setup
+          path: src/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.version.outputs.tag }}
+          name: Genos Style Studio ${{ steps.version.outputs.version }}
+          draft: ${{ github.event_name != 'workflow_dispatch' || inputs.draft }}
+          prerelease: ${{ github.event_name != 'workflow_dispatch' || inputs.prerelease }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            Windows x64 NSIS installer for Genos Style Studio ${{ steps.version.outputs.version }}.
+
+            ## Install
+            1. Download `GenosStyleStudio_${{ steps.version.outputs.version }}_x64-setup.exe`.
+            2. Run the installer (WebView2 Runtime is required on Windows 10/11).
+            3. Launch **GenosStyleStudio** from the Start menu or install folder.
+
+            ## Notes
+            - Unsigned installer (SmartScreen may warn until code signing is configured).
+            - Expansion recovery and hardware qualification remain partial; see the repository README.
+          files: |
+            src/target/release/bundle/nsis/*-setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

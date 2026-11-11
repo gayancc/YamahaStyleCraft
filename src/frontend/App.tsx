@@ -44,6 +44,7 @@ import {
   ChevronLeft,
   AudioLines,
   Repeat2,
+  Radio,
   CircleHelp,
   Circle,
   CircleDot,
@@ -62,7 +63,7 @@ import {
   Eraser,
   Plus,
 } from "lucide-react";
-import { currentUiState, useStudio } from "./store";
+import { applyUiState, currentUiState, useStudio } from "./store";
 import type { StudioTool } from "./store";
 import type {
   CaptureSnapshot,
@@ -74,14 +75,17 @@ import type {
   Prefs,
   RecentEntryView,
   Route,
+  RouteChange,
+  RuleField,
   Section,
   TransportStatus,
   View,
 } from "./contracts";
 import { PianoRoll, pitchName } from "./PianoRoll";
 import { DEFAULT_NOTE_COLORS, sanitizeNoteColors } from "./noteColors";
-import { tickFromElapsed } from "./pianoEditing";
-import { SourceTracks } from "./SourceTracks";
+import { meterAt, tempoAt, tickFromElapsed } from "./pianoEditing";
+import { nttOptions, retriggerOptions, sourceRegionRange, SourceTracks } from "./SourceTracks";
+import { importedOutputLimitDescription } from "./casmZones";
 import { MidiExchange } from "./MidiExchange";
 import { CopyMaterial } from "./CopyMaterial";
 import { SectionLength } from "./SectionLength";
@@ -116,6 +120,8 @@ import {
 import { NoteFxPanel } from "./NoteFxPanel";
 import { EMPTY_HINT, hintForElement, parseHint } from "./hints";
 import { layoutSections, sectionGridColumns } from "./sectionSlots";
+import { isMainLabel, liveSwitchSteps } from "./liveSwitch";
+import { useChordFollow } from "./useChordFollow";
 import type { SectionSlot, SlotGroupName } from "./sectionSlots";
 import { AddSection } from "./AddSection";
 import type { ControlHint } from "./hints";
@@ -268,6 +274,10 @@ export function App() {
       error: null,
     }),
     [loop, setLoop] = useState(false),
+    [livePlay, setLivePlay] = useState(false),
+    [singleFinger, setSingleFinger] = useState(false),
+    lastMain = useRef("Main A"),
+    livePlayRef = useRef(false),
     [returnOnStop, setReturnOnStop] = useState(true),
     [mixerApplyAll, setMixerApplyAll] = useState(false),
     [metronome, setMetronome] = useState(false),
@@ -349,7 +359,7 @@ export function App() {
     setParkedTick(
       ctx.returnOnStop
         ? ctx.section.start
-        : tickFromElapsed(ctx.view, ctx.section, elapsedMs),
+        : Math.round(tickFromElapsed(ctx.view, ctx.section, elapsedMs)),
     );
   };
   useEffect(() => {
@@ -361,8 +371,11 @@ export function App() {
     sources: [] as number[],
   });
   useEffect(() => {
+    let live = true;
     let unlisten: (() => void) | undefined;
     void listenMixerSync((p) => {
+      const { docLabel } = useStudio.getState();
+      if (!live || (p.docLabel ?? "main") !== docLabel) return;
       setMuted(p.muted);
       setSolo(p.solo);
       setArmedChannel(p.armedChannel);
@@ -377,11 +390,16 @@ export function App() {
         channels,
         index: ctx.output.index,
         name: ctx.output.name,
+        docLabel,
       }).catch((e) => useStudio.setState({ error: String(e) }));
     }).then((u) => {
-      unlisten = u;
+      if (live) unlisten = u;
+      else u();
     });
-    return () => unlisten?.();
+    return () => {
+      live = false;
+      unlisten?.();
+    };
   }, []);
   const sectionNotes =
     view?.notes.filter(
@@ -517,7 +535,7 @@ export function App() {
         filters: [{ name: "CSV notes", extensions: ["csv"] }],
       });
       if (!path) return;
-      await invoke("export_section_csv", { path, section: section.id });
+      await invoke("export_section_csv", { path, section: section.id, docLabel });
       useStudio.setState({ message: "Section notes exported as CSV" });
     } catch (e) {
       useStudio.setState({ error: String(e) });
@@ -537,7 +555,7 @@ export function App() {
         filters: [{ name: "JSON snapshot", extensions: ["json"] }],
       });
       if (!path) return;
-      await invoke("export_section_json", { path, section: section.id });
+      await invoke("export_section_json", { path, section: section.id, docLabel });
       useStudio.setState({
         message: "Section snapshot exported as JSON (not SFM profile)",
       });
@@ -553,7 +571,7 @@ export function App() {
     }
     try {
       const elapsed = transport.elapsedMs;
-      await invoke("stop");
+      await invoke("stop", { docLabel });
       setTransport((t) => ({ ...t, playing: false }));
       applyPark(elapsed);
       await invoke("panic_release", {
@@ -593,7 +611,7 @@ export function App() {
       useStudio.setState({ busy: true, error: null });
       const includeNotes = recData !== "controllers";
       const includeControllers = recData !== "notes";
-      let next = await invoke<View>("apply_capture_to_section", {
+      const next = await invoke<View>("apply_capture_to_section", {
         section: section.id,
         revision: view.revision,
         quantizeStep: recQuantize > 0 ? recQuantize : null,
@@ -602,31 +620,16 @@ export function App() {
         includeNotes,
         includeControllers,
         inputChannel: recInputChannel > 0 ? recInputChannel : null,
+        voice: recordVoice && includeControllers
+          ? {
+              channel: armedChannel ?? channel,
+              bankMsb: recordBankMsb,
+              bankLsb: recordBankLsb,
+              program: recordProgram - 1,
+            }
+          : null,
         docLabel,
       });
-      const destCh = armedChannel ?? channel;
-      // SFM Voice change is part of Notes+controllers / Controllers modes.
-      if (recordVoice && includeControllers && destCh >= 1 && destCh <= 16) {
-        const track = next.notes.find((n) => n.channel === destCh)?.track ?? 0;
-        const status = 0xb0 | (destCh - 1);
-        for (const data of [
-          [status, 0, recordBankMsb & 127],
-          [status, 32, recordBankLsb & 127],
-          [0xc0 | (destCh - 1), (recordProgram - 1) & 127],
-        ]) {
-          next = await invoke<View>("edit_document", {
-            revision: next.revision,
-            command: {
-              type: "addEvent",
-              section: section.id,
-              track,
-              tick: section.start,
-              data,
-            },
-            docLabel: useStudio.getState().docLabel,
-          });
-        }
-      }
       const bits = [
         recQuantize ? `quantized ${recQuantize} ticks` : null,
         recordingOffsetMs ? `offset ${recordingOffsetMs}ms` : null,
@@ -653,8 +656,10 @@ export function App() {
       useStudio.setState({ busy: false });
     }
   };
+  const captureSettings = useRef({ armedChannel, monitorName, midiThru, output });
+  captureSettings.current = { armedChannel, monitorName, midiThru, output };
   const startCapture = async () => {
-    if (!monitorName) return;
+    if (!monitorName || useStudio.getState().busy) return;
     if (armedChannel == null) {
       useStudio.setState({
         error: "Arm a part with R before recording (Source Channels or Mixer).",
@@ -663,12 +668,28 @@ export function App() {
     }
     try {
       useStudio.setState({ busy: true, error: null });
-      if (transport.playing) await stop();
+      if (transport.playing && !(await stop())) return;
       if (countInBars > 0 && view) {
         useStudio.setState({
           message: `Count-in ${countInBars} bar(s)…`,
         });
-        await playCountIn(countInBars, view.tempo, view.numerator);
+        const tick = section?.start ?? 0;
+        const { numerator, denominator } = meterAt(view, tick);
+        await playCountIn(countInBars, tempoAt(view, tick), numerator, denominator);
+      }
+      const current = useStudio.getState();
+      const settings = captureSettings.current;
+      if (
+        current.docLabel !== docLabel ||
+        current.view !== view ||
+        current.sectionId !== sectionId ||
+        settings.armedChannel !== armedChannel ||
+        settings.monitorName !== monitorName ||
+        settings.midiThru !== midiThru ||
+        settings.output !== output
+      ) {
+        useStudio.setState({ message: "Recording canceled because its destination or MIDI settings changed." });
+        return;
       }
       await invoke("start_capture", {
         name: monitorName,
@@ -682,6 +703,7 @@ export function App() {
       // SFM parts recording / overdub: existing notes play under Mute/Solo
       // while the armed part receives the take. R does not mute that part.
       const overdub = audibleChannels();
+      let overdubPlaying = false;
       if (output && section && overdub.length) {
         try {
           await invoke("play", {
@@ -695,6 +717,7 @@ export function App() {
             docLabel,
           });
           setTransport({ playing: true, elapsedMs: 0, error: null });
+          overdubPlaying = true;
         } catch (playErr) {
           useStudio.setState({
             error: `Capture started, but overdub playback failed: ${String(playErr)}`,
@@ -706,7 +729,7 @@ export function App() {
         message: [
           "Capturing",
           armLabel,
-          overdub.length ? "overdub playing" : "no audible parts (M/S)",
+          overdubPlaying ? "overdub playing" : "capture only",
           midiThru ? "MIDI thru on" : null,
         ]
           .filter(Boolean)
@@ -908,12 +931,13 @@ export function App() {
   const stop = async () => {
     try {
       const elapsed = transport.elapsedMs;
-      if (isTauri()) await invoke("stop");
+      if (isTauri()) await invoke("stop", { docLabel });
       setTransport((t) => ({ ...t, playing: false }));
       applyPark(elapsed);
+      return true;
     } catch (e) {
-      if (!isTauri()) return;
-      useStudio.setState({ error: String(e) });
+      if (isTauri()) useStudio.setState({ error: String(e) });
+      return false;
     }
   };
   const syncMixer = (next: {
@@ -942,6 +966,7 @@ export function App() {
       channels,
       index: output.index,
       name: output.name,
+      docLabel,
     }).catch((e) => useStudio.setState({ error: String(e) }));
   };
   const toggleMute = (ch: number) => {
@@ -968,8 +993,8 @@ export function App() {
     });
   };
   const audibleChannels = () => audibleFrom(muted, solo);
-  const play = async () => {
-    if (transport.playing) {
+  const play = async (target = section, restart = false) => {
+    if (transport.playing && !restart) {
       await stop();
       return;
     }
@@ -978,7 +1003,8 @@ export function App() {
       await scan();
       return;
     }
-    if (!section) return;
+    if (!target) return;
+    const section = target;
     const channels = audibleChannels();
     if (!channels.length) {
       useStudio.setState({
@@ -989,17 +1015,19 @@ export function App() {
     }
     try {
       const fromTick =
+        !restart &&
         parkedTick != null &&
         parkedTick > section.start &&
         parkedTick < section.end
-          ? parkedTick
+          ? Math.round(parkedTick)
           : null;
       await invoke("play", {
         section: section.id,
         channels,
         index: output.index,
         name: output.name,
-        looping: loop,
+        looping: loop || (livePlay && isMainLabel(section.label)),
+        livePlay,
         effectsToken:
           initialEffects?.view === view && initialEffects.output === output
             ? initialEffects.token
@@ -1007,23 +1035,40 @@ export function App() {
         fromTick,
         docLabel,
       });
+      if (livePlay && isMainLabel(section.label)) lastMain.current = section.label;
       setTransport({ playing: true, elapsedMs: 0, error: null });
     } catch (e) {
       useStudio.setState({ error: String(e) });
     }
   };
+  const chordFollowStatus = useChordFollow({
+    enabled: livePlay && midiActive && isTauri(),
+    singleFinger,
+    inputName: monitorName || undefined,
+    monitoring,
+    setMonitoring,
+    docLabel,
+    onError: (message) => useStudio.setState({ error: message }),
+  });
   useEffect(() => {
     if (!isTauri()) return;
     let canceled = false;
     let wasPlaying = false;
     const poll = () => {
       if (document.visibilityState === "hidden") return;
-      void invoke<TransportStatus>("transport_status")
+      void invoke<TransportStatus>("transport_status", {
+        docLabel: useStudio.getState().docLabel,
+      })
         .then((s) => {
           if (canceled) return;
           if (wasPlaying && !s.playing) applyPark(s.elapsedMs);
           wasPlaying = s.playing;
           setTransport(s);
+          // Live style play: the highlighted section follows the player.
+          if (livePlayRef.current && s.playing && s.section != null) {
+            if (useStudio.getState().sectionId !== s.section)
+              useStudio.getState().section(s.section);
+          }
           if (s.error) useStudio.setState({ error: s.error });
         })
         .catch((e) => {
@@ -1091,27 +1136,31 @@ export function App() {
   useEffect(() => {
     if (!isTauri()) return;
     let live = true;
+    let receivedOwnership = false;
     void invoke<MidiOwnershipPayload>("midi_ownership", { docLabel })
       .then((s) => {
-        if (live && s && typeof s.active === "boolean") setMidiActive(s.active);
+        if (live && !receivedOwnership && s && typeof s.active === "boolean")
+          setMidiActive(s.active);
       })
       .catch(() => undefined);
     let unlisten: (() => void) | undefined;
     void listenMidiOwnership((p) => {
       if (!live) return;
+      receivedOwnership = true;
       setMidiActive(p.owner === docLabel);
-      if (p.owner !== docLabel && transport.playing) {
-        setTransport((t) => ({ ...t, playing: false }));
+      if (p.owner !== docLabel) {
+        setMonitoring(false);
+        setCapturing(false);
+        setTransport((t) => t.playing ? { ...t, playing: false } : t);
       }
     }).then((u) => {
-      unlisten = u;
+      if (live) unlisten = u;
+      else u();
     });
     return () => {
       live = false;
       unlisten?.();
     };
-    // transport.playing read only for sync on ownership loss
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docLabel]);
   const claimMidiHere = async () => {
     if (!isTauri()) return;
@@ -1143,18 +1192,19 @@ export function App() {
       return;
     }
     const tick = tickFromElapsed(view, section, transport.elapsedMs);
+    const { numerator, denominator } = meterAt(view, section.start);
     metronomeAtTick(
       tick,
       section.start,
       view.ppq,
-      view.numerator,
-      view.denominator,
+      numerator,
+      denominator,
     );
   }, [metronome, transport.playing, transport.elapsedMs, view, section]);
   useEffect(() => {
     if (!monitoring || !isTauri()) return;
     const timer = setInterval(() => {
-      void invoke<[string | null, MonitorEvent[]]>("monitor_snapshot")
+      void invoke<[string | null, MonitorEvent[]]>("monitor_snapshot", { docLabel })
         .then(([name, events]) => {
           setMonitorName(name ?? "");
           setMonitorEvents(events.slice(-40).reverse());
@@ -1165,7 +1215,7 @@ export function App() {
   }, [monitoring]);
   useEffect(() => {
     if (!isTauri()) return;
-    void invoke<CaptureSnapshot>("capture_snapshot")
+    void invoke<CaptureSnapshot>("capture_snapshot", { docLabel })
       .then((snap) => {
         setCaptureSnap(snap);
         setCapturing(snap.recording);
@@ -1176,7 +1226,7 @@ export function App() {
   useEffect(() => {
     if (!capturing || !isTauri()) return;
     const timer = setInterval(() => {
-      void invoke<CaptureSnapshot>("capture_snapshot")
+      void invoke<CaptureSnapshot>("capture_snapshot", { docLabel })
         .then((snap) => {
           setCaptureSnap((prev) => {
             if (
@@ -1239,8 +1289,8 @@ export function App() {
             },
           )
         ) {
-          await invoke("stop");
-          await invoke("stop_capture").catch(() => undefined);
+          await invoke("stop", { docLabel });
+          await invoke("stop_capture", { docLabel }).catch(() => undefined);
           await getCurrentWindow().destroy();
         }
       }
@@ -1888,6 +1938,35 @@ export function App() {
               >
                 <Repeat2 size={16} />
               </IconButton>
+              <IconButton
+                label="Live style play: section buttons switch without stopping"
+                onClick={() => {
+                  livePlayRef.current = !livePlay;
+                  setLivePlay(!livePlay);
+                }}
+                active={livePlay}
+              >
+                <Radio size={16} />
+              </IconButton>
+              {livePlay && isTauri() && (
+                <select
+                  aria-label="Held-note fingering"
+                  value={singleFinger ? "single" : "standard"}
+                  onChange={(event) => setSingleFinger(event.target.value === "single")}
+                >
+                  <option value="standard">Standard</option>
+                  <option value="single">Single Finger</option>
+                </select>
+              )}
+              {chordFollowStatus && (
+                <span
+                  className="muted"
+                  aria-live="polite"
+                  title="Live Play chord following"
+                >
+                  {chordFollowStatus}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -1921,6 +2000,37 @@ export function App() {
                     <button
                       key={s.id}
                       onClick={() => {
+                        if (livePlay && transport.playing) {
+                          // Keep playing while the transport times the section switch.
+                          const steps = liveSwitchSteps(
+                            view.sections,
+                            s,
+                            lastMain.current,
+                            (id) => {
+                              const f = view.sections.find((x) => x.id === id);
+                              return (
+                                !!f &&
+                                view.notes.some(
+                                  (n) => n.start >= f.start && n.start < f.end,
+                                )
+                              );
+                            },
+                          );
+                          const back = steps[steps.length - 1];
+                          const backLabel = view.sections.find(
+                            (x) => x.id === back.id,
+                          )?.label;
+                          if (back.looping && backLabel)
+                            lastMain.current = backLabel;
+                          void invoke("queue_sections", {
+                            sections: steps,
+                            channels: audibleChannels(),
+                            docLabel,
+                          }).catch((e) =>
+                            useStudio.setState({ error: String(e) }),
+                          );
+                          return;
+                        }
                         if (transport.playing) void stop();
                         state.section(s.id);
                       }}
@@ -1973,7 +2083,7 @@ export function App() {
                         </div>
                       </Fragment>
                     ))}
-                    {layout.extra.length > 0 && (
+                    {(layout.extra.length > 0 || layout.missingFileSections.length > 0) && (
                       <>
                         <span className="section-sep" aria-hidden="true" />
                         <div
@@ -1982,6 +2092,19 @@ export function App() {
                           className="section-group"
                         >
                           {layout.extra.map((s) => chip(s, s.label))}
+                          {layout.missingFileSections.map(({ slot, group }) => (
+                            <button
+                              key={slot.key}
+                              type="button"
+                              disabled={busy || transport.playing}
+                              className="section-chip empty-slot"
+                              aria-label={`Add ${slot.label} (not in this Style)`}
+                              onClick={() => setAddSlot({ slot, group })}
+                            >
+                              <span>{slot.label}</span>
+                              <Plus size={10} aria-hidden="true" />
+                            </button>
+                          ))}
                         </div>
                       </>
                     )}
@@ -2911,6 +3034,7 @@ export function App() {
                     </>
                   ) : inspector === "casm" ? (
                     <CasmInspector
+                      sectionId={sectionId}
                       routes={view.routes.filter(
                         (r) =>
                           r.source === channel &&
@@ -3061,19 +3185,9 @@ export function App() {
                       const fallback =
                         view.sections.find((s) => s.label === "Main A")?.id ??
                         view.sections[0].id;
-                      const ui = view.uiState;
                       useStudio.setState({
                         view,
-                        sectionId:
-                          ui?.sectionId != null &&
-                          view.sections.some((s) => s.id === ui.sectionId)
-                            ? ui.sectionId
-                            : fallback,
-                        ...(ui?.channel != null &&
-                        ui.channel >= 1 &&
-                        ui.channel <= 16
-                          ? { channel: ui.channel }
-                          : {}),
+                        ...applyUiState(view, fallback, useStudio.getState().channel),
                         selected: [],
                         message: "Autosaved edits restored",
                       });
@@ -3523,7 +3637,7 @@ export function App() {
                 type="button"
                 disabled={!monitoring}
                 onClick={() => {
-                  void invoke("stop_monitor")
+                  void invoke("stop_monitor", { docLabel })
                     .then(() => setMonitoring(false))
                     .catch((e) => useStudio.setState({ error: String(e) }));
                 }}
@@ -3533,7 +3647,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => {
-                  void invoke("clear_monitor")
+                  void invoke("clear_monitor", { docLabel })
                     .then(() => setMonitorEvents([]))
                     .catch(() => undefined);
                 }}
@@ -3601,11 +3715,11 @@ export function App() {
                 type="button"
                 disabled={!capturing}
                 onClick={() => {
-                  void invoke("stop_capture")
+                  void invoke("stop_capture", { docLabel })
                     .then(() => {
                       setCapturing(false);
                       setTransport((t) => ({ ...t, playing: false }));
-                      return invoke<CaptureSnapshot>("capture_snapshot");
+                      return invoke<CaptureSnapshot>("capture_snapshot", { docLabel });
                     })
                     .then(setCaptureSnap)
                     .catch((e) => useStudio.setState({ error: String(e) }));
@@ -3619,8 +3733,8 @@ export function App() {
                 onClick={() => {
                   const label = window.prompt("Marker label", "Mark") ?? "";
                   if (!label.trim()) return;
-                  void invoke("capture_marker", { label: label.trim() })
-                    .then(() => invoke<CaptureSnapshot>("capture_snapshot"))
+                  void invoke("capture_marker", { label: label.trim(), docLabel })
+                    .then(() => invoke<CaptureSnapshot>("capture_snapshot", { docLabel }))
                     .then(setCaptureSnap)
                     .catch((e) => useStudio.setState({ error: String(e) }));
                 }}
@@ -3674,9 +3788,10 @@ export function App() {
                           channel: ch,
                           controller: recController,
                           value,
+                          docLabel,
                         })
                           .then(() =>
-                            invoke<CaptureSnapshot>("capture_snapshot"),
+                            invoke<CaptureSnapshot>("capture_snapshot", { docLabel }),
                           )
                           .then(setCaptureSnap)
                           .catch((err) =>
@@ -3702,7 +3817,7 @@ export function App() {
                         filters: [{ name: "MIDI", extensions: ["mid"] }],
                       });
                       if (!path) return;
-                      await invoke("export_capture_midi", { path });
+                      await invoke("export_capture_midi", { path, docLabel });
                       useStudio.setState({
                         message: "Capture exported as MIDI (not a Style)",
                       });
@@ -3750,7 +3865,7 @@ export function App() {
                     ) {
                       return;
                     }
-                    await invoke("clear_capture")
+                    await invoke("clear_capture", { docLabel })
                       .then(() =>
                         setCaptureSnap({
                           recording: false,
@@ -3956,19 +4071,36 @@ export function App() {
 }
 
 function CasmInspector({
+  sectionId,
   routes,
   onEditSources,
 }: {
+  sectionId: number;
   routes: Route[];
   onEditSources: (route: Route) => void;
 }) {
   const edit = useStudio((s) => s.edit);
+  const editRoute = (route: Route, change: RouteChange) =>
+    void edit({
+      type: "sourceTracks",
+      section: sectionId,
+      actions: [{
+        type: "edit",
+        source: route.source,
+        destination: route.destination,
+        changes: [change],
+        chords: null,
+        exclusive: false,
+      }],
+    });
+  const editMiddle = (route: Route, field: RuleField, value: number) =>
+    editRoute(route, { type: "rule", region: "middle", field, value });
   if (!routes.length)
     return (
       <>
         <h3>No editable route</h3>
         <p className="muted">
-          This source has no verified 47-byte Ctb2 route in the current section.
+          This source has no supported Ctb2 route in the current section.
           Original CASM data stays intact.
         </p>
       </>
@@ -3992,10 +4124,8 @@ function CasmInspector({
               aria-label={`Route ${r.id} source root`}
               value={r.sourceRoot}
               onChange={(e) =>
-                void edit({
-                  type: "casm",
-                  route: r.id,
-                  field: "root",
+                editRoute(r, {
+                  type: "root",
                   value: +e.target.value,
                 })
               }
@@ -4012,19 +4142,19 @@ function CasmInspector({
             value={r.sourceChord}
             max={33}
             onCommit={(value) =>
-              void edit({ type: "casm", route: r.id, field: "chord", value })
+              editRoute(r, { type: "chord", value })
             }
           />
           <label className="field">
             <span>Middle-region NTR</span>
             <select
-              disabled={r.middleNtr > 1}
+              disabled={r.middleNtr > 2}
               aria-label={`Route ${r.id} NTR`}
               value={r.middleNtr}
               onChange={(e) =>
-                void edit({
-                  type: "casm",
-                  route: r.id,
+                editRoute(r, {
+                  type: "rule",
+                  region: "middle",
                   field: "ntr",
                   value: +e.target.value,
                 })
@@ -4032,7 +4162,8 @@ function CasmInspector({
             >
               <option value="0">Root Trans</option>
               <option value="1">Root Fixed</option>
-              {r.middleNtr > 1 && (
+              <option value="2">Guitar</option>
+              {r.middleNtr > 2 && (
                 <option value={r.middleNtr}>
                   Raw {r.middleNtr} · read only
                 </option>
@@ -4042,30 +4173,88 @@ function CasmInspector({
           <label className="field">
             <span>Middle-region NTT</span>
             <select
-              disabled={r.middleNtr > 1}
+              disabled={nttOptions(r.middleNtr).length === 0}
               aria-label={`Route ${r.id} NTT`}
               value={r.middleNtt}
               onChange={(e) =>
-                void edit({
-                  type: "casm",
-                  route: r.id,
+                editRoute(r, {
+                  type: "rule",
+                  region: "middle",
                   field: "ntt",
                   value: +e.target.value,
                 })
               }
             >
-              <option value="0">Bypass</option>
-              <option value="1">Melody</option>
-              {r.middleNtt > 1 && (
+              {nttOptions(r.middleNtr).map((name, value) => (
+                <option key={value} value={value}>{name}</option>
+              ))}
+              {r.middleNtt >= nttOptions(r.middleNtr).length && (
                 <option value={r.middleNtt}>
                   Raw {r.middleNtt} · preserved
                 </option>
               )}
             </select>
           </label>
+          {r.bytes.length >= 40 && (
+            <details>
+              <summary>Middle-region limits and retrigger</summary>
+              <p className="muted">
+                {(["low", "middle", "high"] as const).map((region) => {
+                  const range = sourceRegionRange(r.bytes[20], r.bytes[21], region);
+                  return `${region[0].toUpperCase()}${region.slice(1)}: ${range?.map(pitchName).join("–") ?? "Off"}`;
+                }).join(" · ")}
+              </p>
+              <NumberField
+                label="Middle-region high key"
+                value={r.bytes[30]}
+                max={11}
+                onCommit={(value) => editMiddle(r, "highKey", value)}
+              />
+              {importedOutputLimitDescription(r.bytes[31], r.bytes[32]) ? (
+                <p className="muted">
+                  {importedOutputLimitDescription(r.bytes[31], r.bytes[32])}
+                  {" "}Use Source Tracks to replace the pair.
+                </p>
+              ) : (
+                <>
+                  <NumberField
+                    label="Middle-region output low"
+                    value={r.bytes[31]}
+                    max={r.bytes[32]}
+                    onCommit={(value) => editMiddle(r, "noteLow", value)}
+                  />
+                  <NumberField
+                    label="Middle-region output high"
+                    value={r.bytes[32]}
+                    min={r.bytes[31]}
+                    max={127}
+                    onCommit={(value) => editMiddle(r, "noteHigh", value)}
+                  />
+                </>
+              )}
+              <label className="field">
+                <span>Middle-region retrigger</span>
+                <select
+                  value={r.bytes[33]}
+                  onChange={(e) => editMiddle(r, "retrigger", +e.target.value)}
+                >
+                  {retriggerOptions.map((name, value) => <option key={value} value={value}>{name}</option>)}
+                  {r.bytes[33] >= retriggerOptions.length && <option value={r.bytes[33]}>Raw {r.bytes[33]}</option>}
+                </select>
+              </label>
+              <label className="source-check">
+                <input
+                  type="checkbox"
+                  checked={r.middleNttBass}
+                  onChange={(e) => editMiddle(r, "bass", Number(e.target.checked))}
+                />
+                NTT Bass
+              </label>
+            </details>
+          )}
           <p className="muted">
-            Low/high rules, chord masks, NTT Bass and extension bytes are
-            preserved. Only tested fields are editable.
+            Changes apply to the selected section and route. Low/high rules,
+            chord masks and extension bytes are preserved.
           </p>
           <button
             type="button"
@@ -4097,8 +4286,17 @@ function systemEventLabel(data: number[]): string {
     return `Meta 0x${kind.toString(16)}`;
   }
   if (data[0] === 0xf0 || data[0] === 0xf7) {
-    const mfr = data[2];
-    if (mfr === 0x43) return `SysEx Yamaha (${data.length} B)`;
+    let length = 0;
+    for (let index = 1; index < Math.min(5, data.length); index++) {
+      const byte = data[index];
+      length = length * 128 + (byte & 127);
+      if (byte < 128) {
+        if (data[0] === 0xf0 && length === data.length - index - 1 &&
+            data[index + 1] === 0x43)
+          return `SysEx Yamaha (${data.length} B)`;
+        break;
+      }
+    }
     return `SysEx (${data.length} B)`;
   }
   return "System";
@@ -4131,21 +4329,16 @@ function EventInspector({
     [kind, setKind] = useState("control"),
     [allChannels, setAllChannels] = useState(false),
     [showSystem, setShowSystem] = useState(true);
-  const event =
-    events.find((e) => e.id === id) ??
-    viewEvents.find((e) => e.id === id) ??
-    systemEvents.find((e) => e.id === id);
-  const status = event?.data[0] ?? 0;
-  const eventEditable = !!event && status < 0xf0;
   const selectedNote =
     selected.length === 1 ? notes.find((n) => n.id === selected[0]) : undefined;
   useEffect(() => {
     setId(null);
-  }, [sectionId, channel, allChannels]);
+  }, [sectionId, allChannels]);
   type Row =
     | {
         kind: "cc";
         tick: number;
+        order: number;
         key: string;
         label: string;
         detail: string;
@@ -4155,6 +4348,7 @@ function EventInspector({
     | {
         kind: "note";
         tick: number;
+        order: number;
         key: string;
         label: string;
         detail: string;
@@ -4164,6 +4358,7 @@ function EventInspector({
     | {
         kind: "sys";
         tick: number;
+        order: number;
         key: string;
         label: string;
         detail: string;
@@ -4177,13 +4372,18 @@ function EventInspector({
     ? viewEvents.filter((e) => {
         if (e.tick < start || e.tick >= end) return false;
         const st = e.data[0] ?? 0;
-        return st < 0xf0 && st >> 4 >= 0x8 && st >> 4 <= 0xe;
+        return st >= 0xb0 && st < 0xf0;
       })
     : events;
+  const channelEvent = scopedEvents.find((e) => e.id === id);
+  const event = channelEvent ?? (showSystem ? systemEvents.find((e) => e.id === id) : undefined);
+  const status = event?.data[0] ?? 0;
+  const eventEditable = !!channelEvent;
   const rows: Row[] = [
     ...scopedNotes.map((n) => ({
       kind: "note" as const,
       tick: n.start,
+      order: n.id,
       key: `n-${n.id}`,
       noteId: n.id,
       channel: n.channel,
@@ -4195,6 +4395,7 @@ function EventInspector({
       return {
         kind: "cc" as const,
         tick: e.tick,
+        order: e.order,
         key: `e-${e.id}`,
         id: e.id,
         channel: ch,
@@ -4214,6 +4415,7 @@ function EventInspector({
       ? systemEvents.map((e) => ({
           kind: "sys" as const,
           tick: e.tick,
+          order: e.order,
           key: `s-${e.id}`,
           id: e.id,
           channel: 0 as const,
@@ -4224,7 +4426,7 @@ function EventInspector({
             .join(" "),
         }))
       : []),
-  ].sort((a, b) => a.tick - b.tick || a.label.localeCompare(b.label));
+  ].sort((a, b) => a.tick - b.tick || a.order - b.order);
   return (
     <>
       <h3>Event list</h3>

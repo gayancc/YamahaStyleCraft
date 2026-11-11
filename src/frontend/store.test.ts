@@ -22,3 +22,12 @@ it("ignores out-of-range project display settings", async () => {
   expect(useStudio.getState().zoom).toBe(1);
   expect(useStudio.getState().channel).toBe(11);
 });
+it("sends the current workspace with the edit that triggers recovery", async () => {
+  const project = { ...view({}), revision: 2, notes: [] };
+  mocks.invoke.mockResolvedValue({ ...project, revision: 3 });
+  useStudio.setState({ view: project, sectionId: 1, channel: 12, snap: 0, zoom: 2, tool: "pan" });
+  await useStudio.getState().edit({ type: "deleteNotes", ids: [1] });
+  expect(mocks.invoke).toHaveBeenCalledWith("edit_document", expect.objectContaining({
+    uiState: { sectionId: 1, channel: 12, snap: 0, zoom: 2, tool: "pan" },
+  }));
+});

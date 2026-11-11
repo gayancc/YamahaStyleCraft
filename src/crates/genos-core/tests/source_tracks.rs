@@ -92,6 +92,270 @@ fn mask(b: &[u8], c: u8) -> bool {
 }
 
 #[test]
+fn edits_short_and_extended_ctb2_without_changing_opaque_bytes() {
+    for size in [40, 57, 128] {
+        let mut style = smf::Style::parse(&fixture(false)).unwrap();
+        style.tracks[0].push(Event {
+            id: u64::MAX,
+            order: u64::MAX,
+            tick: 0,
+            data: vec![0xff, 6, 4, b'S', b'F', b'F', b'2'],
+        });
+        style.chunks[style.track_chunks[0]].data = smf::encode_track(&style.tracks[0]).unwrap();
+        let casm = style.chunks.iter_mut().find(|c| c.tag == *b"CASM").unwrap();
+        let mut groups = smf::chunks(&casm.data).unwrap();
+        let mut records = smf::chunks(&groups[0].data).unwrap();
+        records[1].data.resize(size, 0xa5);
+        let original = records[1].data.clone();
+        groups[0].data = smf::pack(&records).unwrap();
+        casm.data = smf::pack(&groups).unwrap();
+        let before = style.bytes().unwrap();
+        let mut s = Session::open(&before, "Variable Ctb2 payload".into()).unwrap();
+
+        apply(&mut s, vec![edit(vec![Change::Root { value: 7 }], None, false)]).unwrap();
+        let reopened = Document::parse(&s.document.style.bytes().unwrap()).unwrap();
+        let mut expected = original.clone();
+        expected[18] = 7;
+        assert_eq!(selected(&reopened, "Main A", 1), &expected[..size.min(57)]);
+        assert_eq!(selected(&reopened, "Main B", 1), &original[..size.min(57)]);
+        let saved = reopened.style.chunks.iter().find(|c| c.tag == *b"CASM").unwrap();
+        let groups = smf::chunks(&saved.data).unwrap();
+        let edited = smf::chunks(&groups[1].data).unwrap();
+        assert_eq!(edited[0].data, b"Main A");
+        assert_eq!(edited[1].data, expected);
+        s.undo().unwrap();
+        assert_eq!(s.document.style.bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn sff2_authoring_targets_the_playback_winner_and_rejects_shadowed_routes() {
+    let mut style = smf::Style::parse(&fixture(false)).unwrap();
+    let track = style.track_chunks[0];
+    style.tracks[0].push(Event {
+        id: u64::MAX,
+        order: u64::MAX,
+        tick: 0,
+        data: vec![0xff, 6, 4, b'S', b'F', b'F', b'2'],
+    });
+    style.chunks[track].data = smf::encode_track(&style.tracks[0]).unwrap();
+    let mut shadow = route(1);
+    shadow[9] = 15;
+    let mut earlier = route(1);
+    earlier[18] = 4;
+    let winner = route(1);
+    let sibling = route(2);
+    let group = |names: &[u8], routes: &[Vec<u8>]| {
+        let mut records = vec![chunk(b"Sdec", names.to_vec())];
+        records.extend(routes.iter().map(|route| chunk(b"Ctb2", route.clone())));
+        chunk(b"CSEG", smf::pack(&records).unwrap())
+    };
+    let casm = style.chunks.iter_mut().find(|c| c.tag == *b"CASM").unwrap();
+    let shadow_group = group(b"Main A", &[shadow, sibling.clone(), route(3)]);
+    let shared = chunk(b"CSEG", smf::pack(&[
+        chunk(b"Sdec", b"Main A".to_vec()),
+        chunk(b"Ctb2", earlier.clone()),
+        chunk(b"Sdec", b"Main B".to_vec()),
+        chunk(b"Ctb2", winner.clone()),
+        chunk(b"Ctb2", sibling.clone()),
+        chunk(b"Sdec", b"Main C".to_vec()),
+    ]).unwrap());
+    casm.data = smf::pack(&[
+        shared,
+        shadow_group.clone(),
+    ]).unwrap();
+    let before = style.bytes().unwrap();
+    let mut s = Session::open(&before, "Overlapping CASM".into()).unwrap();
+    assert!(apply(&mut s, vec![Action::Edit {
+        source: 1,
+        destination: 16,
+        changes: vec![Change::Root { value: 7 }],
+        chords: None,
+        exclusive: false,
+    }]).is_err());
+    assert_eq!(s.document.style.bytes().unwrap(), before);
+
+    apply(&mut s, vec![edit(vec![Change::Root { value: 7 }], Some(vec![0]), true)]).unwrap();
+    let edited = Document::parse(&s.document.style.bytes().unwrap()).unwrap();
+    let casm = edited.style.chunks.iter().find(|c| c.tag == *b"CASM").unwrap();
+    let groups = smf::chunks(&casm.data).unwrap();
+    assert_eq!(groups.len(), 3);
+    let main_b = smf::chunks(&groups[0].data).unwrap();
+    let main_a = smf::chunks(&groups[1].data).unwrap();
+    assert_eq!(main_b[0].data, b"Main B");
+    assert_eq!(main_b[2].data, winner);
+    assert_eq!(main_b[3].data, sibling);
+    assert_eq!(main_b[4].data, b"Main C");
+    assert_eq!(main_a[0].data, b"Main A");
+    assert_eq!(main_a[1].data, earlier);
+    assert_eq!(main_a[2].data[18], 7);
+    assert!(mask(&main_a[2].data, 0));
+    assert!(!mask(&main_a[3].data, 0));
+    assert_eq!(groups[2].data, shadow_group.data);
+    if let Some(path) = std::env::var_os("GENOS_AUTHORED_CASM_REPLAY") {
+        std::fs::write(path, smf::pack(std::slice::from_ref(casm)).unwrap()).unwrap();
+    }
+    s.undo().unwrap();
+    assert_eq!(s.document.style.bytes().unwrap(), before);
+}
+
+#[test]
+fn firmware_named_sdec_groups_support_section_edits_and_clones() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../docs/research/experiments/fixtures/08.3-4-ACOUSTIC-control.STY");
+    let fixture = std::fs::read(fixture).unwrap();
+    let export = std::env::var_os("GENOS_SDEC_AUTHORING_REPLAY").map(std::path::PathBuf::from);
+    if let Some(dir) = &export {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let mut donor = route(11);
+    donor[9] = 10;
+    let mut sibling = donor.clone();
+    sibling[0] = 11;
+    for (name, leading, middle, alias) in [
+        ("embedded", &b"XMain A!"[..], Some(&b"Main A\0Main B\0"[..]), false),
+        ("single", &b"Main A\0Main B!"[..], None, false),
+        ("suffix", &b"Main A "[..], Some(&b"xMain B?"[..]), true),
+        ("unshared", &b"XMain A\0"[..], None, false),
+    ] {
+        let mut style = smf::Style::parse(&fixture).unwrap();
+        let mut records = vec![
+            chunk(b"Sdec", leading.to_vec()),
+            chunk(b"Ctb2", donor.clone()),
+        ];
+        if let Some(middle) = middle {
+            records.push(chunk(b"Sdec", middle.to_vec()));
+        }
+        records.push(chunk(b"Ctb2", sibling.clone()));
+        let trailing = b"\0XMain C!";
+        records.push(chunk(b"Sdec", trailing.to_vec()));
+        let mut groups = vec![chunk(b"CSEG", smf::pack(&records).unwrap())];
+        if name == "unshared" {
+            groups.push(chunk(b"CSEG", smf::pack(&[
+                chunk(b"Sdec", b"Main B".to_vec()),
+                chunk(b"Ctb2", donor.clone()),
+                chunk(b"Ctb2", sibling.clone()),
+            ]).unwrap()));
+        }
+        style.chunks.iter_mut().find(|c| c.tag == *b"CASM").unwrap().data =
+            smf::pack(&groups).unwrap();
+        let label = if alias {
+            let marker = style.tracks[0].iter_mut()
+                .find(|event| event.meta(6) == Some(b"Main A")).unwrap();
+            marker.data = b"\xff\x06\x07Main AX".to_vec();
+            style.chunks[style.track_chunks[0]].data = smf::encode_track(&style.tracks[0]).unwrap();
+            "Main AX"
+        } else {
+            "Main A"
+        };
+        let before = style.bytes().unwrap();
+        let mut s = Session::open(&before, name.into()).unwrap();
+        let section = s.document.sections.iter().find(|section| section.label == label).unwrap();
+        let section = section.id;
+        assert_eq!(selected(&s.document, label, 11), donor);
+        s.execute(s.revision, Command::SourceTracks {
+            section,
+            actions: vec![Action::Edit {
+                source: 11,
+                destination: 11,
+                changes: vec![Change::Root { value: 7 }],
+                chords: Some(vec![0]),
+                exclusive: true,
+            }],
+        }).unwrap();
+        let edited = s.document.style.bytes().unwrap();
+        let reopened = Document::parse(&edited).unwrap();
+        assert_eq!(selected(&reopened, label, 11)[18], 7, "{name}");
+        assert!(!mask(selected(&reopened, label, 12), 0));
+        assert_eq!(selected(&reopened, "Main B", 11), donor);
+        assert_eq!(selected(&reopened, "Main B", 12), sibling);
+
+        s.execute(s.revision, Command::SourceTracks {
+            section,
+            actions: vec![Action::Clone { source: 11, destination: 11, target: 1 }],
+        }).unwrap();
+        let cloned = s.document.style.bytes().unwrap();
+        let reopened = Document::parse(&cloned).unwrap();
+        assert_eq!(selected(&reopened, label, 1)[18], 7);
+        assert!(reopened.notes.iter().any(|note| note.channel == 1));
+        let casm = reopened.style.chunks.iter().find(|c| c.tag == *b"CASM").unwrap();
+        let groups = smf::chunks(&casm.data).unwrap();
+        let first = smf::chunks(&groups[0].data).unwrap();
+        assert_eq!(first.last().unwrap().data, trailing);
+        if name == "unshared" {
+            assert_eq!(first[0].data, leading);
+        }
+        if let Some(dir) = &export {
+            for (state, bytes) in [("before", &before), ("edited", &edited), ("cloned", &cloned)] {
+                std::fs::write(dir.join(format!("{name}-{state}.STY")), bytes).unwrap();
+            }
+        }
+        s.undo().unwrap();
+        assert_eq!(s.document.style.bytes().unwrap(), edited);
+        s.undo().unwrap();
+        assert_eq!(s.document.style.bytes().unwrap(), before);
+        if name == "unshared" {
+            records.insert(2, chunk(b"Sdec", b"[Main A]".to_vec()));
+            let casm = style.chunks.iter_mut().find(|c| c.tag == *b"CASM").unwrap();
+            let mut groups = smf::chunks(&casm.data).unwrap();
+            groups[0].data = smf::pack(&records).unwrap();
+            let mut other = smf::chunks(&groups[1].data).unwrap();
+            other[1].data[18] = 3;
+            groups[1].data = smf::pack(&other).unwrap();
+            other[0].data = b"Main C".to_vec();
+            other[1].data[18] = 5;
+            groups.push(chunk(b"CSEG", smf::pack(&other).unwrap()));
+            casm.data = smf::pack(&groups).unwrap();
+            let duplicate = style.bytes().unwrap();
+            let mut session = Session::open(&duplicate, "Repeated CASM binding".into()).unwrap();
+            for label in ["Main A", "Main B", "Main C"] {
+                let section = session.document.sections.iter().find(|s| s.label == label).unwrap().id;
+                let result = session.execute(session.revision, Command::SourceTracks {
+                    section,
+                    actions: vec![Action::Edit {
+                        source: 11,
+                        destination: 11,
+                        changes: vec![Change::Root { value: 7 }],
+                        chords: None,
+                        exclusive: false,
+                    }],
+                });
+                if label == "Main C" {
+                    result.unwrap();
+                    assert_ne!(session.document.style.bytes().unwrap(), duplicate);
+                    session.undo().unwrap();
+                } else {
+                    assert!(result.unwrap_err().to_string().contains("ambiguous section binding"));
+                }
+                assert_eq!(session.document.style.bytes().unwrap(), duplicate);
+            }
+            if let Some(dir) = &export {
+                std::fs::write(dir.join("duplicate.STY"), &duplicate).unwrap();
+            }
+        }
+        if alias {
+            let marker = style.tracks[0].iter_mut()
+                .find(|event| event.meta(6) == Some(b"Main C")).unwrap();
+            marker.data = b"\xff\x06\x07Main AZ".to_vec();
+            style.chunks[style.track_chunks[0]].data = smf::encode_track(&style.tracks[0]).unwrap();
+            let ambiguous = style.bytes().unwrap();
+            let mut session = Session::open(&ambiguous, "Duplicate firmware marker".into()).unwrap();
+            assert!(session.execute(session.revision, Command::SourceTracks {
+                section,
+                actions: vec![Action::Edit {
+                    source: 11,
+                    destination: 11,
+                    changes: vec![Change::Root { value: 7 }],
+                    chords: None,
+                    exclusive: false,
+                }],
+            }).is_err());
+            assert_eq!(session.document.style.bytes().unwrap(), ambiguous);
+        }
+    }
+}
+
+#[test]
 fn gui_saved_stylemagic_root_and_defaults_match_real_editor_transactions() {
     let oracle: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/stylemagic-gui-oracle.json")).unwrap();
@@ -864,6 +1128,32 @@ fn source_clone_real_control_preserves_original_events_and_roundtrips_project() 
         Document::parse(&exported).unwrap().notes.len(),
         before.notes.len() + count
     );
+    if let Some(path) = std::env::var_os("GENOS_CLONED_STYLE_REPLAY") {
+        std::fs::write(path, &exported).unwrap();
+    }
+    if let Some(path) = std::env::var_os("GENOS_CLONE_PITCHES_REPLAY") {
+        let cases: Vec<[u8; 7]> =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(cases.len(), 7200);
+        let reopened = Document::parse(&exported).unwrap();
+        let section = reopened.sections.iter().find(|s| s.label == "Main A").unwrap();
+        let quality = |id| match id {
+            0 => "Major", 2 => "Maj7", 7 => "aug", 8 => "Minor", 10 => "m7",
+            11 => "m7b5", 17 => "dim", 19 => "7", 32 => "sus4", 33 => "sus2",
+            _ => panic!("Unexpected chord type {id}"),
+        };
+        for [source, root, kind, bass, bass_kind, pitch, expected] in cases {
+            let chord = genos_core::midi::LiveChord {
+                root,
+                quality: quality(kind).into(),
+                bass: Some(bass),
+                bass_quality: Some(quality(bass_kind).into()),
+            };
+            let actual = genos_core::live_preview::follow_pitch(&reopened, section.id, source, pitch, &chord);
+            assert_eq!(actual, (expected != 255).then_some(expected),
+                       "source {source}, chord {chord:?}, input pitch {pitch}");
+        }
+    }
     let project = genos_core::project::session_bytes(&s).unwrap();
     let temp = tempfile::tempdir().unwrap();
     let file = temp.path().join("source-clone.gss");
@@ -871,8 +1161,100 @@ fn source_clone_real_control_preserves_original_events_and_roundtrips_project() 
     let reopened = genos_core::project::open_file(&file).unwrap();
     assert_eq!(reopened.document.style.bytes().unwrap(), exported);
     assert_eq!(reopened.document.notes.len(), before.notes.len() + count);
+    let auto_start_export = std::env::var_os("GENOS_CLONE_AUTOSTART_EXPORT");
+    let auto_start_replay = std::env::var_os("GENOS_CLONE_AUTOSTART_PITCHES");
+    if auto_start_export.is_some() || auto_start_replay.is_some() {
+        s.execute(
+            s.revision,
+            Command::SourceTracks {
+                section: section.id,
+                actions: vec![Action::Edit {
+                    source: 1,
+                    destination: 11,
+                    changes: vec![Change::AutoStart { enabled: true }],
+                    chords: None,
+                    exclusive: false,
+                }],
+            },
+        )
+        .unwrap();
+        let enabled = s.document.style.bytes().unwrap();
+        if let Some(path) = auto_start_export {
+            std::fs::write(path, &enabled).unwrap();
+        }
+        if let Some(path) = auto_start_replay {
+            let disabled_doc = Document::parse(&exported).unwrap();
+            let enabled_doc = Document::parse(&enabled).unwrap();
+            let cases: Vec<(String, u8, u8, u8)> =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(cases.len(), 512);
+            for (state, pitch, kind, expected) in cases {
+                let doc = match state.as_str() {
+                    "off" => &disabled_doc,
+                    "on" => &enabled_doc,
+                    _ => panic!("Unknown Auto Start state {state}"),
+                };
+                let section = doc.sections.iter().find(|s| s.label == "Main A").unwrap();
+                let chord = genos_core::midi::LiveChord {
+                    root: 0,
+                    quality: match kind {
+                        0 => "Major",
+                        34 => "Genos:34",
+                        _ => panic!("Unexpected chord type {kind}"),
+                    }.into(),
+                    bass: None,
+                    bass_quality: None,
+                };
+                let actual =
+                    genos_core::live_preview::follow_pitch(doc, section.id, 1, pitch, &chord);
+                assert_eq!(actual, (expected != 255).then_some(expected),
+                    "Auto Start {state}, chord type {kind}, pitch {pitch}");
+            }
+        }
+        s.undo().unwrap();
+        assert_eq!(s.document.style.bytes().unwrap(), exported);
+    }
     s.undo().unwrap();
     assert_eq!(s.document.style.bytes().unwrap(), original);
+}
+
+#[test]
+fn latin_casm_edit_preserves_ots_chunk_and_exact_undo() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../docs/research/experiments/fixtures/latin01-original-copy.STY");
+    let original = std::fs::read(fixture).unwrap();
+    let mut session = Session::open(&original, "Latin OTS preservation".into()).unwrap();
+    let before = session.document.style.clone();
+    let section = session.document.sections.iter().find(|section| section.label == "Main A").unwrap();
+    session.execute(0, Command::SourceTracks {
+        section: section.id,
+        actions: vec![Action::Edit {
+            source: 11,
+            destination: 11,
+            changes: vec![Change::Root { value: 7 }],
+            chords: None,
+            exclusive: false,
+        }],
+    }).unwrap();
+
+    let edited = session.document.style.bytes().unwrap();
+    let after = smf::Style::parse(&edited).unwrap();
+    assert_ne!(original, edited);
+    assert_eq!(before.chunks.len(), after.chunks.len());
+    for (old, new) in before.chunks.iter().zip(&after.chunks) {
+        assert_eq!(old.tag, new.tag);
+        if old.tag == *b"CASM" {
+            assert_ne!(old.data, new.data);
+        } else {
+            assert_eq!(old.data, new.data, "chunk {:?}", old.tag);
+        }
+    }
+    assert!(after.chunks.iter().any(|chunk| chunk.tag == *b"OTSc"));
+    if let Some(path) = std::env::var_os("GENOS_OTS_EDIT_REPLAY") {
+        std::fs::write(path, &edited).unwrap();
+    }
+    session.undo().unwrap();
+    assert_eq!(session.document.style.bytes().unwrap(), original);
 }
 
 #[test]

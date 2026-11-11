@@ -7,6 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { SourceTracks } from "./SourceTracks";
+import { sourceRegionOffset, sourceRegionRange } from "./casmZones";
 import { useStudio } from "./store";
 import type { Route, View } from "./contracts";
 const invoke = vi.hoisted(() => vi.fn());
@@ -66,6 +67,75 @@ const show = () => {
   return close;
 };
 describe("source-track draft transaction", () => {
+  it("reports imported hard cutoffs and preserves them when editing the root", async () => {
+    const imported = [...bytes];
+    imported[31] = 193;
+    imported[32] = 189;
+    render(<SourceTracks route={{ ...route, bytes: imported }} section={section} onClose={vi.fn()} />);
+    expect(screen.getByText("low 65 (hard cutoff), high 61 (hard cutoff)", { exact: false })).toBeTruthy();
+    expect(screen.getByText("inverted", { exact: false })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Source root"), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply source changes" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      "edit_document",
+      expect.objectContaining({
+        command: expect.objectContaining({
+          actions: [expect.objectContaining({ changes: [{ type: "root", value: 7 }] })],
+        }),
+      }),
+    ));
+  });
+
+  it("shows imported signed zones and applies unrelated edits without rewriting them", async () => {
+    const imported = [...bytes];
+    imported[20] = 128;
+    imported[21] = 255;
+    render(<SourceTracks route={{ ...route, bytes: imported }} section={section} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "High region" }));
+    expect(screen.getByText("0–127", { exact: false })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Source root"), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply source changes" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      "edit_document",
+      expect.objectContaining({
+        command: expect.objectContaining({
+          actions: [expect.objectContaining({ changes: [{ type: "root", value: 7 }] })],
+        }),
+      }),
+    ));
+  });
+
+  it("uses the same signed and inverted region boundaries for display and note guidance", () => {
+    expect(sourceRegionRange(128, 255, "high")).toEqual([0, 127]);
+    expect(sourceRegionRange(255, 60, "middle")).toEqual([0, 60]);
+    expect(sourceRegionRange(80, 60, "low")).toEqual([0, 79]);
+    expect(sourceRegionRange(80, 60, "middle")).toBeNull();
+    expect(sourceRegionRange(80, 60, "high")).toEqual([80, 127]);
+    expect(sourceRegionOffset(79, 80, 60)).toBe(22);
+    expect(sourceRegionOffset(80, 80, 60)).toBe(34);
+    expect(sourceRegionOffset(60, 255, 60)).toBe(28);
+    expect(sourceRegionOffset(61, 255, 60)).toBe(34);
+  });
+
+  it("drafts firmware defaults and sends the matching native reset", async () => {
+    const defaults = [...bytes];
+    defaults[31] = 28;
+    defaults[33] = 4;
+    invoke.mockResolvedValueOnce(defaults);
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Use Genos part defaults" }));
+    await waitFor(() => expect(screen.getByLabelText("Output note low")).toHaveProperty("value", "28"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply source changes" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      "edit_document",
+      expect.objectContaining({
+        command: expect.objectContaining({
+          actions: [expect.objectContaining({ changes: [{ type: "genosPartDefaults" }] })],
+        }),
+      }),
+    ));
+  });
+
   it("drafts bass defaults, accepts overrides back to original values, and applies once", async () => {
     show();
     fireEvent.click(screen.getByRole("button", { name: "Use part defaults" }));
@@ -185,6 +255,7 @@ describe("source-track draft transaction", () => {
     fireEvent.click(screen.getByText("Apply source changes"));
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(invoke).toHaveBeenCalledWith("edit_document", {
+      uiState: expect.any(Object),
       revision: 0,
       command: {
         type: "sourceTracks",

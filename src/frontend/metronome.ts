@@ -33,10 +33,11 @@ export async function playCountIn(
   bars: number,
   tempoBpm: number,
   numerator: number,
+  denominator = 4,
 ): Promise<void> {
   const n = Math.max(0, Math.min(8, Math.round(bars)));
-  if (n <= 0 || !(tempoBpm > 0) || numerator < 1) return;
-  const beatMs = 60_000 / tempoBpm;
+  if (n <= 0 || !(tempoBpm > 0) || numerator < 1 || denominator <= 0) return;
+  const beatMs = (60_000 / tempoBpm) * (4 / denominator);
   const beats = n * numerator;
   resetMetronome();
   for (let i = 0; i < beats; i++) {

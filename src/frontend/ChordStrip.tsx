@@ -1,3 +1,4 @@
+import { useStudio } from "./store";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -40,6 +41,7 @@ export function ChordStrip({
   monitoring?: boolean;
   onMonitoringChange?: (active: boolean) => void;
 }) {
+  const docLabel = useStudio((state) => state.docLabel);
   const [vocab, setVocab] = useState<Vocabulary | null>(null);
   const [mode, setMode] = useState<PreviewMode>("source");
   const [root, setRoot] = useState(0);
@@ -71,7 +73,7 @@ export function ChordStrip({
     if (mode !== "midi") {
       if (startedByStrip.current) {
         startedByStrip.current = false;
-        void invoke("stop_monitor")
+        void invoke("stop_monitor", { docLabel })
           .then(() => onMonitoringChange?.(false))
           .catch(() => undefined);
       }
@@ -88,7 +90,7 @@ export function ChordStrip({
       return;
     }
     let cancelled = false;
-    void invoke("start_monitor", { name: midiInputName })
+    void invoke("start_monitor", { name: midiInputName, docLabel })
       .then(() => {
         if (cancelled) return;
         startedByStrip.current = true;
@@ -109,6 +111,7 @@ export function ChordStrip({
     let live = true;
     const tick = () => {
       void invoke<number[]>("monitor_held_notes", {
+          docLabel,
         channel: midiChannel > 0 ? midiChannel : null,
         maxPitch: lhSplit,
       })

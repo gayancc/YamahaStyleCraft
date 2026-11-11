@@ -17,14 +17,14 @@ use crate::{
     Error, Result,
     copy_material::{self, CopyFit, CopyScope, PairChanges},
     document::Document,
-    smf::{self, Chunk, Event, Style},
+    smf::{self, Event, Style},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// Yamaha marker names in the order real Styles write them (Intro B, C, A is Yamaha's own order,
 /// and the break fill `Fill In BA` comes last). A new section is placed by this order.
-const ORDER: [&str; 15] = [
+pub(crate) const ORDER: [&str; 17] = [
     "Main A",
     "Main B",
     "Main C",
@@ -36,9 +36,11 @@ const ORDER: [&str; 15] = [
     "Intro B",
     "Intro C",
     "Intro A",
+    "Intro D",
     "Ending A",
     "Ending B",
     "Ending C",
+    "Ending D",
     "Fill In BA",
 ];
 
@@ -94,37 +96,52 @@ fn meta_event(kind: u8, text: &[u8], tick: u64, id: u64) -> Result<Event> {
 }
 
 /// Add `label` to the CASM segment that covers `source_label`, so the new section shares its routes.
-fn share_casm(style: &mut Style, source_label: &str, label: &str) -> Result<()> {
+fn share_casm(style: &mut Style, doc: &Document, source_label: &str, label: &str) -> Result<()> {
+    if doc.firmware_section_has_indirect_binding(source_label) {
+        return Err(reject("CASM descriptions leave an ambiguous section binding"));
+    }
+    let resolved = doc.firmware_cseg_group(source_label);
+    if resolved.is_none() && matches!(doc.firmware_cseg_route(source_label, 1), Some(None)) {
+        return Err(reject("the chosen section has no CASM routes to share; pick another section"));
+    }
     for ci in 0..style.chunks.len() {
-        if style.chunks[ci].tag != *b"CASM" {
+        if style.chunks[ci].tag != *b"CASM" || resolved.is_some_and(|(chunk, _)| *chunk != ci) {
             continue;
         }
         let mut groups = smf::chunks(&style.chunks[ci].data)?;
-        for gi in 0..groups.len() {
-            if groups[gi].tag != *b"CSEG" {
+        let mut start = 0;
+        for group in &mut groups {
+            let records_start = start + 8;
+            start = records_start + group.data.len();
+            if group.tag != *b"CSEG" || resolved.is_some_and(|(_, range)| range.start != records_start) {
                 continue;
             }
-            let mut records = smf::chunks(&groups[gi].data)?;
-            let Some(sdec) = records.iter_mut().find(|r| r.tag == *b"Sdec") else {
-                continue;
-            };
-            let text = std::str::from_utf8(&sdec.data)
-                .map_err(|_| reject("CASM section labels are not UTF-8"))?
-                .trim_end_matches('\0')
-                .to_string();
-            let mut names: Vec<String> = text.split(',').map(|s| s.trim().to_string()).collect();
-            if !names.iter().any(|n| norm(n) == norm(source_label)) {
-                continue;
+            let mut records = smf::chunks(&group.data)?;
+            if resolved.is_some() {
+                let last_data = records.iter().rposition(|record| record.tag != *b"Sdec")
+                    .ok_or_else(|| reject("the chosen CASM group has no route data"))?;
+                let sdec = records[..last_data].iter_mut().rfind(|record| record.tag == *b"Sdec")
+                    .ok_or_else(|| reject("the chosen CASM group has no section description"))?;
+                sdec.data.push(b',');
+                sdec.data.extend_from_slice(label.as_bytes());
+            } else {
+                let Some(sdec) = records.iter_mut().find(|r| r.tag == *b"Sdec") else {
+                    continue;
+                };
+                let text = std::str::from_utf8(&sdec.data)
+                    .map_err(|_| reject("CASM section labels are not UTF-8"))?
+                    .trim_end_matches('\0');
+                let mut names: Vec<_> = text.split(',').map(str::trim).collect();
+                if !names.iter().any(|n| norm(n) == norm(source_label)) {
+                    continue;
+                }
+                if names.iter().any(|n| norm(n) == norm(label)) {
+                    return Err(reject("the CASM already lists this section"));
+                }
+                names.push(label);
+                sdec.data = names.join(",").into_bytes();
             }
-            if names.iter().any(|n| norm(n) == norm(label)) {
-                return Err(reject("the CASM already lists this section"));
-            }
-            names.push(label.to_string());
-            *sdec = Chunk {
-                tag: *b"Sdec",
-                data: names.join(",").into_bytes(),
-            };
-            groups[gi].data = smf::pack(&records)?;
+            group.data = smf::pack(&records)?;
             style.chunks[ci].data = smf::pack(&groups)?;
             return Ok(());
         }
@@ -151,7 +168,9 @@ pub(crate) fn apply(style: &mut Style, spec: AddSection) -> Result<PairChanges> 
     if doc.sections.len() == 1 && doc.sections[0].label == "Pattern" {
         return Err(reject("this file has no Yamaha section markers"));
     }
-    if doc.sections.iter().any(|s| norm(&s.label) == norm(&label)) {
+    if doc.sections.iter().any(|s| norm(&s.label) == norm(&label)
+        || doc.firmware_section_name(&s.label) == Some(label.as_str()))
+    {
         return Err(reject("the Style already has this section"));
     }
     let source = doc
@@ -174,7 +193,11 @@ pub(crate) fn apply(style: &mut Style, spec: AddSection) -> Result<PairChanges> 
         .map(|s| s.start)
         .or_else(|| doc.sections.last().map(|s| s.end))
         .ok_or_else(|| reject("no section to place the new section against"))?;
-    let bar = crate::section_length::ticks_per_bar(&doc, insert_at)?;
+    // A meter change at the insertion point moves with the following section.
+    let bar = match insert_at.checked_sub(1) {
+        Some(previous_tick) => crate::section_length::ticks_per_bar(&doc, previous_tick)?,
+        None => u64::from(doc.style.ppq) * 4,
+    };
     let delta = (spec.bars as u64)
         .checked_mul(bar)
         .ok_or_else(|| reject("section length overflow"))?;
@@ -211,9 +234,26 @@ pub(crate) fn apply(style: &mut Style, spec: AddSection) -> Result<PairChanges> 
     for t in touched {
         candidate.tracks[t].sort_by_key(|e| (e.tick, e.order, e.id));
     }
-    share_casm(&mut candidate, &source.label, &label)?;
+    share_casm(&mut candidate, &doc, &source.label, &label)?;
 
     let after_insert = Document::from_style(candidate.clone())?;
+    if doc.firmware_cseg_group(&source.label).is_some() {
+        let target = after_insert.firmware_cseg_group(&label);
+        if target.is_none() || target != after_insert.firmware_cseg_group(&source.label) {
+            return Err(reject("the new section does not share the chosen CASM routes"));
+        }
+        for old in &doc.sections {
+            for channel in 1..=16 {
+                let before = doc.firmware_cseg_route(&old.label, channel)
+                    .map(|route| route.map(|route| &route.bytes));
+                let after = after_insert.firmware_cseg_route(&old.label, channel)
+                    .map(|route| route.map(|route| &route.bytes));
+                if before != after {
+                    return Err(reject("adding the section would change an existing CASM binding"));
+                }
+            }
+        }
+    }
     let added = after_insert
         .sections
         .iter()
@@ -258,6 +298,7 @@ pub(crate) fn apply(style: &mut Style, spec: AddSection) -> Result<PairChanges> 
 mod tests {
     use super::*;
     use crate::edit::{Command, Session};
+    use crate::smf::Chunk;
     use std::{fs, path::Path};
 
     const BAR: u64 = 5760;
@@ -333,6 +374,75 @@ mod tests {
             .id
     }
 
+    #[test]
+    fn added_section_shares_the_firmware_selected_group() {
+        let export = std::env::var_os("GENOS_ADD_SECTION_REPLAY").map(std::path::PathBuf::from);
+        if let Some(dir) = &export {
+            fs::create_dir_all(dir).unwrap();
+        }
+        for mode in [1, 2] {
+            let mut style = Style::parse(&fixture()).unwrap();
+            let track = style.track_chunks[0];
+            let format = style.tracks[0].iter_mut()
+                .find(|event| event.meta(6) == Some(b"SFF2")).unwrap();
+            *format.data.last_mut().unwrap() = b'0' + mode;
+            style.chunks[track].data = smf::encode_track(&style.tracks[0]).unwrap();
+            let make_route = |root| {
+                let mut data = vec![0; if mode == 1 { 26 } else { 47 }];
+                data[0] = 10;
+                data[9] = 10;
+                data[18] = root;
+                if mode == 2 {
+                    data[21] = 127;
+                }
+                Chunk { tag: if mode == 1 { *b"Ctab" } else { *b"Ctb2" }, data }
+            };
+            let sdec = |data: &[u8]| Chunk { tag: *b"Sdec", data: data.to_vec() };
+            let group = |records: &[Chunk]| Chunk {
+                tag: *b"CSEG", data: smf::pack(records).unwrap(),
+            };
+            let donor = group(&[
+                sdec(b"prefix Main A"),
+                make_route(2),
+                sdec(b"\0Main B!"),
+                make_route(3),
+                sdec(b"Main C"),
+            ]);
+            let shadow = group(&[sdec(b"Main A"), make_route(8)]);
+            let groups = [donor, shadow.clone()];
+            let casm = style.chunks.iter().position(|chunk| chunk.tag == *b"CASM").unwrap();
+            style.chunks[casm].data = smf::pack(&groups).unwrap();
+            let before = style.bytes().unwrap();
+            let mut s = Session::open(&before, format!("SFF{mode} section sharing")).unwrap();
+            let donor_id = s.document.sections.iter().find(|section| section.label == "Main A").unwrap().id;
+            s.execute(0, add("Ending B", 1, donor_id)).unwrap();
+            let edited = s.document.style.bytes().unwrap();
+            let parsed = Document::parse(&edited).unwrap();
+            let route = parsed.firmware_cseg_route("Ending B", 11).unwrap().unwrap();
+            assert_eq!(route.bytes[18], 3);
+            assert_eq!(parsed.firmware_cseg_group("Ending B"), parsed.firmware_cseg_group("Main A"));
+            let saved = smf::chunks(&parsed.style.chunks[casm].data).unwrap();
+            let records = smf::chunks(&saved[0].data).unwrap();
+            assert_eq!(records[0].data, b"prefix Main A");
+            assert_eq!(records[2].data, b"\0Main B!,Ending B");
+            assert_eq!(records[4].data, b"Main C");
+            assert_eq!(saved[1].data, shadow.data);
+            if let Some(dir) = &export {
+                fs::write(dir.join(format!("sff{mode}-before.STY")), &before).unwrap();
+                fs::write(dir.join(format!("sff{mode}-added.STY")), &edited).unwrap();
+            }
+            s.undo().unwrap();
+            assert_eq!(s.document.style.bytes().unwrap(), before);
+
+            let orphan = group(&[sdec(b"Ending B"), make_route(5)]);
+            style.chunks[casm].data = smf::pack(&[orphan, groups[0].clone(), groups[1].clone()]).unwrap();
+            let bytes = style.bytes().unwrap();
+            let mut s = Session::open(&bytes, "Pre-existing CASM section name".into()).unwrap();
+            assert!(s.execute(0, add("Ending B", 1, donor_id)).is_err());
+            assert_eq!(s.document.style.bytes().unwrap(), bytes);
+        }
+    }
+
     fn add(label: &str, bars: u32, casm_from: u64) -> Command {
         Command::AddSection {
             label: label.into(),
@@ -384,7 +494,7 @@ mod tests {
     #[test]
     fn the_fixture_is_sparse_in_exactly_the_expected_slots() {
         let s = open(&fixture());
-        for missing in ["Fill In DD", "Ending B", "Ending C"] {
+        for missing in ["Fill In DD", "Ending B", "Ending C", "Intro D", "Ending D"] {
             assert!(s.document.sections.iter().all(|x| x.label != missing));
         }
     }
@@ -552,6 +662,58 @@ mod tests {
         assert_eq!(copied, src_notes);
         s.undo().unwrap();
         assert_eq!(s.document.style.bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn inserts_before_the_following_sections_meter_change() {
+        let mut style = Style::parse(&style_without(&["Main A"])).unwrap();
+        let doc = Document::from_style(style.clone()).unwrap();
+        let following = doc
+            .sections
+            .iter()
+            .find(|s| rank(&s.label).is_some())
+            .unwrap();
+        let tick = following.start;
+        let next_id = style
+            .tracks
+            .iter()
+            .flatten()
+            .map(|e| e.id.max(e.order))
+            .max()
+            .unwrap()
+            + 1;
+        style.tracks[0].extend([
+            Event {
+                id: next_id,
+                order: next_id,
+                tick: tick - 1,
+                data: vec![255, 88, 4, 3, 2, 24, 8],
+            },
+            Event {
+                id: next_id + 1,
+                order: next_id + 1,
+                tick,
+                data: vec![255, 88, 4, 7, 3, 24, 8],
+            },
+        ]);
+        style.tracks[0].sort_by_key(|e| (e.tick, e.order, e.id));
+        apply(
+            &mut style,
+            AddSection {
+                label: "Main A".into(),
+                bars: 2,
+                casm_from: following.id,
+                copy_from: None,
+                fit: None,
+            },
+        )
+        .unwrap();
+        let after = Document::from_style(style).unwrap();
+        let added = after.sections.iter().find(|s| s.label == "Main A").unwrap();
+        assert_eq!(added.start, tick);
+        assert_eq!(added.end, tick + 6 * u64::from(after.style.ppq));
+        assert_eq!(after.timing_at(added.start).1, 3);
+        assert_eq!(after.timing_at(added.end).1, 7);
     }
 
     #[test]

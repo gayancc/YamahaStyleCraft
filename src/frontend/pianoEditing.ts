@@ -6,6 +6,7 @@ import type {
   Section,
   View,
 } from "./contracts";
+import { sourceRegionOffset } from "./casmZones";
 
 export const clamp = (n: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, n));
@@ -127,6 +128,17 @@ export function meterAt(view: View, tick: number) {
     bar: ((view.ppq * 4) / denominator) * numerator,
   };
 }
+const tempoValue = (data: number[]) =>
+  data[3] * 65536 + data[4] * 256 + data[5];
+
+export function tempoAt(view: View, tick: number): number {
+  const latest = view.events
+    .filter((e) => e.tick <= tick && e.data[0] === 255 && e.data[1] === 0x51 &&
+      e.data[2] === 3 && tempoValue(e.data) > 0)
+    .sort((a, b) => b.tick - a.tick || b.order - a.order)[0];
+  return latest ? 60_000_000 / tempoValue(latest.data) : view.tempo;
+}
+
 export function tickFromElapsed(
   view: View,
   section: Section,
@@ -135,8 +147,6 @@ export function tickFromElapsed(
   const tempos = view.events
     .filter((e) => e.data[0] === 255 && e.data[1] === 0x51 && e.data[2] === 3)
     .sort((a, b) => a.tick - b.tick || a.order - b.order);
-  const tempoValue = (data: number[]) =>
-    data[3] * 65536 + data[4] * 256 + data[5];
   let tempo = 60_000_000 / view.tempo,
     tick = section.start,
     remaining = Math.max(0, elapsedMs);
@@ -651,10 +661,10 @@ export function casmAdvisory(
     (!routes.length && (channel === 9 || channel === 10));
   const outside = routes.some(
     (r) =>
-      r.bytes.length === 47 &&
+      r.bytes.length >= 40 &&
       notes.some((n) => {
-        const o = n.pitch < r.bytes[20] ? 22 : n.pitch > r.bytes[21] ? 34 : 28;
-        return n.pitch < r.bytes[o + 3] || n.pitch > r.bytes[o + 4];
+        const o = sourceRegionOffset(n.pitch, r.bytes[20], r.bytes[21]);
+        return n.pitch < (r.bytes[o + 3] & 127) || n.pitch > (r.bytes[o + 4] & 127);
       }),
   );
   return {

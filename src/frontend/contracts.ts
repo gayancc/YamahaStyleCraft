@@ -201,6 +201,7 @@ export type RuleField =
   "ntr" | "ntt" | "bass" | "highKey" | "noteLow" | "noteHigh" | "retrigger";
 export type RouteChange =
   | { type: "partDefaults" }
+  | { type: "genosPartDefaults" }
   | { type: "rootEnabled"; root: number; enabled: boolean }
   | { type: "autoStart"; enabled: boolean }
   | { type: "limits"; region: Region; low: number; high: number }
@@ -453,4 +454,5 @@ export interface TransportStatus {
   playing: boolean;
   elapsedMs: number;
   error: string | null;
+  section?: number | null;
 }

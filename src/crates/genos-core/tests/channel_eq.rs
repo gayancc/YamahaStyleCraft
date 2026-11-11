@@ -1,7 +1,7 @@
 //! SFM-MIXER-TAB-EQ-HIGH-LOW: static Mixer EQ via NRPN round-trip.
 use genos_core::{
     channel_eq::{self, EqBand},
-    edit::{Command, Session},
+    edit::{Command, ControllerPoint, Session},
 };
 use std::{fs, path::Path};
 
@@ -12,6 +12,75 @@ fn session() -> Session {
     )
     .unwrap();
     Session::open(&b, "eq".into()).unwrap()
+}
+
+#[test]
+fn timed_eq_batch_replaces_and_clears_only_the_selected_band() {
+    let mut s = session();
+    let section = s
+        .document
+        .sections
+        .iter()
+        .find(|x| x.label == "Main A")
+        .unwrap();
+    let (id, start) = (section.id, section.start);
+    let (first, second) = (start + 20, start + 40);
+    for (revision, band) in [EqBand::EqLow, EqBand::EqHigh].into_iter().enumerate() {
+        s.execute(
+            revision as u64,
+            Command::MixerEqPoints {
+                section: id,
+                channel: 11,
+                band,
+                points: vec![
+                    ControllerPoint {
+                        tick: first,
+                        value: 70,
+                    },
+                    ControllerPoint {
+                        tick: second,
+                        value: 71,
+                    },
+                ],
+                clear_ticks: vec![],
+            },
+        )
+        .unwrap();
+    }
+    let before = s.document.style.bytes().unwrap();
+    s.execute(
+        2,
+        Command::MixerEqPoints {
+            section: id,
+            channel: 11,
+            band: EqBand::EqLow,
+            points: vec![ControllerPoint {
+                tick: first,
+                value: 80,
+            }],
+            clear_ticks: vec![second],
+        },
+    )
+    .unwrap();
+    let events: Vec<_> = s.document.style.tracks.iter().flatten().cloned().collect();
+    assert_eq!(
+        channel_eq::value_at(&events, 11, first, EqBand::EqLow),
+        Some(80)
+    );
+    assert_eq!(
+        channel_eq::value_at(&events, 11, second, EqBand::EqLow),
+        None
+    );
+    assert_eq!(
+        channel_eq::value_at(&events, 11, first, EqBand::EqHigh),
+        Some(70)
+    );
+    assert_eq!(
+        channel_eq::value_at(&events, 11, second, EqBand::EqHigh),
+        Some(71)
+    );
+    s.undo().unwrap();
+    assert_eq!(s.document.style.bytes().unwrap(), before);
 }
 
 #[test]

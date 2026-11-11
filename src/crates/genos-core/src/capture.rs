@@ -142,6 +142,7 @@ impl MidiCapture {
                         stamp_ms: started.elapsed().as_millis() as u64,
                         data: data.to_vec(),
                         summary: midi::summarize_public(data),
+                        injected: false,
                     });
                 },
                 (),
@@ -210,11 +211,6 @@ impl MidiCapture {
             ));
         }
         let data = vec![0xb0 | (channel - 1), controller, value];
-        if let Some(thru) = self.thru.as_ref()
-            && let Ok(mut conn) = thru.lock()
-        {
-            let _ = conn.send(&data);
-        }
         let mut q = self.events.lock().unwrap_or_else(|p| p.into_inner());
         if q.len() >= MAX_EVENTS
             || self
@@ -233,8 +229,15 @@ impl MidiCapture {
             stamp_ms: started.elapsed().as_millis() as u64,
             data: data.clone(),
             summary: midi::summarize_public(&data),
+            injected: true,
         };
         q.push(ev.clone());
+        drop(q);
+        if let Some(thru) = self.thru.as_ref()
+            && let Ok(mut conn) = thru.lock()
+        {
+            let _ = conn.send(&data);
+        }
         Ok(ev)
     }
 
@@ -377,7 +380,7 @@ impl MidiCapture {
         tempo_bpm: f64,
         track: usize,
     ) -> Result<Vec<NoteInput>> {
-        self.to_note_inputs_quantized(section_start, section_end, ppq, tempo_bpm, track, 0, 0)
+        self.to_note_inputs_quantized(section_start, section_end, ppq, tempo_bpm, track, 0, 0, None)
     }
 
     /// Like `to_note_inputs`, optionally snapping note starts to `quantize_step` ticks (0 = off).
@@ -392,6 +395,7 @@ impl MidiCapture {
         track: usize,
         quantize_step: u64,
         offset_ms: i32,
+        input_channel: Option<u8>,
     ) -> Result<Vec<NoteInput>> {
         self.require_complete_take()?;
         if !tempo_bpm.is_finite() || !(20.0..=400.0).contains(&tempo_bpm) {
@@ -411,6 +415,7 @@ impl MidiCapture {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
+        let input_channel = input_channel.filter(|c| (1..=16).contains(c));
         let mut open: HashMap<(u8, u8), VecDeque<(u64, u8)>> = HashMap::new();
         let mut notes = Vec::new();
         for ev in &events {
@@ -422,8 +427,11 @@ impl MidiCapture {
             if !matches!(kind, 0x80 | 0x90) {
                 continue;
             }
-            validate_message(&ev.data)?;
             let ch = (st & 0x0f) + 1;
+            if input_channel.is_some_and(|channel| channel != ch) {
+                continue;
+            }
+            validate_message(&ev.data)?;
             let pitch = ev.data[1];
             let vel = ev.data[2];
             let adjusted_ms = ev.stamp_ms as i64 - offset_ms as i64;
@@ -505,6 +513,7 @@ impl MidiCapture {
         track: usize,
         quantize_step: u64,
         offset_ms: i32,
+        input_channel: Option<u8>,
     ) -> Result<Vec<crate::edit::ChannelEventInput>> {
         self.require_complete_take()?;
         if !tempo_bpm.is_finite() || !(20.0..=400.0).contains(&tempo_bpm) {
@@ -525,6 +534,7 @@ impl MidiCapture {
             .unwrap_or_else(|p| p.into_inner())
             .clone();
         let len = section_end - section_start;
+        let input_channel = input_channel.filter(|c| (1..=16).contains(c));
         let mut out = Vec::new();
         for ev in &events {
             if ev.data.is_empty() {
@@ -533,6 +543,9 @@ impl MidiCapture {
             let st = ev.data[0];
             let kind = st & 0xf0;
             if !matches!(kind, 0xb0 | 0xc0 | 0xd0 | 0xe0) {
+                continue;
+            }
+            if !ev.injected && input_channel.is_some_and(|channel| channel != (st & 0x0f) + 1) {
                 continue;
             }
             validate_message(&ev.data)?;
@@ -586,20 +599,6 @@ impl MidiCapture {
     }
 }
 /// SFM Recording Channel: keep only events on `channel` (1..=16).
-/// `None` / out-of-range = OMNI (no filter). Applied before arm remap.
-pub fn retain_input_channel(
-    notes: &mut Vec<crate::edit::NoteInput>,
-    channel_events: &mut Vec<crate::edit::ChannelEventInput>,
-    channel: Option<u8>,
-) {
-    let Some(filter) = channel.filter(|c| (1..=16).contains(c)) else {
-        return;
-    };
-    notes.retain(|n| n.channel == filter);
-    channel_events
-        .retain(|ev| !ev.data.is_empty() && ev.data[0] < 0xf0 && (ev.data[0] & 0x0f) + 1 == filter);
-}
-
 fn validate_message(data: &[u8]) -> Result<()> {
     if data.is_empty()
         || !(0x80..=0xef).contains(&data[0])
@@ -633,6 +632,7 @@ mod tests {
                 stamp_ms: *stamp,
                 data: data.to_vec(),
                 summary: String::new(),
+                injected: false,
             })
             .collect();
         cap
@@ -643,7 +643,7 @@ mod tests {
         // 120 BPM, PPQ 480 → 0.96 tick/ms; onset ~106 snaps to 120 with step 120.
         let cap = take(&[(110, &[0x90, 60, 90]), (200, &[0x80, 60, 0])]);
         let notes = cap
-            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 120, 0)
+            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 120, 0, None)
             .unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].start, 120);
@@ -657,12 +657,12 @@ mod tests {
         // +50ms offset → 50ms ≈ 48 ticks.
         let cap = take(&[(100, &[0x90, 60, 90]), (200, &[0x80, 60, 0])]);
         let notes = cap
-            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 0, 50)
+            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 0, 50, None)
             .unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].start, 48);
         let late = cap
-            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 0, -50)
+            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 0, -50, None)
             .unwrap();
         assert_eq!(late[0].start, 144);
     }
@@ -823,11 +823,13 @@ mod tests {
                 stamp_ms: 0,
                 data: vec![0x90, 60, 100],
                 summary: "Note On".into(),
+                injected: false,
             });
             ev.push(MonitorEvent {
                 stamp_ms: 500,
                 data: vec![0x80, 60, 0],
                 summary: "Note Off".into(),
+                injected: false,
             });
         }
         {
@@ -858,7 +860,7 @@ mod tests {
             (200, &[0xc0, 12]),
         ]);
         let evs = cap
-            .to_channel_events_quantized(0, 1920, 480, 120.0, 0, 120, 0)
+            .to_channel_events_quantized(0, 1920, 480, 120.0, 0, 120, 0, None)
             .unwrap();
         assert_eq!(evs.len(), 3);
         assert_eq!(evs[0].data, vec![0xb0, 7, 100]);
@@ -883,47 +885,43 @@ mod tests {
     }
 
     #[test]
-    fn retain_input_channel_filters_notes_and_cc_before_remap() {
-        use crate::edit::{ChannelEventInput, NoteInput};
-        let mut notes = vec![
-            NoteInput {
-                track: 0,
-                channel: 1,
-                pitch: 60,
-                velocity: 80,
-                start: 0,
-                duration: 120,
-            },
-            NoteInput {
-                track: 0,
-                channel: 3,
-                pitch: 64,
-                velocity: 80,
-                start: 0,
-                duration: 120,
-            },
-        ];
-        let mut evs = vec![
-            ChannelEventInput {
-                track: 0,
-                tick: 0,
-                data: vec![0xb0, 7, 100], // CH1
-            },
-            ChannelEventInput {
-                track: 0,
-                tick: 10,
-                data: vec![0xb2, 7, 90], // CH3
-            },
-        ];
-        retain_input_channel(&mut notes, &mut evs, None);
-        assert_eq!(notes.len(), 2);
-        assert_eq!(evs.len(), 2);
-        retain_input_channel(&mut notes, &mut evs, Some(3));
+    fn injected_controllers_survive_the_external_input_channel_filter() {
+        let mut cap = take(&[(0, &[0xba, 11, 20])]);
+        cap.started = Some(Instant::now());
+        cap.inject_cc(11, 11, 80).unwrap();
+        cap.stop();
+
+        let events = cap
+            .to_channel_events_quantized(0, 480, 480, 120.0, 0, 0, 0, Some(3))
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, [0xba, 11, 80]);
+        assert_eq!(cap.snapshot().event_count, 2);
+    }
+
+    #[test]
+    fn capture_filters_input_before_pairing_and_timing_validation() {
+        let cap = take(&[
+            (10, &[0x92, 64, 90]),
+            (20, &[0xb2, 11, 80]),
+            (30, &[0x82, 64, 0]),
+            (40, &[0x90, 60, 90]), // CH1 note never released.
+            (5000, &[0xb0, 11, 100]), // CH1 controller outside the section.
+        ]);
+        let notes = cap
+            .to_note_inputs_quantized(0, 480, 480, 120.0, 0, 0, 0, Some(3))
+            .unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].channel, 3);
-        assert_eq!(evs.len(), 1);
-        assert_eq!(evs[0].data[0], 0xb2);
-        retain_input_channel(&mut notes, &mut evs, Some(99));
-        assert_eq!(notes.len(), 1);
+        let events = cap
+            .to_channel_events_quantized(0, 480, 480, 120.0, 0, 0, 0, Some(3))
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, [0xb2, 11, 80]);
+
+        assert!(cap.to_note_inputs(0, 480, 480, 120.0, 0).is_err());
+        assert!(cap
+            .to_channel_events_quantized(0, 480, 480, 120.0, 0, 0, 0, None)
+            .is_err());
     }
 }

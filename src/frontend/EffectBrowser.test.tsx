@@ -173,6 +173,7 @@ describe("EffectBrowser", () => {
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(mocks.invoke).toHaveBeenCalledWith("apply_style_effects", {
       revision: 3,
+      docLabel: "main",
       changes: [
         { block: "reverb", effect: { msb: 1, lsb: 32 }, returnLevel: 100 },
       ],
@@ -217,6 +218,7 @@ describe("EffectBrowser", () => {
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("apply_style_effects", {
         revision: 3,
+        docLabel: "main",
         changes: [{ block: "chorus", effect: null, returnLevel: 0 }],
       }),
     );

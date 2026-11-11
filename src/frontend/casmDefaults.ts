@@ -2,7 +2,7 @@ import defaults from "../crates/genos-core/assets/casm-part-defaults.json";
 
 /** Draft the same named-field reset as native PartDefaults; retain opaque data. */
 export function partDefaultBytes(bytes: number[]): number[] {
-  if (bytes.length < 47 || bytes[9] < 8 || bytes[9] > 15)
+  if (bytes.length < 40 || bytes[9] < 8 || bytes[9] > 15)
     throw new Error("CASM part defaults require a Ctb2 destination 9–16");
   const row = defaults[bytes[9] - 8];
   const next = [...bytes];

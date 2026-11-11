@@ -7,6 +7,11 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+pub(crate) fn supported_ctb2_size(size: usize) -> bool {
+    // The three region rules occupy bytes 22 through 39.
+    size >= 40
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Region {
@@ -43,6 +48,7 @@ pub enum RuleField {
 )]
 pub enum RouteChange {
     PartDefaults,
+    GenosPartDefaults,
     RootEnabled {
         root: u8,
         enabled: bool,
@@ -121,18 +127,34 @@ fn labels(records: &[Chunk]) -> Result<Vec<String>> {
 fn set_labels(records: &mut [Chunk], names: &[String]) {
     records.iter_mut().find(|r| r.tag == *b"Sdec").unwrap().data = names.join(",").into_bytes();
 }
+
 fn route_matches(record: &Chunk, source: u8, destination: u8) -> bool {
     record.tag == *b"Ctb2"
-        && record.data.len() == 47
+        && supported_ctb2_size(record.data.len())
         && record.data[0] == source - 1
         && record.data[9] == destination - 1
 }
-// Find a unique route, and split its CSEG if other sections share it.
+// Find the playback route and split its CSEG if other sections share it.
 type IsolatedRoute = (usize, Vec<Chunk>, usize, Vec<Chunk>, usize);
 fn isolate(style: &mut Style, label: &str, source: u8, destination: u8) -> Result<IsolatedRoute> {
     if !(1..=16).contains(&source) || !(1..=16).contains(&destination) {
         return Err(reject("invalid route channels"));
     }
+    let document = Document::from_style(style.clone())?;
+    if document.firmware_section_has_indirect_binding(label) {
+        return Err(reject("CASM descriptions leave an ambiguous section binding"));
+    }
+    let resolved = match document.firmware_cseg_route(label, source) {
+        Some(Some(route)) if route.destination == destination => Some((route.chunk, route.offset)),
+        Some(_) => return Err(reject("selected route does not control playback for this section")),
+        None => None,
+    };
+    let label = if resolved.is_some() {
+        document.firmware_section_name(label)
+            .ok_or_else(|| reject("verified section marker not found"))?
+    } else {
+        label
+    };
     let mut found = None;
     for (ci, chunk) in style
         .chunks
@@ -141,25 +163,59 @@ fn isolate(style: &mut Style, label: &str, source: u8, destination: u8) -> Resul
         .filter(|(_, c)| c.tag == *b"CASM")
     {
         let groups = smf::chunks(&chunk.data)?;
-        for (gi, group) in groups.iter().enumerate().filter(|(_, g)| g.tag == *b"CSEG") {
+        let mut next_group = 0;
+        for (gi, group) in groups.iter().enumerate() {
+            let group_start = next_group + 8;
+            next_group = group_start + group.data.len();
+            if group.tag != *b"CSEG"
+                || resolved.is_some_and(|(chunk, offset)| {
+                    chunk != ci || !(group_start..next_group).contains(&offset)
+                })
+            {
+                continue;
+            }
             let records = smf::chunks(&group.data)?;
-            let names = labels(&records)?;
+            let repeated = resolved.is_some()
+                && records.iter().filter(|r| r.tag == *b"Sdec").count() > 1;
+            let names = if resolved.is_some() {
+                crate::document::firmware_sdec_sections(&records).map(str::to_owned).collect()
+            } else {
+                labels(&records)?
+            };
             if names.iter().any(|n| n == label) {
+                let mut next_record = group_start;
                 for (ri, record) in records.iter().enumerate() {
-                    if route_matches(record, source, destination) {
+                    let offset = next_record + 8;
+                    next_record = offset + record.data.len();
+                    if resolved.is_none_or(|position| position == (ci, offset))
+                        && route_matches(record, source, destination)
+                    {
                         if found.is_some() {
                             return Err(reject("ambiguous source route binding"));
                         }
-                        found = Some((ci, groups.clone(), gi, records.clone(), ri, names.clone()));
+                        found = Some((ci, groups.clone(), gi, records.clone(), ri, names.clone(), repeated));
                     }
                 }
             }
         }
     }
-    let (ci, mut groups, mut gi, mut records, ri, names) =
+    let (ci, mut groups, mut gi, mut records, mut ri, names, repeated) =
         found.ok_or_else(|| reject("verified section source route not found"))?;
     if names.len() > 1 {
         let mut siblings = records.clone();
+        if repeated {
+            let end = siblings.iter().rposition(|r| r.tag != *b"Sdec").unwrap();
+            siblings = siblings.into_iter().enumerate().filter_map(|(index, record)| {
+                (index == 0 || index > end || record.tag != *b"Sdec").then_some(record)
+            }).collect();
+            ri -= records[1..ri].iter().filter(|r| r.tag == *b"Sdec").count();
+            let mut index = 0;
+            records.retain(|record| {
+                let keep = index == 0 || record.tag != *b"Sdec";
+                index += 1;
+                keep
+            });
+        }
         set_labels(
             &mut siblings,
             &names.into_iter().filter(|n| n != label).collect::<Vec<_>>(),
@@ -197,12 +253,35 @@ fn set_bit(bytes: &mut [u8], chord: u8, enabled: bool) {
         bytes[index] &= !mask;
     }
 }
+fn apply_genos_part_defaults(bytes: &mut [u8]) -> Result<()> {
+    let tables = crate::firmware_ntt::configured()?.ok_or_else(|| {
+        reject("Configure GENOS_NTT_PRG or GENOS_NTT_ELF to use Genos part defaults")
+    })?;
+    let preset = tables.casm_default(bytes[9])
+        .ok_or_else(|| reject("Genos part defaults require destination 9–16"))?;
+    bytes[11] = (bytes[11] & !15) | (preset[11] & 15);
+    bytes[12] = preset[12];
+    bytes[13] = (bytes[13] & !7) | (preset[13] & 7);
+    bytes[14..40].copy_from_slice(&preset[14..40]);
+    Ok(())
+}
+
+/// Draft a Genos reset for a single Ctb2 payload.
+pub fn genos_part_defaults(mut bytes: Vec<u8>) -> Result<Vec<u8>> {
+    if !supported_ctb2_size(bytes.len()) {
+        return Err(reject("Genos part defaults require at least 40 Ctb2 payload bytes"));
+    }
+    apply_genos_part_defaults(&mut bytes)?;
+    Ok(bytes)
+}
+
 fn change(bytes: &mut [u8], changes: &[RouteChange]) -> Result<()> {
     if changes.len() > 128 {
         return Err(reject("too many route changes"));
     }
     for change in changes {
         match *change {
+            RouteChange::GenosPartDefaults => apply_genos_part_defaults(bytes)?,
             RouteChange::PartDefaults => {
                 // Observed StyleMagic 3.7.1.3 default tables and saved Ctb2
                 // records. Rows: Auto Start, NTR, NTT/Bass, high key, limits, RTR.
@@ -297,6 +376,18 @@ fn change(bytes: &mut [u8], changes: &[RouteChange]) -> Result<()> {
 }
 // Enumerate all destination siblings, failing closed on malformed/opaque routes.
 fn siblings(style: &Style, label: &str, destination: u8) -> Result<Vec<u8>> {
+    let document = Document::from_style(style.clone())?;
+    if let Some(routes) = (1..=16)
+        .map(|source| document.firmware_cseg_route(label, source))
+        .collect::<Option<Vec<_>>>()
+    {
+        return Ok(routes
+            .into_iter()
+            .flatten()
+            .filter(|route| route.destination == destination)
+            .map(|route| route.source)
+            .collect());
+    }
     let mut result = Vec::new();
     for c in style.chunks.iter().filter(|c| c.tag == *b"CASM") {
         for group in smf::chunks(&c.data)?.iter().filter(|g| g.tag == *b"CSEG") {
@@ -307,7 +398,7 @@ fn siblings(style: &Style, label: &str, destination: u8) -> Result<Vec<u8>> {
             for record in records {
                 if record.tag == *b"Ctab"
                     || (record.tag == *b"Ctb2"
-                        && (record.data.len() != 47
+                        && (!supported_ctb2_size(record.data.len())
                             || record.data[0] >= 16
                             || record.data[9] >= 16))
                 {
@@ -343,10 +434,12 @@ pub(crate) fn apply(
         .find(|s| s.id == section)
         .ok_or_else(|| reject("section not found"))?
         .clone();
+    let firmware_name = initial.firmware_section_name(&section.label);
     if initial
         .sections
         .iter()
-        .filter(|s| s.label == section.label)
+        .filter(|s| s.label == section.label
+            || firmware_name.is_some_and(|name| initial.firmware_section_name(&s.label) == Some(name)))
         .count()
         != 1
     {
@@ -453,7 +546,8 @@ pub(crate) fn apply(
                 for chord in 0..34 {
                     set_bit(&mut record.data, chord, false);
                 }
-                records.push(record);
+                let insert = records.iter().rposition(|r| r.tag != *b"Sdec").unwrap() + 1;
+                records.insert(insert, record);
                 save(style, ci, groups, gi, records)?;
                 let note_ids: std::collections::HashSet<_> = current
                     .notes

@@ -101,6 +101,15 @@ pub fn value_at(events: &[Event], channel: u8, tick: u64, band: EqBand) -> Optio
 /// Tracks packet member indices in the outer state machine so interleaved
 /// non-EQ CCs at the same tick do not break removal.
 pub fn packet_indices(events: &[Event], channel: u8, tick: u64, band: EqBand) -> Vec<usize> {
+    matching_packet_indices(events, channel, band, |event_tick| event_tick == tick)
+}
+
+pub(crate) fn matching_packet_indices(
+    events: &[Event],
+    channel: u8,
+    band: EqBand,
+    includes_tick: impl Fn(u64) -> bool,
+) -> Vec<usize> {
     if !(1..=16).contains(&channel) {
         return Vec::new();
     }
@@ -110,54 +119,51 @@ pub fn packet_indices(events: &[Event], channel: u8, tick: u64, band: EqBand) ->
     // 0 idle, 1 after MSB=1, 2 after LSB match, 3 after data, 4 after RPN MSB
     let mut phase = 0u8;
     let mut packet = [0usize; 5];
+    let mut packet_tick = None;
     for (i, e) in events.iter().enumerate() {
-        if e.tick != tick || e.data.len() != 3 || e.data[0] != status {
+        if !includes_tick(e.tick) || e.data.len() != 3 || e.data[0] != status {
             continue;
         }
+        if packet_tick != Some(e.tick) {
+            phase = 0;
+            packet_tick = Some(e.tick);
+        }
         let (cc, val) = (e.data[1], e.data[2]);
+        // A new selector supersedes an incomplete packet at any phase.
+        if cc == NRPN_MSB {
+            phase = if val == NRPN_MSB_VALUE {
+                packet[0] = i;
+                1
+            } else {
+                0
+            };
+            continue;
+        }
         // Ignore unrelated CCs at this tick; only EQ NRPN steps advance/reset.
         match phase {
-            0 if cc == NRPN_MSB && val == NRPN_MSB_VALUE => {
-                phase = 1;
-                packet[0] = i;
-            }
             1 if cc == NRPN_LSB && val == want_lsb => {
                 phase = 2;
                 packet[1] = i;
-            }
-            1 if cc == NRPN_MSB && val == NRPN_MSB_VALUE => {
-                packet[0] = i;
-            }
-            1 if matches!(cc, NRPN_MSB | NRPN_LSB | DATA_ENTRY | RPN_MSB | RPN_LSB) => {
-                phase = 0;
             }
             2 if cc == DATA_ENTRY => {
                 phase = 3;
                 packet[2] = i;
             }
-            2 if matches!(cc, NRPN_MSB | NRPN_LSB | DATA_ENTRY | RPN_MSB | RPN_LSB) => {
-                phase = 0;
-            }
             3 if cc == RPN_MSB && val == NULL_RPN => {
                 phase = 4;
                 packet[3] = i;
-            }
-            3 if matches!(cc, NRPN_MSB | NRPN_LSB | DATA_ENTRY | RPN_MSB | RPN_LSB) => {
-                phase = 0;
             }
             4 if cc == RPN_LSB && val == NULL_RPN => {
                 packet[4] = i;
                 out.extend_from_slice(&packet);
                 phase = 0;
             }
-            4 if matches!(cc, NRPN_MSB | NRPN_LSB | DATA_ENTRY | RPN_MSB | RPN_LSB) => {
+            _ if matches!(cc, NRPN_LSB | DATA_ENTRY | RPN_MSB | RPN_LSB) => {
                 phase = 0;
             }
             _ => {}
         }
     }
-    out.sort_unstable();
-    out.dedup();
     out
 }
 
@@ -198,6 +204,42 @@ mod tests {
         ];
         assert_eq!(value_at(&events, 9, 0, EqBand::EqLow), None);
         assert!(packet_indices(&events, 9, 0, EqBand::EqLow).is_empty());
+    }
+
+    #[test]
+    fn complete_packet_after_each_incomplete_prefix_is_found() {
+        let packet = nrpn_packet(EqBand::EqLow, 80);
+        for prefix in 1..packet.len() {
+            let events: Vec<_> = packet[..prefix]
+                .iter()
+                .chain(&packet)
+                .enumerate()
+                .map(|(i, &(controller, value))| cc(0, 11, controller, value, i as u64))
+                .collect();
+            assert_eq!(
+                packet_indices(&events, 11, 0, EqBand::EqLow),
+                (prefix..events.len()).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn batch_does_not_join_selectors_and_data_across_ticks() {
+        let packet = nrpn_packet(EqBand::EqLow, 80);
+        let events: Vec<_> = packet
+            .iter()
+            .chain(&packet)
+            .enumerate()
+            .map(|(i, &(controller, value))| {
+                let tick = if i < 2 { 10 } else if i < 5 { 20 } else { 30 };
+                cc(tick, 11, controller, value, i as u64)
+            })
+            .collect();
+        assert_eq!(
+            matching_packet_indices(&events, 11, EqBand::EqLow, |_| true),
+            vec![5, 6, 7, 8, 9]
+        );
+        assert!(matching_packet_indices(&events, 11, EqBand::EqLow, |tick| tick != 30).is_empty());
     }
 
     #[test]

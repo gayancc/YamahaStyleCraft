@@ -8,6 +8,7 @@ import {
   EQ_HIGH_LANE,
   EQ_LOW_LANE,
   meterAt,
+  tempoAt,
   moveBounds,
   nearestGridTick,
   quantizeStep,
@@ -362,6 +363,8 @@ it("reads section meter and integrates tempo changes for playhead timing", () =>
     bar: 1680,
   });
   expect(tickFromElapsed(view, section, 500)).toBe(2400);
+  expect(tempoAt(view, 2399)).toBe(120);
+  expect(tempoAt(view, 2400)).toBe(60);
   expect(tickFromElapsed(view, section, 1500)).toBe(2880);
 });
 it("CASM warning uses routed drum destinations without modifying source notes", () => {
@@ -378,4 +381,19 @@ it("CASM warning uses routed drum destinations without modifying source notes", 
     ],
   } as View;
   expect(casmAdvisory(view, section, 11, ns).drum).toBe(true);
+});
+
+it("CASM advisory selects the high rule for a signed imported upper zone", () => {
+  const bytes = Array(47).fill(0);
+  bytes[20] = 128;
+  bytes[21] = 255;
+  bytes[37] = 128 | 61;
+  bytes[38] = 127;
+  const view = {
+    routes: [{ source: 11, destination: 11, sections: ["Main A"], bytes }],
+  } as View;
+  expect(casmAdvisory(view, section, 11, [note(1, 2040, 60)]).text)
+    .toContain("beyond a CASM output range");
+  expect(casmAdvisory(view, section, 11, [note(2, 2040, 61)]).text)
+    .toContain("CASM source rules");
 });

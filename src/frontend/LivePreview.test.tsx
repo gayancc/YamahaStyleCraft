@@ -150,7 +150,7 @@ it("surfaces unsupported rules and stops before closing on Escape", async () => 
   mock.invoke.mockResolvedValue(undefined);
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
   await waitFor(() => expect(props.onClose).toHaveBeenCalled());
-  expect(mock.invoke).toHaveBeenLastCalledWith("stop");
+  expect(mock.invoke).toHaveBeenLastCalledWith("stop", { docLabel: "main" });
 });
 it("requires an output and locks configuration during playback while keeping Stop usable", async () => {
   const r = render(<LivePreview {...props} output={null} />);
@@ -171,7 +171,7 @@ it("requires an output and locks configuration during playback while keeping Sto
     )?.disabled,
   ).toBe(true);
   fireEvent.click(screen.getByText("Stop"));
-  await waitFor(() => expect(mock.invoke).toHaveBeenLastCalledWith("stop"));
+  await waitFor(() => expect(mock.invoke).toHaveBeenLastCalledWith("stop", { docLabel: "main" }));
 });
 
 it("includes optional slash bass only after selection and invalidates its reviewed plan", async () => {
@@ -182,6 +182,9 @@ it("includes optional slash bass only after selection and invalidates its review
   fireEvent.change(screen.getByLabelText("Chord 1 bass"), {
     target: { value: "4" },
   });
+  fireEvent.change(screen.getByLabelText("Chord 1 bass quality"), {
+    target: { value: "Minor" },
+  });
   fireEvent.click(screen.getByText("Check live preview"));
   await screen.findByText("Preview ready");
   expect(mock.invoke.mock.calls[0][1].config.chords[0]).toEqual({
@@ -189,6 +192,7 @@ it("includes optional slash bass only after selection and invalidates its review
     quality: "Major",
     bars: 1,
     bass: 4,
+    bassQuality: "Minor",
   });
   fireEvent.change(screen.getByLabelText("Chord 1 bass"), {
     target: { value: "" },

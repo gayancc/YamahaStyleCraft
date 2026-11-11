@@ -39,7 +39,7 @@ export function NativeDrumSetup({
   output?: { index: number; name: string } | null;
   onClose: () => void;
 }) {
-  const { view } = useStudio();
+  const { view, docLabel } = useStudio();
   const [original] = useState(view!);
   const [context, setContext] = useState<NativeDrumContext | null>(null);
   const [note, setNote] = useState(36),
@@ -59,6 +59,7 @@ export function NativeDrumSetup({
     void invoke<NativeDrumContext>("inspect_native_drums", {
       channel,
       revision: original.revision,
+      docLabel,
     })
       .then((value) => {
         if (live) {
@@ -73,7 +74,7 @@ export function NativeDrumSetup({
       live = false;
       previous?.focus();
     };
-  }, [channel, original]);
+  }, [channel, original, docLabel]);
   const key = context?.header.keys.find((k) => k.note === note);
   const filteredKeys =
     context?.header.keys.filter((k) => {
@@ -159,6 +160,7 @@ export function NativeDrumSetup({
       const next = await invoke<View>("apply_native_drums", {
         channel,
         revision: original.revision,
+        docLabel,
         address: context.header.address,
         changes,
       });
@@ -201,6 +203,7 @@ export function NativeDrumSetup({
       const next = await invoke<View>("reset_native_drums", {
         channel,
         revision: original.revision,
+        docLabel,
         address: context.header.address,
         notes,
       });

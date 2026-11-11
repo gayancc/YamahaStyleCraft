@@ -33,9 +33,17 @@ for (const record of audit.sourceFiles)
     record.sha256,
     `Source changed after verification: ${record.path}`,
   );
+const nsisDir = path.join("target/release/bundle/nsis");
+const setupRel =
+  fs
+    .readdirSync(nsisDir)
+    .filter((n) => /-setup\.exe$/i.test(n))
+    .map((n) => path.join(nsisDir, n))
+    .sort()
+    .at(-1) ?? path.join(nsisDir, "missing-setup.exe");
 const artifacts = [
   "target/release/genos-style-studio.exe",
-  "target/release/bundle/nsis/GenosStyleStudio_0.1.0_x64-setup.exe",
+  setupRel,
 ].map((file) => {
   const bytes = fs.readFileSync(file);
   return { path: path.resolve(file), bytes: bytes.length, sha256: hash(bytes) };

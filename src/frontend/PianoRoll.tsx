@@ -547,10 +547,8 @@ export function PianoRoll({
     if (!ns.length) return;
     const first = Math.min(...ns.map((n) => n.start)),
       last = Math.max(...ns.map((n) => n.start + n.duration));
-    const dt = Math.max(
-      1,
-      Math.ceil((last - first) / Math.max(1, grid)) * Math.max(1, grid),
-    );
+    const step = snap ? Math.max(1, grid) : 1;
+    const dt = Math.ceil((last - first) / step) * step;
     const add = ns.map((n) => ({
       ...noteInput(n),
       start: n.start + Math.round(dt),
@@ -1053,7 +1051,7 @@ export function PianoRoll({
       ) {
         e.preventDefault();
         const ns = notes.filter((n) => selectedSet.has(n.id));
-        const delta = e.altKey ? 1 : Math.max(1, Math.round(grid));
+        const delta = e.altKey || !snap ? 1 : Math.max(1, Math.round(grid));
         const { dt, dp } = moveBounds(
           ns,
           section,
@@ -1188,6 +1186,7 @@ export function PianoRoll({
     busy,
     disabled,
     grid,
+    snap,
     commitPreview,
   ]);
   if (!view || !section) return null;

@@ -30,7 +30,7 @@ export function EffectBrowser({
   output: { index: number; name: string } | null;
   onClose: () => void;
 }) {
-  const { view } = useStudio();
+  const { view, docLabel } = useStudio();
   const [original] = useState(view);
   const [header, setHeader] = useState<StyleEffectHeader | null>(null);
   const [headerError, setHeaderError] = useState<string | null>(null);
@@ -78,6 +78,7 @@ export function EffectBrowser({
     if (original)
       void invoke<StyleEffectHeader>("inspect_style_effects", {
         revision: original.revision,
+        docLabel,
       })
         .then((h) => {
           if (live) setHeader(h);
@@ -88,7 +89,7 @@ export function EffectBrowser({
     return () => {
       live = false;
     };
-  }, [original]);
+  }, [original, docLabel]);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -237,6 +238,7 @@ export function EffectBrowser({
     try {
       const next = await invoke<View>("apply_style_effects", {
         revision: original.revision,
+        docLabel,
         changes: [
           {
             block: fileBlock,

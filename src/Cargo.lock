@@ -1239,6 +1239,7 @@ dependencies = [
 name = "genos-core"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "midir",
  "midly",
  "pdf-extract",

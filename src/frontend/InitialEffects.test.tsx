@@ -48,7 +48,7 @@ it("starts unchecked and only preflights on explicit selection, without sending 
     }),
   );
   expect(mocks.invoke.mock.calls).toEqual([
-    ["preview_style_effects", { revision: 3 }],
+    ["preview_style_effects", { revision: 3, docLabel: "main" }],
   ]);
 });
 it("reports late changes and unchecks without native calls", () => {

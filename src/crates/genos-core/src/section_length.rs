@@ -7,7 +7,7 @@ use crate::{
     smf::{Event, Style},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
@@ -20,11 +20,6 @@ pub enum SectionLengthOp {
 
 fn reject(message: &str) -> Error {
     Error::Edit(message.into())
-}
-
-pub(crate) struct PairChanges {
-    pub removed: Vec<u64>,
-    pub added: Vec<(u64, u64)>,
 }
 
 fn is_fill_break(label: &str) -> bool {
@@ -40,12 +35,11 @@ pub(crate) fn ticks_per_bar(doc: &Document, at: u64) -> Result<u64> {
     if num == 0 || den == 0 || ![1u16, 2, 4, 8, 16, 32].contains(&den) {
         return Err(reject("unsupported meter for section length"));
     }
-    let ppq = doc.style.ppq as u64;
-    let bar = ppq
-        .checked_mul(4)
-        .and_then(|v| v.checked_div(den as u64))
-        .and_then(|v| v.checked_mul(num as u64))
-        .ok_or_else(|| reject("section bar length overflow"))?;
+    let scaled = u64::from(doc.style.ppq) * 4 * u64::from(num);
+    if !scaled.is_multiple_of(u64::from(den)) {
+        return Err(reject("meter does not produce a whole number of ticks per bar"));
+    }
+    let bar = scaled / u64::from(den);
     if bar == 0 {
         return Err(reject("section bar length is zero"));
     }
@@ -70,7 +64,7 @@ fn has_midi_past(doc: &Document, start: u64, cutoff: u64, end: u64) -> bool {
         if e.tick < start || e.tick >= end {
             continue;
         }
-        if e.meta(6).is_some() {
+        if e.meta(6).is_some() || (e.tick == cutoff && e.is_off()) {
             continue;
         }
         if e.tick >= cutoff {
@@ -112,12 +106,12 @@ pub(crate) fn shift_ticks(style: &mut Style, from: u64, delta: i64, touched: &mu
     }
 }
 
-/// Apply Fill/Break length or Shorten Section. Returns note pair changes for Session bookkeeping.
+/// Apply Fill/Break length or Shorten Section. Returns removed note-on IDs for Session bookkeeping.
 pub(crate) fn apply(
     style: &mut Style,
     section_id: u64,
     op: SectionLengthOp,
-) -> Result<PairChanges> {
+) -> Result<Vec<u64>> {
     let doc = Document::from_style(style.clone())?;
     let sec = section(&doc, section_id)?;
     let bar = ticks_per_bar(&doc, sec.start)?;
@@ -149,10 +143,7 @@ pub(crate) fn apply(
         .checked_mul(bar)
         .ok_or_else(|| reject("section length overflow"))?;
     if new_len == old_len {
-        return Ok(PairChanges {
-            removed: vec![],
-            added: vec![],
-        });
+        return Ok(Vec::new());
     }
     let old_end = sec.end;
     let new_end = sec.start + new_len;
@@ -165,20 +156,10 @@ pub(crate) fn apply(
     }
 
     let mut removed = Vec::new();
-    let mut added = Vec::new();
     let mut touched = HashSet::new();
-    let mut next = style
-        .tracks
-        .iter()
-        .flatten()
-        .map(|e| e.id.max(e.order))
-        .max()
-        .unwrap_or(0)
-        + 1;
 
     if clip && delta < 0 {
-        // Clip / remove material in [new_end, old_end) before shifting the tail.
-        let mut keep_notes: Vec<(usize, u8, u64, u8, u8, u64)> = Vec::new();
+        let mut clipped_offs = HashMap::new();
         let mut edge_ids = HashSet::new();
         for n in &doc.notes {
             if n.start < sec.start || n.start >= old_end {
@@ -191,11 +172,7 @@ pub(crate) fn apply(
                 continue;
             }
             if n.start + n.duration > new_end {
-                let duration = (new_end - n.start).max(1);
-                edge_ids.insert(n.id);
-                edge_ids.insert(n.off_id);
-                keep_notes.push((n.track, n.channel, n.start, n.pitch, n.velocity, duration));
-                removed.push(n.id);
+                clipped_offs.insert(n.off_id, new_end);
             }
         }
         for (track, es) in style.tracks.iter_mut().enumerate() {
@@ -219,30 +196,12 @@ pub(crate) fn apply(
             if es.len() != before {
                 touched.insert(track);
             }
-        }
-        // Re-insert clipped notes.
-        for (track, channel, start, pitch, velocity, duration) in keep_notes {
-            let es = style
-                .tracks
-                .get_mut(track)
-                .ok_or_else(|| reject("track not found"))?;
-            let on = next;
-            let off = next + 1;
-            next += 2;
-            added.push((on, off));
-            es.push(Event {
-                id: on,
-                tick: start,
-                order: on,
-                data: vec![0x90 | (channel - 1), pitch, velocity],
-            });
-            es.push(Event {
-                id: off,
-                tick: start + duration,
-                order: off,
-                data: vec![0x80 | (channel - 1), pitch, 0],
-            });
-            touched.insert(track);
+            for event in es {
+                if let Some(&tick) = clipped_offs.get(&event.id) {
+                    event.tick = tick;
+                    touched.insert(track);
+                }
+            }
         }
     }
 
@@ -261,7 +220,7 @@ pub(crate) fn apply(
             "section length change did not produce the requested duration",
         ));
     }
-    Ok(PairChanges { removed, added })
+    Ok(removed)
 }
 
 #[cfg(test)]
@@ -311,12 +270,8 @@ mod tests {
     }
 
     #[test]
-    fn fill_break_shorten_rejects_when_events_would_be_lost() {
+    fn fill_break_shorten_keeps_releases_at_the_new_boundary() {
         let mut s = session();
-        // Lengthen first so we can put notes only in bar 1… actually Fill AA is 1 bar.
-        // Use Main A with Shorten instead for clip; for FillBreak rejection use a fill
-        // that has notes and try bars=1 when already 1 → no-op. Lengthen then the
-        // lengthened empty region can shrink via FillBreak; shrinking into notes fails.
         let fill = s
             .document
             .sections
@@ -332,8 +287,35 @@ mod tests {
             },
         )
         .unwrap();
-        // Fill still has its original notes in the first bar; shrinking to 0 invalid;
-        // shrinking to 1 should succeed if nothing lives in bar 2.
+        let mut style = s.document.style.clone();
+        let release = Event {
+            id: 1_000_001,
+            tick: fill.end,
+            order: 1_000_001,
+            data: vec![0x80, 60, 47],
+        };
+        style.tracks[0].extend([
+            Event {
+                id: release.id - 1,
+                tick: fill.end - 10,
+                order: release.order - 1,
+                data: vec![0x90, 60, 93],
+            },
+            release.clone(),
+        ]);
+        style.tracks[0].sort_by_key(|e| (e.tick, e.order, e.id));
+        let mut crossing = style.clone();
+        crossing.tracks[0]
+            .iter_mut()
+            .find(|e| e.id == release.id)
+            .unwrap()
+            .tick += 1;
+        crossing.tracks[0].sort_by_key(|e| (e.tick, e.order, e.id));
+        let op = SectionLengthOp::FillBreak { bars: 1 };
+        assert!(apply(&mut crossing, fill.id, op.clone()).is_err());
+        assert!(apply(&mut style, fill.id, op).unwrap().is_empty());
+        assert!(style.tracks[0].contains(&release));
+
         s.execute(
             1,
             Command::SectionLength {
@@ -342,6 +324,34 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    #[test]
+    fn clipping_retimes_the_original_release_event() {
+        let mut style = session().document.style;
+        let doc = Document::from_style(style.clone()).unwrap();
+        let main = doc.sections.iter().find(|s| s.label == "Main A").unwrap();
+        let cutoff = main.start + 4 * ticks_per_bar(&doc, main.start).unwrap();
+        let on = Event {
+            id: 1_000_000,
+            tick: cutoff - 10,
+            order: 1_000_000,
+            data: vec![0x90, 60, 93],
+        };
+        let mut off = Event {
+            id: on.id + 1,
+            tick: cutoff + 10,
+            order: on.order + 1,
+            data: vec![0x80, 60, 47],
+        };
+        style.tracks[0].extend([on.clone(), off.clone()]);
+        style.tracks[0].sort_by_key(|e| (e.tick, e.order, e.id));
+
+        let removed = apply(&mut style, main.id, SectionLengthOp::Shorten { bars: 4 }).unwrap();
+        assert!(!removed.contains(&on.id));
+        assert!(style.tracks[0].contains(&on));
+        off.tick = cutoff;
+        assert!(style.tracks[0].contains(&off));
     }
 
     #[test]

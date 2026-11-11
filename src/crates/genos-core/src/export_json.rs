@@ -14,7 +14,6 @@ pub fn section_snapshot(doc: &Document, section_id: u64) -> Result<Value> {
         .iter()
         .find(|s| s.id == section_id)
         .ok_or_else(|| Error::Edit("section not found".into()))?;
-    let events: Vec<_> = doc.style.tracks.iter().flatten().cloned().collect();
     let (tempo, numerator, denominator) = doc.timing_at(section.start);
     let notes: Vec<_> = doc
         .notes
@@ -33,8 +32,11 @@ pub fn section_snapshot(doc: &Document, section_id: u64) -> Result<Value> {
             })
         })
         .collect();
-    let section_events: Vec<_> = events
+    let section_events: Vec<_> = doc
+        .style
+        .tracks
         .iter()
+        .flatten()
         .filter(|e| e.tick >= section.start && e.tick < section.end)
         .map(|e| {
             json!({

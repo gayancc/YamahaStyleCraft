@@ -24,7 +24,7 @@ export function VoiceName({
   channel: number;
   onOpen: () => void;
 }) {
-  const { view } = useStudio();
+  const { view, docLabel } = useStudio();
   const [voice, setVoice] = useState<CatalogVoice | null>(null);
   useEffect(() => {
     let live = true;
@@ -34,6 +34,7 @@ export function VoiceName({
         section: section.id,
         channel,
         revision: view.revision,
+        docLabel,
       })
         .then((v) => {
           if (live) setVoice(v);
@@ -42,7 +43,7 @@ export function VoiceName({
     return () => {
       live = false;
     };
-  }, [view, section.id, channel]);
+  }, [view, section.id, channel, docLabel]);
   return (
     <button
       className="voice-picker"
@@ -67,7 +68,7 @@ export function VoiceBrowser({
   monitoringActive?: boolean;
   onClose: () => void;
 }) {
-  const { view, expansionVoices, userVoices, setUserVoices } = useStudio();
+  const { view, docLabel, expansionVoices, userVoices, setUserVoices } = useStudio();
   const [editing, setEditing] = useState<CatalogVoice | "new" | null>(null);
   const [original] = useState(view!);
   const [catalog, setCatalog] = useState<CatalogSummary | null>(null);
@@ -88,7 +89,7 @@ export function VoiceBrowser({
   const catalogVersion = useRef(0);
   close.current = onClose;
   const stale = view !== original;
-  const args = { section: section.id, channel, revision: original.revision };
+  const args = { section: section.id, channel, revision: original.revision, docLabel };
   const extraVoices = [...userVoices, ...expansionVoices];
   const extraKinds = ["all", "expansion", "voices", "drums"];
   const expansionMatches = extraVoices.filter(
@@ -235,7 +236,7 @@ export function VoiceBrowser({
       const next = extraVoices.includes(selected)
         ? await invoke<View>("edit_document", {
             revision: original.revision,
-            docLabel: "main",
+            docLabel,
             command: {
               type: "setVoice",
               section: section.id,

@@ -507,6 +507,31 @@ try {
   await settle();
   assert.equal((await notes()).find((m) => m.id === n.id).start, n.start + 1);
   results.push("one-tick nudge bypasses snap");
+  await edit({
+    type: "updateNotes",
+    section: section.id,
+    ids: [n.id],
+    deltaDuration: -1,
+  });
+  await page.evaluate(async () => {
+    const { useStudio } = await import("/frontend/store.ts");
+    useStudio.setState({ snap: 0 });
+  });
+  await page.keyboard.press("ArrowRight");
+  await settle();
+  const nudged = (await notes()).find((m) => m.id === n.id);
+  assert.equal(nudged.start, n.start + 2);
+  await page.keyboard.press("Control+b");
+  await settle();
+  const [copyId] = (await state()).selected;
+  assert.notEqual(copyId, nudged.id);
+  assert.equal(
+    (await notes()).find((m) => m.id === copyId).start,
+    nudged.start + nudged.duration,
+  );
+  results.push("Snap Off uses exact ticks for nudge and duplication");
+  await reset();
+  await noteCanvas.focus();
   await page.keyboard.press("p");
   const beforeCancel = (await notes()).length;
   await page.mouse.move(r.x + 330, y);

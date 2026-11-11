@@ -1,5 +1,6 @@
 import { cycleModalFocus } from "./modal";
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   Region,
   Route,
@@ -10,6 +11,8 @@ import type {
 } from "./contracts";
 import { useStudio } from "./store";
 import { partDefaultBytes } from "./casmDefaults";
+import { importedOutputLimitDescription, sourceRegionRange } from "./casmZones";
+export { sourceRegionRange } from "./casmZones";
 
 const chords = [
   "Major",
@@ -61,6 +64,17 @@ const tables = [
   "Dorian",
   "Dorian 5th",
 ];
+const guitarTables = ["All Purpose", "Stroke", "Arpeggio"];
+export const retriggerOptions = [
+  "Stop",
+  "Pitch Shift",
+  "Pitch Shift to Root",
+  "Retrigger",
+  "Retrigger to Root",
+];
+export function nttOptions(ntr: number): string[] {
+  return ntr === 2 ? guitarTables : ntr <= 1 ? tables : [];
+}
 const regionOffsets: Record<Region, number> = { low: 22, middle: 28, high: 34 };
 const enabled = (b: number[], id: number) =>
   Boolean(b[17 - Math.floor(id / 8)] & (1 << (id % 8)));
@@ -140,7 +154,11 @@ export function SourceTracks({
   const { view, busy, edit } = useStudio();
   const [revision] = useState(view!.revision);
   const [bytes, setBytes] = useState(() => [...route.bytes]);
-  const [resetDefaults, setResetDefaults] = useState(false);
+  const [reset, setReset] = useState<{
+    type: "partDefaults" | "genosPartDefaults";
+    bytes: number[];
+  }>();
+  const [loadingDefaults, setLoadingDefaults] = useState(false);
   const [mask, setMask] = useState(() =>
     chords.map((_, id) => enabled(route.bytes, id)),
   );
@@ -208,10 +226,27 @@ export function SourceTracks({
     setError(null);
   };
   // Submit final values, rather than invalid intermediate number-input states.
-  const original = resetDefaults ? partDefaultBytes(route.bytes) : route.bytes;
-  const changes: RouteChange[] = resetDefaults
-    ? [{ type: "partDefaults" }]
-    : [];
+  const original = reset?.bytes ?? route.bytes;
+  const importedLimits = importedOutputLimitDescription(original[o + 3], original[o + 4]);
+  const changes: RouteChange[] = reset ? [{ type: reset.type }] : [];
+  const resetDraft = (type: "partDefaults" | "genosPartDefaults", defaults: number[]) => {
+    setBytes(defaults);
+    setMask(chords.map((_, id) => enabled(defaults, id)));
+    setExclusive(false);
+    setReset({ type, bytes: defaults });
+    setError(null);
+  };
+  const loadGenosDefaults = async () => {
+    setLoadingDefaults(true);
+    try {
+      const defaults = await invoke<number[]>("genos_part_defaults", { bytes: route.bytes });
+      resetDraft("genosPartDefaults", defaults);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setLoadingDefaults(false);
+    }
+  };
   for (let root = 0; root < 12; root++) {
     const index = 12 - Math.floor(root / 8),
       bit = 1 << (root % 8);
@@ -259,15 +294,18 @@ export function SourceTracks({
       pushRule("retrigger", bytes[offset + 5]);
   }
   const maskChanged = mask.some((value, id) => value !== enabled(original, id));
+  const invalidZone =
+    (bytes[20] !== original[20] || bytes[21] !== original[21]) &&
+    (bytes[20] < 0 || bytes[21] > 127 || bytes[20] > bytes[21]);
   const invalid =
-    bytes[20] < 0 ||
-    bytes[21] > 127 ||
-    bytes[20] > bytes[21] ||
+    invalidZone ||
     [22, 28, 34].some(
-      (offset) =>
-        bytes[offset + 3] < 0 ||
-        bytes[offset + 4] > 127 ||
-        bytes[offset + 3] > bytes[offset + 4],
+      (offset) => {
+        const low = offset + 3;
+        const high = offset + 4;
+        return (bytes[low] !== original[low] || bytes[high] !== original[high]) &&
+          (bytes[low] < 0 || bytes[high] > 127 || bytes[low] > bytes[high]);
+      },
     );
   const apply = async () => {
     if (useStudio.getState().view?.revision !== revision) {
@@ -337,7 +375,7 @@ export function SourceTracks({
           keep their original rules.
         </p>
         <div className="source-body">
-          <fieldset className="fl-plain" disabled={busy}>
+          <fieldset className="fl-plain" disabled={busy || loadingDefaults}>
             <fieldset className="fl-section">
               <legend>Part defaults</legend>
               <div className="fl-row-actions">
@@ -345,14 +383,17 @@ export function SourceTracks({
                   type="button"
                   disabled={route.destination < 9 || route.destination > 16}
                   onClick={() => {
-                    setBytes(partDefaultBytes(bytes));
-                    setMask(chords.map(() => true));
-                    setExclusive(false);
-                    setResetDefaults(true);
-                    setError(null);
+                    resetDraft("partDefaults", partDefaultBytes(route.bytes));
                   }}
                 >
                   Use part defaults
+                </button>
+                <button
+                  type="button"
+                  disabled={route.destination < 9 || route.destination > 16}
+                  onClick={() => void loadGenosDefaults()}
+                >
+                  {loadingDefaults ? "Loading Genos defaults…" : "Use Genos part defaults"}
                 </button>
                 <p className="fl-note">
                   Resets this draft’s CASM rules for destination{" "}
@@ -456,17 +497,15 @@ export function SourceTracks({
               </div>
               <p className="source-zone">
                 Source pitches:{" "}
-                {region === "low"
-                  ? bytes[20] === 0
-                    ? "inactive"
-                    : `0–${bytes[20] - 1}`
-                  : region === "high"
-                    ? bytes[21] === 127
-                      ? "inactive"
-                      : `${bytes[21] + 1}–127`
-                    : `${bytes[20]}–${bytes[21]}`}{" "}
+                {sourceRegionRange(bytes[20], bytes[21], region)?.join("–") ?? "inactive"}{" "}
                 · Output limits are independent.
               </p>
+              {importedLimits && (
+                <p className="source-zone">
+                  {importedLimits}
+                  {" "}To replace them, enter ordered output notes from 0 to 127.
+                </p>
+              )}
               <div className="source-fields">
                 <Choice
                   label="Region NTR"
@@ -477,13 +516,7 @@ export function SourceTracks({
                 <Choice
                   label="Region NTT"
                   value={bytes[o + 1] & 127}
-                  options={
-                    bytes[o] === 2
-                      ? ["All Purpose", "Stroke", "Arpeggio"]
-                      : bytes[o] <= 1
-                        ? tables
-                        : []
-                  }
+                  options={nttOptions(bytes[o])}
                   onChange={(value) => rule("ntt", value)}
                 />
                 <Choice
@@ -495,13 +528,7 @@ export function SourceTracks({
                 <Choice
                   label="Region retrigger"
                   value={bytes[o + 5]}
-                  options={[
-                    "Stop",
-                    "Pitch Shift",
-                    "Pitch Shift to Root",
-                    "Retrigger",
-                    "Retrigger to Root",
-                  ]}
+                  options={retriggerOptions}
                   onChange={(value) => rule("retrigger", value)}
                 />
                 <Numeric
@@ -621,7 +648,7 @@ export function SourceTracks({
           <button
             className="primary"
             disabled={
-              busy ||
+              busy || loadingDefaults ||
               invalid ||
               (!changes.length && !maskChanged && !exclusive && !target)
             }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CircleHelp } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Port, View } from "./contracts";
+import { useStudio } from "./store";
 
 export type EffectSelection = {
   view: View;
@@ -53,7 +54,10 @@ export function InitialEffects({
           reverb: { lateChanges: boolean };
           chorus: { lateChanges: boolean };
         };
-      }>("preview_style_effects", { revision: view.revision });
+      }>("preview_style_effects", {
+        revision: view.revision,
+        docLabel: useStudio.getState().docLabel,
+      });
       if (
         mounted.current &&
         current.current.view === view &&

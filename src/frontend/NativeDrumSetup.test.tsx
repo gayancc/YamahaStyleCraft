@@ -89,6 +89,7 @@ describe("NativeDrumSetup", () => {
     expect(mocks.invoke).toHaveBeenCalledWith("apply_native_drums", {
       channel: 9,
       revision: 3,
+      docLabel: "main",
       address: { msb: 127, lsb: 0, program: 0 },
       changes: [
         { note: 36, field: "volume", value: 100 },

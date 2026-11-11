@@ -35,7 +35,9 @@ for(const name of fs.readdirSync(path.join(dir,"userdata-backup"))){
 assert(piano.passed&&live.passed&&release.passed&&factory.passed);
 assert.equal(source.result,"SOURCE TRACKS NATIVE VERIFIED");
 const exe=path.join(workspace,"target/release/genos-style-studio.exe");
-const setup=path.join(workspace,"target/release/bundle/nsis/GenosStyleStudio_0.1.0_x64-setup.exe");
+const nsisDir=path.join(workspace,"target/release/bundle/nsis");
+const setup=fs.readdirSync(nsisDir).filter(n=>/-setup\.exe$/i.test(n)).map(n=>path.join(nsisDir,n)).sort().at(-1);
+assert(setup&&fs.existsSync(setup),`NSIS installer not found under ${nsisDir}`);
 const installer=json(path.join(reports,"installer-test-final.json"));
 assert.equal(installer.portableSha256,hash(exe),"Installer evidence is stale");
 assert.equal(installer.setupSha256,hash(setup),"Installer evidence is stale");

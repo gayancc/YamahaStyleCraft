@@ -29,6 +29,7 @@ export interface SectionSlotGroup<T extends SectionLike> {
 export interface SectionLayout<T extends SectionLike> {
   readonly groups: readonly SectionSlotGroup<T>[];
   readonly extra: readonly T[];
+  readonly missingFileSections: readonly { group: SlotGroupName; slot: SectionSlot<T> }[];
 }
 
 const PANEL: readonly {
@@ -78,6 +79,25 @@ export function defaultSlotBars(group: SlotGroupName): { bars: number; max: numb
   return group === "Fill" || group === "Break" ? { bars: 1, max: 8 } : { bars: 4, max: 32 };
 }
 
+// File order used by the core Add Section command. The panel uses a different order.
+const FILE_ORDER = [
+  "main a", "main b", "main c", "main d",
+  "fill in aa", "fill in bb", "fill in cc", "fill in dd",
+  "intro b", "intro c", "intro a", "intro d",
+  "ending a", "ending b", "ending c", "ending d", "fill in ba",
+];
+
+const markerKey = (label: string) => label.trim().toLowerCase().replace(/\s+/g, " ");
+
+export function sectionInsertionTick(sections: readonly SectionLike[], label: string): number {
+  const rank = (name: string) =>
+    FILE_ORDER.indexOf(markerKey(name));
+  const target = rank(label);
+  return sections.find((section) => rank(section.label) > target)?.start
+    ?? sections.at(-1)?.end
+    ?? 0;
+}
+
 const LETTER_TO_NUMBER: Readonly<Record<string, string>> = { a: "1", b: "2", c: "3", "1": "1", "2": "2", "3": "3" };
 
 /** Panel slot key for a Style section name, or null when the name has no Genos panel slot. */
@@ -113,6 +133,12 @@ export function layoutSections<T extends SectionLike>(sections: readonly T[]): S
       })),
     })),
     extra,
+    missingFileSections: (["Intro", "Ending"] as const).flatMap((group) => {
+      const label = `${group} D`;
+      return sections.some((s) => markerKey(s.label) === markerKey(label))
+        ? []
+        : [{ group, slot: { key: label, label, yamahaLabel: label, section: null } }];
+    }),
   };
 }
 
@@ -123,8 +149,9 @@ export function sectionGridColumns<T extends SectionLike>(
   pad = "minmax(0, 64px)",
   gutter = "9px",
 ): string {
-  const counts = [...layout.groups.map((g) => g.slots.length), layout.extra.length].filter(
-    (n) => n > 0,
-  );
+  const counts = [
+    ...layout.groups.map((g) => g.slots.length),
+    layout.extra.length + layout.missingFileSections.length,
+  ].filter((n) => n > 0);
   return counts.map((n) => `repeat(${n}, ${pad})`).join(` ${gutter} `);
 }

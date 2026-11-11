@@ -4,7 +4,7 @@ import type { Port, Section, TransportStatus, View } from "./contracts";
 import { trapModalFocus } from "./modal";
 import { useStudio } from "./store";
 
-type Chord = { root: number; quality: string; bars: number; bass?: number };
+type Chord = { root: number; quality: string; bars: number; bass?: number; bassQuality?: string };
 type Report = {
   steps: { label: string; startMs: number; endMs: number; notes: number }[];
   routes: {
@@ -117,7 +117,7 @@ export function LivePreview({
     }
   };
   const stop = async () => {
-    await invoke("stop");
+    await invoke("stop", { docLabel });
     onTransport({ ...transport, playing: false });
   };
   const close = () =>
@@ -270,6 +270,19 @@ export function LivePreview({
                       <option key={r} value={n}>
                         {r}
                       </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Bass quality{" "}
+                  <select
+                    aria-label={`Chord ${i + 1} bass quality`}
+                    value={c.bassQuality ?? ""}
+                    onChange={(e) => changeChord(i, { bassQuality: e.target.value || undefined })}
+                  >
+                    <option value="">Chord quality</option>
+                    {qualities.map((q) => (
+                      <option key={q}>{q}</option>
                     ))}
                   </select>
                 </label>

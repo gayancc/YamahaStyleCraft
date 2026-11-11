@@ -1,0 +1,35 @@
+/* Kit styles. Every value is a token from tokens/tokens.css. */
+.fl-knob {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+  touch-action: none;
+  cursor: ns-resize;
+  outline: none;
+}
+.fl-knob.is-disabled { opacity: 0.45; cursor: default; }
+.fl-knob:focus-visible svg { outline: 1px solid var(--fl-orange); outline-offset: 3px; border-radius: 50%; }
+.fl-knob__label {
+  font-family: var(--fl-font-condensed);
+  font-size: 9.5px;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  color: var(--fl-label);
+  white-space: nowrap;
+}
+
+.fl-hint {
+  box-sizing: border-box;
+  width: 260px;
+  height: 35px;
+  padding: 3px 8px;
+  background: var(--fl-hint);
+  border: 1px solid var(--fl-body-outline);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.fl-hint__context { font-size: 10px; color: var(--fl-caption-dim); height: 12px; white-space: nowrap; }
+.fl-hint__text { font-size: 12px; color: var(--fl-text); white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }

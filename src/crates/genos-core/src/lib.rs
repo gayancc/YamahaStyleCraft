@@ -14,6 +14,7 @@ pub mod expansion;
 pub mod expansion_guitar;
 pub mod export_csv;
 pub mod export_json;
+mod firmware_ntt;
 pub mod genos_system_effect;
 pub mod guitar_preview;
 pub mod library;

@@ -19,12 +19,22 @@ const mocks = vi.hoisted(() => ({
   isTauri: false,
   onCloseRequested: vi.fn(),
   destroy: vi.fn(),
+  listen: vi.fn(),
+  playCountIn: vi.fn(),
+}));
+vi.mock("./metronome", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./metronome")>(),
+  playCountIn: mocks.playCountIn,
 }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: mocks.invoke,
   isTauri: () => mocks.isTauri,
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => mocks);
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: mocks.listen,
+  emit: vi.fn(),
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     onCloseRequested: mocks.onCloseRequested,
@@ -87,6 +97,7 @@ beforeEach(() => {
   mocks.onCloseRequested.mockResolvedValue(vi.fn());
   vi.clearAllMocks();
   mocks.invoke.mockReset().mockResolvedValue(null);
+  mocks.listen.mockReset().mockResolvedValue(() => {});
   mocks.isTauri = false;
   useStudio.setState({
     view: null,
@@ -95,6 +106,10 @@ beforeEach(() => {
     busy: false,
     error: null,
     sectionId: 0,
+    docLabel: "main",
+    snap: 16,
+    zoom: 1,
+    tool: "select",
   });
   vi.stubGlobal(
     "ResizeObserver",
@@ -229,6 +244,97 @@ it("exposes Note colors pickers for all 16 channels", async () => {
   );
 });
 
+it("keeps detached mixer messages within the owning project", async () => {
+  mocks.isTauri = true;
+  const unlisten = vi.fn();
+  mocks.listen.mockResolvedValue(unlisten);
+  useStudio.setState({ view, sectionId: 7, docLabel: "project-2" });
+  const { unmount } = render(<App />);
+  await waitFor(() =>
+    expect(mocks.listen).toHaveBeenCalledWith("studio://mixer-sync", expect.any(Function)),
+  );
+  const [, receive] = mocks.listen.mock.calls.find(([event]) => event === "studio://mixer-sync")!;
+  const payload = { muted: [11], solo: [], armedChannel: null, mixerApplyAll: false };
+  const muted = () => screen.getByRole("button", { name: "Mute CH11" }).getAttribute("aria-pressed");
+  act(() => receive({ payload: { ...payload, docLabel: "main" } }));
+  expect(muted()).toBe("false");
+  act(() => receive({ payload }));
+  expect(muted()).toBe("false");
+  act(() => receive({ payload: { ...payload, docLabel: "project-2" } }));
+  expect(muted()).toBe("true");
+  unmount();
+  expect(unlisten).toHaveBeenCalled();
+});
+
+it("restores the saved workspace from an autosave", async () => {
+  mocks.isTauri = true;
+  mocks.invoke.mockImplementation(async (command) => {
+    if (command === "recovery_status") return true;
+    if (command === "list_recent") return [];
+    if (command === "restore_recovery")
+      return { ...view, uiState: { sectionId: 7, channel: 12, snap: 0, zoom: 2, tool: "pan" } };
+    return null;
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Restore session" }));
+  await waitFor(() => expect(useStudio.getState()).toMatchObject({
+    sectionId: 7, channel: 12, snap: 0, zoom: 2, tool: "pan",
+  }));
+});
+
+it("keeps a newer MIDI lease event when the startup query resolves late", async () => {
+  mocks.isTauri = true;
+  let finish!: (value: { owner: string; active: boolean; windows: number }) => void;
+  mocks.invoke.mockImplementation(async (command) =>
+    command === "midi_ownership" ? new Promise((resolve) => { finish = resolve; }) : null,
+  );
+  useStudio.setState({ view, sectionId: 7 });
+  render(<App />);
+  await waitFor(() =>
+    expect(mocks.listen).toHaveBeenCalledWith("studio://midi-ownership", expect.any(Function)),
+  );
+  const [, receive] = mocks.listen.mock.calls.find(([event]) => event === "studio://midi-ownership")!;
+  await act(async () => {
+    receive({ payload: { owner: "project-2", active: true, windows: 2 } });
+    finish({ owner: "main", active: true, windows: 1 });
+  });
+  fireEvent.click(screen.getByText("Studio", { selector: "summary" }));
+  expect(screen.getByRole("button", { name: "Use MIDI here" })).toBeTruthy();
+});
+
+it("keeps an all-channel event selected when opening its source channel", () => {
+  const tick = view.sections[0].start;
+  useStudio.setState({
+    view: {
+      ...view,
+      events: [
+        { id: 10, order: 10, tick, data: [0xb9, 99, 1] },
+        { id: 11, order: 11, tick, data: [0xb9, 6, 80] },
+        { id: 12, order: 12, tick, data: [0x99, 60, 80] },
+        { id: 13, order: 13, tick, data: [0xf0, 0x81, 0, 0x43, ...Array(126).fill(0), 0xf7] },
+      ],
+    },
+    sectionId: 7,
+  });
+  render(<App />);
+  fireEvent.click(screen.getByRole("button", { name: "Events" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "All channels" }));
+  const rows = screen.getAllByRole("button", { name: /Ch10 CC/ });
+  expect(rows.map((row) => row.textContent)).toEqual([
+    expect.stringContaining("CC 99"),
+    expect.stringContaining("CC 6"),
+  ]);
+  fireEvent.click(rows[1]);
+  expect(useStudio.getState().channel).toBe(10);
+  expect(screen.getByLabelText("Event tick (section)")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Ch10 Pressure/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /SysEx Yamaha/ }));
+  expect(screen.getByText(/SysEx\/meta selected · read-only/)).toBeTruthy();
+  expect(screen.queryByLabelText("Event tick (section)")).toBeNull();
+  fireEvent.click(screen.getByRole("checkbox", { name: "SysEx / meta" }));
+  expect(screen.queryByText(/SysEx\/meta selected · read-only/)).toBeNull();
+});
+
 it("mutes and solos source channels from the track list and filters play", async () => {
   useStudio.setState({ view, sectionId: 7 });
   mocks.invoke.mockImplementation(async (cmd: string) => {
@@ -281,9 +387,17 @@ it("mutes and solos source channels from the track list and filters play", async
   ).toBe("true");
 }, 10_000);
 
-it("requires arm and starts overdub play when capturing", async () => {
+it.each([false, true])("requires arm and guards recording setup (count-in: %s)", async (countIn) => {
   mocks.isTauri = true;
-  useStudio.setState({ view, sectionId: 7, channel: 10, error: null });
+  let finishCountIn!: () => void;
+  mocks.playCountIn.mockImplementation(() => new Promise<void>((resolve) => {
+    finishCountIn = resolve;
+  }));
+  const recordingView = {
+    ...view,
+    sections: [...view.sections, { id: 8, label: "Main B", start: 51840, end: 57600 }],
+  };
+  useStudio.setState({ view: recordingView, sectionId: 7, channel: 10, error: null });
   mocks.invoke.mockImplementation(async (cmd: string) => {
     if (cmd === "scan_devices")
       return {
@@ -295,6 +409,7 @@ it("requires arm and starts overdub play when capturing", async () => {
         schema: "genos.prefs.v1",
         midiOutputName: "Genos",
         midiOutputIndex: 1,
+        countInBars: countIn ? 1 : 0,
         snap: 16,
         zoom: 1,
         tool: "select",
@@ -342,6 +457,17 @@ it("requires arm and starts overdub play when capturing", async () => {
     screen.getByRole("button", { name: "Arm CH11 for recording" }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Start capture" }));
+  if (countIn) {
+    await waitFor(() => expect(mocks.playCountIn).toHaveBeenCalledOnce());
+    await act(async () => {
+      useStudio.getState().section(8);
+      finishCountIn();
+    });
+    expect(useStudio.getState().message).toMatch(/Recording canceled/);
+    expect(useStudio.getState().busy).toBe(false);
+    expect(mocks.invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
+    return;
+  }
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith(
       "start_capture",
@@ -484,6 +610,13 @@ it("applies controllers-only capture when Record data is Controllers + Voice", a
   expect(
     screen.getByRole("button", { name: "Test metronome click" }),
   ).toBeTruthy();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Record Voice change" }));
+  fireEvent.change(screen.getByLabelText("Record voice bank MSB"), {
+    target: { value: "8" },
+  });
+  fireEvent.change(screen.getByLabelText("Record voice program"), {
+    target: { value: "12" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Done" }));
   fireEvent.click(screen.getByRole("button", { name: "MIDI device settings" }));
   await screen.findByRole("heading", { name: "MIDI capture" });
@@ -503,10 +636,12 @@ it("applies controllers-only capture when Record data is Controllers + Voice", a
         includeControllers: true,
         destinationChannel: 11,
         inputChannel: 3,
+        voice: { channel: 11, bankMsb: 8, bankLsb: 0, program: 11 },
         docLabel: "main",
       }),
     ),
   );
+  expect(mocks.invoke.mock.calls.filter(([command]) => command === "edit_document")).toEqual([]);
 });
 
 it("sends no initial effects by default, then includes the reviewed token only after explicit opt-in", async () => {
@@ -554,7 +689,7 @@ it("sends no initial effects by default, then includes the reviewed token only a
     ),
   );
   play();
-  await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("stop"));
+  await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("stop", { docLabel: "main" }));
   await devices();
   fireEvent.click(screen.getByLabelText("Preview initial Genos effects"));
   await screen.findByText(/1 typed messages ready/);
@@ -670,6 +805,7 @@ describe("real IPC wiring with isolated test mocks", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "6 beats" }));
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+        uiState: expect.any(Object),
         revision: 0,
         command: {
           type: "setTempoMeter",
@@ -697,6 +833,7 @@ describe("real IPC wiring with isolated test mocks", () => {
     fireEvent.blur(tempo);
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+        uiState: expect.any(Object),
         revision: 0,
         command: {
           type: "setTempoMeter",
@@ -709,7 +846,7 @@ describe("real IPC wiring with isolated test mocks", () => {
     );
   });
   it("exports section notes CSV through a noclobber save path", async () => {
-    useStudio.setState({ view, sectionId: 7 });
+    useStudio.setState({ view, sectionId: 7, docLabel: "project-2" });
     mocks.save.mockResolvedValue("C:/section-notes.csv");
     mocks.invoke.mockResolvedValue(undefined);
     render(<App />);
@@ -720,6 +857,7 @@ describe("real IPC wiring with isolated test mocks", () => {
       expect(mocks.invoke).toHaveBeenCalledWith("export_section_csv", {
         path: "C:/section-notes.csv",
         section: 7,
+        docLabel: "project-2",
       }),
     );
   });
@@ -780,19 +918,22 @@ describe("real IPC wiring with isolated test mocks", () => {
       within(bar)
         .getAllByRole("group")
         .map((g) => g.getAttribute("aria-label")),
-    ).toEqual(["Intro", "Main", "Fill", "Break", "Ending"]);
+    ).toEqual(["Intro", "Main", "Fill", "Break", "Ending", "Other sections"]);
     const main = within(bar).getByRole("button", { name: /^Main A/ });
     expect(main.getAttribute("aria-pressed")).toBe("true");
     const missing = within(bar).getByRole("button", {
       name: "Add Intro 2 (not in this Style)",
     }) as HTMLButtonElement;
     expect(missing.disabled).toBe(false);
-    expect(within(bar).getAllByRole("button", { name: /not in this Style/ })).toHaveLength(14);
+    expect(within(bar).getAllByRole("button", { name: /not in this Style/ })).toHaveLength(16);
     fireEvent.click(missing);
     const dialog = screen.getByRole("dialog", { name: "Add Intro 2" });
     expect(dialog).toBeTruthy();
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Add Intro 2" })).toBeNull();
+    const extra = within(bar).getByRole("group", { name: "Other sections" });
+    fireEvent.click(within(extra).getByRole("button", { name: "Add Intro D (not in this Style)" }));
+    expect(screen.getByRole("dialog", { name: "Add Intro D" })).toBeTruthy();
   });
   it("opens MIDI connections with input monitor help tip", async () => {
     mocks.invoke.mockImplementation(async (cmd: string) => {
@@ -958,6 +1099,7 @@ describe("real IPC wiring with isolated test mocks", () => {
     fireEvent.blur(input);
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+        uiState: expect.any(Object),
         revision: 0,
         command: { type: "updateNotes", section: 7, ids: [1], velocity: 73 },
         docLabel: "main",
@@ -1018,19 +1160,63 @@ describe("real IPC wiring with isolated test mocks", () => {
     expect(mocks.invoke).toHaveBeenCalledWith("scan_devices");
     expect(mocks.invoke).not.toHaveBeenCalledWith("play", expect.anything());
   });
-  it("CASM root dispatch preserves route identity", async () => {
-    useStudio.setState({ view, sectionId: 7 });
-    mocks.invoke.mockResolvedValue({ ...view, revision: 1 });
+  it("scopes an inline CASM root edit to the selected section of a shared route", async () => {
+    const shared = {
+      ...view,
+      routes: view.routes.map((route) => ({
+        ...route,
+        sections: ["Main A", "Main B"],
+        bytes: route.bytes.map((value, index) => index === 20 ? 36 : index === 21 ? 95 : value),
+      })),
+    };
+    useStudio.setState({ view: shared, sectionId: 7 });
+    mocks.invoke.mockResolvedValue({ ...shared, revision: 1 });
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "CASM" }));
+    expect(within(screen.getByRole("combobox", { name: "Route 0 NTT" }))
+      .getByRole("option", { name: "Dorian 5th" })).toHaveProperty("value", "10");
     fireEvent.change(
       screen.getByRole("combobox", { name: "Route 0 source root" }),
       { target: { value: "2" } },
     );
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+        uiState: expect.any(Object),
         revision: 0,
-        command: { type: "casm", route: 0, field: "root", value: 2 },
+        command: {
+          type: "sourceTracks",
+          section: 7,
+          actions: [{
+            type: "edit",
+            source: 11,
+            destination: 11,
+            changes: [{ type: "root", value: 2 }],
+            chords: null,
+            exclusive: false,
+          }],
+        },
+        docLabel: "main",
+      }),
+    );
+    fireEvent.click(screen.getByText("Middle-region limits and retrigger"));
+    expect(screen.getByText("Low: C-1–B1 · Middle: C2–B6 · High: C7–G9")).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "NTT Bass" }));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+        uiState: expect.any(Object),
+        revision: 1,
+        command: {
+          type: "sourceTracks",
+          section: 7,
+          actions: [{
+            type: "edit",
+            source: 11,
+            destination: 11,
+            changes: [{ type: "rule", region: "middle", field: "bass", value: 1 }],
+            chords: null,
+            exclusive: false,
+          }],
+        },
         docLabel: "main",
       }),
     );
@@ -1325,7 +1511,7 @@ it("Cancel take confirms before discarding retained capture", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Cancel take" }));
   expect(confirm).toHaveBeenCalled();
   await waitFor(() =>
-    expect(mocks.invoke).toHaveBeenCalledWith("clear_capture"),
+    expect(mocks.invoke).toHaveBeenCalledWith("clear_capture", { docLabel: "main" }),
   );
 });
 

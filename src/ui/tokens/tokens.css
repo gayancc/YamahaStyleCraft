@@ -1,0 +1,62 @@
+/* Measured FL Studio 25.1.1.4879 tokens (docs/fl-ui-evidence). Single-pixel samples at 100 % scale.
+   Values marked (approx) were not cleanly sampled. Components read only these variables. */
+:root {
+  /* chrome */
+  --fl-ground: #596267;
+  --fl-workspace: #666e76;
+  --fl-topbar: #242c31;
+  --fl-hint: #3e464b;
+  --fl-browser: #33343b;
+
+  /* panel body (Fruity Peak Controller) */
+  --fl-body: #363c40;
+  --fl-body-outline: #31373b;
+  --fl-body-deep: #282f33;
+  --fl-caption: #434c51;
+  --fl-caption-text: #c4cbd0;
+  --fl-caption-dim: #8a949b;
+  --fl-graph: #46565a;
+  --fl-graph-line: #cad6d8;
+
+  /* group tab */
+  --fl-tab: #3c444a;
+  --fl-tab-line: #2a3035;
+
+  /* knob faces (Peak Controller / Convolver) */
+  --fl-knob-track: #272d31;
+  --fl-knob-outline: #23292d;
+  --fl-knob-cap-top: #4d545a;
+  --fl-knob-cap: #3e454b;
+  --fl-knob-cap-bottom: #2a3137;
+  --fl-knob-rim: #62696f;
+
+  /* text */
+  --fl-text: #d3d7de;
+  --fl-text-dim: #a9b2b9;
+  --fl-label: #b8c7cc;
+
+  /* signal colours seen on native plugin arcs and LEDs */
+  --fl-orange: #ffa830;
+  --fl-green: #97db3a;
+  --fl-teal: #2ec4a4; /* (approx) */
+  --fl-blue: #46aed0; /* (approx) */
+  --fl-led-off: #3a4a1e;
+
+  /* geometry (authored units, docs/fl-ui-evidence/DESIGN-MAP.md) */
+  --fl-caption-h: 26px;
+  --fl-sys-btn: 21px;
+  --fl-top-row-h: 41px;
+  --fl-status-h: 33px;
+
+  /* type */
+  --fl-font: "Segoe UI", system-ui, sans-serif;
+  --fl-font-condensed: "Bahnschrift SemiCondensed", "Bahnschrift Condensed", "Arial Narrow", "Segoe UI", sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--fl-ground);
+  color: var(--fl-text);
+  font: 12px/1.3 var(--fl-font);
+}

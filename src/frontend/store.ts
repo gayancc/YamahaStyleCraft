@@ -15,7 +15,7 @@ import { isNoteClipboard } from "./noteClipboard";
 export type StudioTool =
   "select" | "draw" | "paint" | "erase" | "cursor" | "pan";
 
-function applyUiState(
+export function applyUiState(
   view: View,
   fallbackSection: number,
   fallbackChannel: number,
@@ -226,14 +226,16 @@ export const useStudio = create<StudioState>((set, get) => ({
     }
   },
   edit: async (command) => {
-    const { view, busy } = get();
+    const studio = get();
+    const { view, busy } = studio;
     if (!view || busy) return;
     set({ busy: true, error: null });
     try {
       const next = await invoke<View>("edit_document", {
         revision: view.revision,
         command,
-        docLabel: get().docLabel,
+        docLabel: studio.docLabel,
+        uiState: currentUiState(studio),
       });
       const previousIds = new Set(view.notes.map((n) => n.id));
       const added = next.notes

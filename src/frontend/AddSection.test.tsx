@@ -53,6 +53,22 @@ const show = (key: string) => {
 const lastCommand = () => invoke.mock.calls.at(-1)![1].command;
 
 describe("AddSection dialog", () => {
+  it("fits a source phrase against the meter before the insertion point", () => {
+    const mixedMeter: View = {
+      ...view,
+      events: [
+        { id: 1, order: 1, tick: 0, data: [255, 88, 4, 3, 2, 24, 8] },
+        { id: 2, order: 2, tick: sections[1].start, data: [255, 88, 4, 4, 2, 24, 8] },
+      ],
+    };
+    const { slot, group } = slotOf("mainB");
+    render(<AddSection view={mixedMeter} slot={slot} group={group} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Copy of an existing section" }));
+    fireEvent.change(screen.getByLabelText("Copy from section"), { target: { value: "8" } });
+    expect((screen.getByLabelText("Length in bars") as HTMLInputElement).value).toBe("3");
+    expect((screen.getByLabelText("Fit copied timing") as HTMLSelectElement).value).toBe("fit");
+  });
+
   it("adds an empty section with the SFM default length and shares CASM with a section of the same family", async () => {
     const close = show("ending2");
     expect(screen.getByRole("dialog", { name: "Add Ending 2" })).toBeTruthy();

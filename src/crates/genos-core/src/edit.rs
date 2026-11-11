@@ -963,11 +963,9 @@ impl Session {
                 }
             }
             Command::SectionLength { section, op } => {
-                let changes = crate::section_length::apply(&mut style, section, op)?;
-                for id in changes.removed {
+                for id in crate::section_length::apply(&mut style, section, op)? {
                     expected_pairs.remove(&id);
                 }
-                expected_pairs.extend(changes.added);
                 for (track, events) in style.tracks.iter().enumerate() {
                     if events != &self.document.style.tracks[track] {
                         touched.insert(track);
@@ -1666,10 +1664,12 @@ impl Session {
                     .tracks
                     .get_mut(track)
                     .ok_or_else(|| reject("track not found"))?;
-                let mut remove = HashSet::new();
-                for &tick in ticks.iter() {
-                    remove.extend(crate::channel_eq::packet_indices(es, channel, tick, band));
-                }
+                let remove: HashSet<_> =
+                    crate::channel_eq::matching_packet_indices(es, channel, band, |tick| {
+                        ticks.contains(&tick)
+                    })
+                    .into_iter()
+                    .collect();
                 if !remove.is_empty() {
                     let mut kept = Vec::with_capacity(es.len());
                     for (i, e) in es.iter().enumerate() {
@@ -1866,16 +1866,29 @@ fn apply_pitch_bend_range(
             .tracks
             .get_mut(track)
             .ok_or_else(|| reject("track not found"))?;
-        // Drop prior RPN range / data-entry CCs at this section start for the part.
-        let before = es.len();
-        es.retain(|e| {
-            !(e.tick == s.start
-                && e.data.len() == 3
-                && e.data[0] == status
-                && matches!(e.data[1], 6 | 100 | 101))
-        });
-        if es.len() != before {
+        // Reuse a trailing canonical packet. Other RPN/NRPN transactions may
+        // share this tick and must keep their selectors and Data Entry events.
+        let suffix: Vec<_> = es
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, e)| {
+                e.tick == s.start
+                    && e.data.len() == 3
+                    && e.data[0] == status
+                    && matches!(e.data[1], 6 | 38 | 96..=101 | 121)
+            })
+            .take(packet.len())
+            .collect();
+        if suffix.len() == packet.len()
+            && suffix.iter().zip(packet.iter().rev()).all(|((_, e), &(cc, value))| {
+                e.data[1] == cc && (cc == 6 || e.data[2] == value)
+            })
+        {
+            let index = suffix[2].0;
+            es[index].data[2] = semitones;
             touched.insert(track);
+            continue;
         }
         for &(controller, value) in &packet {
             es.push(Event {

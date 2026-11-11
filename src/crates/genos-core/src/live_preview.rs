@@ -2,8 +2,10 @@
 //! EV-0108 preview_casm/chord_preview/drum_setup contracts; no raw Style DSP replay.
 use crate::{
     Error, Result,
+    casm::supported_ctb2_size,
     chord_preview::{self, PitchRule},
     document::{Document, Route},
+    firmware_ntt,
     genos_system_effect::xg_parameter_change,
     midi::{Packet, Plan},
     native_drums, style_effects, voice_catalog,
@@ -25,6 +27,16 @@ pub struct Chord {
     pub bars: u8,
     #[serde(default)]
     pub bass: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bass_quality: Option<String>,
+}
+impl Chord {
+    fn alternate(&self) -> (u8, &str) {
+        (
+            self.bass.unwrap_or(self.root),
+            self.bass_quality.as_deref().unwrap_or(&self.quality),
+        )
+    }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -107,29 +119,54 @@ fn source_quality(q: u8) -> Option<&'static str> {
         _ => return None,
     })
 }
-fn enabled(r: &Route, chord: &Chord) -> bool {
-    // Note Mute means allowed *chord roots*, not allowed source pitches.
-    // StyleMagic Apply 004cb2a8 + Wierzba/Bedesem v1.00 section5.2.4.
-    let root = r.bytes[12 - usize::from(chord.root / 8)] & (1 << (chord.root % 8)) != 0;
-    root && quality_bit(&chord.quality)
-        .is_some_and(|bit| r.bytes[17 - usize::from(bit / 8)] & (1 << (bit % 8)) != 0)
+pub(crate) fn target_type(quality: &str) -> Option<u8> {
+    quality_bit(quality).or_else(|| {
+        let id = quality.strip_prefix("Genos:")?.parse::<u8>().ok()?;
+        firmware_ntt::configured().ok().flatten()?;
+        (id < firmware_ntt::CHORD_TYPE_COUNT).then_some(id)
+    })
 }
-fn rule<'a>(r: &'a Route, note: u8, chord: &'a Chord) -> Result<(PitchRule<'a>, u8)> {
-    if r.bytes.len() != 47
+
+pub fn supports_target_quality(quality: &str) -> bool {
+    target_type(quality).is_some()
+}
+
+fn enabled(r: &Route, root: u8, quality: &str) -> bool {
+    if root > 11 {
+        return false;
+    }
+    let root_enabled = r.bytes[12 - usize::from(root / 8)] & (1 << (root % 8)) != 0;
+    root_enabled && target_type(quality).is_some_and(|id| {
+        let mask = if let Some(tables) = firmware_ntt::configured().ok().flatten() {
+            tables.chord_mask(id)
+        } else {
+            Some((17 - usize::from(id / 8), 1 << (id % 8)))
+        };
+        mask.is_some_and(|(byte, bit)| r.bytes[byte] & bit != 0)
+    })
+}
+fn rule<'a>(
+    r: &'a Route,
+    note: u8,
+    chord: &'a Chord,
+    drum: bool,
+) -> Result<(PitchRule<'a>, u8, u8)> {
+    if !supported_ctb2_size(r.bytes.len())
         || r.bytes[0] >= 16
         || r.bytes[9] >= 16
         || r.bytes[0] + 1 != r.source
         || r.bytes[9] + 1 != r.destination
         || r.bytes[18] > 11
-        || r.bytes[19] > 33
-        || r.bytes[20] > r.bytes[21]
-        || r.bytes[21] > 127
+        || r.bytes[19] >= firmware_ntt::CHORD_TYPE_COUNT
     {
-        return Err(bad("Invalid Ctb2 route binding or source zone"));
+        return Err(bad("Invalid Ctb2 route binding or source chord"));
     }
-    let offset = if note < r.bytes[20] {
+    // The firmware loads the imported zone bytes as signed bounds and tests
+    // the lower bound first, including when the stored bounds are inverted.
+    let zone_note = i16::from(note);
+    let offset = if zone_note < i16::from(r.bytes[20] as i8) {
         22
-    } else if note > r.bytes[21] {
+    } else if zone_note > i16::from(r.bytes[21] as i8) {
         34
     } else {
         28
@@ -138,6 +175,7 @@ fn rule<'a>(r: &'a Route, note: u8, chord: &'a Chord) -> Result<(PitchRule<'a>, 
     let ntr = match b[0] {
         0 => "root_trans",
         1 => "root_fixed",
+        2 if !drum && firmware_ntt::configured()?.is_some() && (b[1] & 127) <= 2 => "guitar",
         _ => {
             return Err(bad(format!(
                 "Source {}: guitar/unknown NTR {} is not available in routed preview",
@@ -164,15 +202,27 @@ fn rule<'a>(r: &'a Route, note: u8, chord: &'a Chord) -> Result<(PitchRule<'a>, 
             )));
         }
     };
-    if b[2] > 11 || b[3] > b[4] || b[4] > 127 || b[5] > 4 {
+    let flagged = (b[3] | b[4]) & 128 != 0;
+    let firmware = ntr == "guitar"
+        || (!drum && ntt != "bypass" && firmware_ntt::configured()?.is_some());
+    let inverted = (b[3] & 127) > (b[4] & 127);
+    if ((b[2] > 11 || flagged || inverted) && (drum || (ntt != "bypass" && !firmware)))
+        || b[5] > 5
+        || (b[5] == 5 && (drum || firmware_ntt::configured()?.is_none()))
+    {
         return Err(bad(
             "Invalid Ctb2 output range, high key or retrigger value",
         ));
     }
+    let (target_root, target_quality) = if b[1] & 128 != 0 {
+        chord.alternate()
+    } else {
+        (chord.root, chord.quality.as_str())
+    };
     Ok((
         PitchRule {
             source_root: r.bytes[18],
-            source_quality: if ntt == "bypass" {
+            source_quality: if ntt == "bypass" || firmware {
                 // Bypass does not use chord quality. Root Transposition still
                 // applies its root shift, high key and limits; Root Fixed is
                 // literal. The raw source-chord byte was validated above.
@@ -181,14 +231,8 @@ fn rule<'a>(r: &'a Route, note: u8, chord: &'a Chord) -> Result<(PitchRule<'a>, 
                 source_quality(r.bytes[19])
                     .ok_or_else(|| bad(format!("Unsupported source chord {}", r.bytes[19])))?
             },
-            // EV-0108 chord_preview _pitch lines757–758: only NTT Bass
-            // regions substitute the requested slash bass for the chord root.
-            target_root: if b[1] & 128 != 0 {
-                chord.bass.unwrap_or(chord.root)
-            } else {
-                chord.root
-            },
-            target_quality: &chord.quality,
+            target_root,
+            target_quality,
             ntr,
             ntt,
             high_key: Some(b[2]),
@@ -199,15 +243,92 @@ fn rule<'a>(r: &'a Route, note: u8, chord: &'a Chord) -> Result<(PitchRule<'a>, 
             expansion_layout: false,
         },
         b[5],
+        b[1],
     ))
 }
-fn converted(note: u8, rule: &PitchRule<'_>) -> Result<Option<u8>> {
+fn apply_bypass_limits(mut pitch: i16, low: u8, high: u8) -> Option<u8> {
+    // Genos applies the lower and upper limits in order. A flagged bound
+    // rejects a violation, while an ordinary bound folds by octaves.
+    let lower = i16::from(low & 127);
+    if low & 128 != 0 && pitch < lower {
+        return None;
+    }
+    while pitch < lower {
+        pitch += 12;
+    }
+    let upper = i16::from(high & 127);
+    if high & 128 != 0 && pitch > upper {
+        return None;
+    }
+    while pitch > upper {
+        pitch -= 12;
+    }
+    (0..=127).contains(&pitch).then_some(pitch as u8)
+}
+
+fn converted(
+    note: u8,
+    rule: &PitchRule<'_>,
+    table_ids: Option<(u8, u8, &Chord)>,
+    to_root: bool,
+) -> Result<Option<u8>> {
+    if rule.ntr == "guitar"
+        && let Some((ntt, _, chord)) = table_ids
+        && let Some(tables) = firmware_ntt::configured()?
+    {
+        let note = if to_root && (48..=95).contains(&note) {
+            note - note % 12
+        } else {
+            note
+        };
+        let ordinary = (chord.root, chord.quality.as_str());
+        let alternate = (rule.target_root, rule.target_quality);
+        let (pitch, (root, quality)) = if ntt & 128 != 0 && note % 12 <= 1 && ordinary != alternate {
+            (note - note % 12, alternate)
+        } else {
+            (note, ordinary)
+        };
+        return Ok(target_type(quality).and_then(|id| tables.guitar_pitch(pitch, ntt & 127, root, id)));
+    }
+    if to_root {
+        let note = i16::from(note);
+        let mut shift = (note - i16::from(rule.target_root)).rem_euclid(12);
+        if rule.ntr == "root_trans" {
+            if rule.target_root > rule.source_root {
+                shift -= 12;
+            }
+            if rule.exceeds_firmware_high_key() {
+                shift += 12;
+            }
+        } else if shift > 5 {
+            shift -= 12;
+        }
+        return Ok(apply_bypass_limits(
+            note - shift,
+            rule.note_limit_low,
+            rule.note_limit_high,
+        ));
+    }
+    if rule.ntt == "bypass" {
+        let mut pitch = i16::from(note);
+        if rule.ntr == "root_trans" {
+            pitch += i16::from(rule.target_root) - i16::from(rule.source_root);
+            if rule.exceeds_firmware_high_key() {
+                pitch -= 12;
+            }
+        }
+        return Ok(apply_bypass_limits(pitch, rule.note_limit_low, rule.note_limit_high));
+    }
+    if let Some((ntt, source_type, _)) = table_ids
+        && let Some(tables) = firmware_ntt::configured()?
+        && let Some(target_type) = target_type(rule.target_quality)
+    {
+        let pitch = tables.pitch(note, rule, ntt & 127, source_type, target_type);
+        return Ok(apply_bypass_limits(pitch, rule.note_limit_low, rule.note_limit_high));
+    }
+
     // The retained study helper has an identity shortcut; enforce CASM limits even there.
-    let pitch = if rule.ntr == "root_fixed" && rule.ntt == "bypass" {
-        Some(note)
-    } else {
-        chord_preview::preview_pitch(note, rule)?
-    };
+    let pitch = chord_preview::preview_pitch(note, rule)?;
     let Some(pitch) = pitch else {
         return Ok(None);
     };
@@ -224,6 +345,147 @@ fn coverage(area: &str, status: &str, detail: impl Into<String>, count: usize) -
     }
 }
 
+fn keep_packet(packet: &Packet, active: &mut BTreeMap<(u8, u8), usize>, coalesced: &mut usize) -> bool {
+    let status = packet.data[0] & 0xf0;
+    if !matches!(status, 0x80 | 0x90) {
+        return true;
+    }
+    let entry = active.entry((packet.data[0] & 15, packet.data[1])).or_default();
+    if status == 0x90 {
+        let emit = *entry == 0;
+        *entry += 1;
+        *coalesced += usize::from(!emit);
+        emit
+    } else {
+        *entry = entry.saturating_sub(1);
+        *entry == 0
+    }
+}
+
+/// Pitch a source note sounds at while the style follows `chord`, using the section's Ctb2
+/// route for that source channel. Without a usable route the note simply transposes by the
+/// chord root. `None` is a note the route mutes for this chord.
+pub fn follow_pitch(
+    doc: &Document,
+    section: u64,
+    source: u8,
+    note: u8,
+    chord: &crate::midi::LiveChord,
+) -> Option<u8> {
+    follow_pitch_in_window(doc, section, source, note, chord, false)
+}
+
+/// Map a live note at its scheduled time since the most recent root change.
+pub fn follow_pitch_at(
+    doc: &Document,
+    section: u64,
+    source: u8,
+    note: u8,
+    chord: &crate::midi::LiveChord,
+    since_root_change: Option<Duration>,
+) -> Option<u8> {
+    let active = since_root_change.is_some_and(|elapsed| {
+        doc.sections.iter().find(|s| s.id == section).is_some_and(|section| {
+            let (bpm, _, _) = doc.timing_at(section.start);
+            Duration::try_from_secs_f64(30.0 / bpm).is_ok_and(|window| elapsed < window)
+        })
+    });
+    follow_pitch_in_window(doc, section, source, note, chord, active)
+}
+
+/// Map a live note with the transport's tempo-aware root-change window state.
+pub fn follow_pitch_in_window(
+    doc: &Document,
+    section: u64,
+    source: u8,
+    note: u8,
+    chord: &crate::midi::LiveChord,
+    in_window: bool,
+) -> Option<u8> {
+    follow_routed_pitch(doc, section, source, note, chord, in_window).pitch
+}
+
+/// Map a live note and report whether its route allows a held-note slide.
+pub fn follow_routed_pitch(
+    doc: &Document,
+    section: u64,
+    source: u8,
+    note: u8,
+    chord: &crate::midi::LiveChord,
+    in_window: bool,
+) -> crate::midi::LivePitch {
+    if chord.root > 11 || chord.bass.is_some_and(|root| root > 11) {
+        return None.into();
+    }
+    let Some(section) = doc.sections.iter().find(|s| s.id == section) else {
+        return None.into();
+    };
+    let chord = Chord {
+        root: chord.root,
+        quality: chord.quality.clone(),
+        bars: 1,
+        bass: chord.bass,
+        bass_quality: chord.bass_quality.clone(),
+    };
+    match playback_route(doc, &section.label, source) {
+        Some(route) => match rule(route, note, &chord, false) {
+            Ok((rule, rtr, ntt)) if !enabled(route, rule.target_root, rule.target_quality) => {
+                let bass_region = ntt & 128 != 0;
+                let held_mask_portamento = matches!(route.destination, 9 | 10)
+                    && matches!(rtr, 1 | 2)
+                    && {
+                        let (other_root, other_quality) = if bass_region {
+                            (chord.root, chord.quality.as_str())
+                        } else {
+                            chord.alternate()
+                        };
+                        let uses_other_chord = [23, 29, 35].into_iter()
+                            .any(|offset| (route.bytes[offset] & 128 != 0) != bass_region);
+                        !uses_other_chord || !enabled(route, other_root, other_quality)
+                    };
+                crate::midi::LivePitch {
+                    bass_region,
+                    held_mask_portamento,
+                    ..None.into()
+                }
+            }
+            Ok((rule, rtr, ntt)) => {
+                let firmware = firmware_ntt::configured().is_ok_and(|tables| tables.is_some());
+                let to_root = firmware && in_window && matches!(rtr, 2 | 4);
+                match converted(note, &rule, Some((ntt, route.bytes[19], &chord)), to_root) {
+                    Ok(pitch) => crate::midi::LivePitch {
+                        pitch,
+                        portamento: firmware && matches!(rtr, 1..=4),
+                        stop_on_change: firmware && matches!(rtr, 0 | 5),
+                        bass_region: ntt & 128 != 0,
+                        held_mask_portamento: false,
+                    },
+                    Err(_) => Some(note).into(),
+                }
+            }
+            Err(_) => Some(note).into(),
+        },
+        _ => {
+            let root = i16::from(chord.root);
+            let shift = if root > 6 { root - 12 } else { root };
+            u8::try_from(i16::from(note) + shift)
+                .ok()
+                .filter(|n| *n <= 127)
+                .into()
+        }
+    }
+}
+
+fn playback_route<'a>(doc: &'a Document, section: &str, source: u8) -> Option<&'a Route> {
+    doc.firmware_cseg_route(section, source).unwrap_or_else(|| {
+        let mut routes = doc.routes.iter().filter(|route| {
+            route.source == source && route.sections.iter().any(|label| label == section)
+        });
+        let first = routes.next();
+        if routes.next().is_none() { first } else { None }
+    })
+}
+
 pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
     if config.sources.is_empty()
         || config.sources.len() > 16
@@ -237,7 +499,10 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
         || config.chords.iter().any(|c| {
             c.root > 11
                 || c.bass.is_some_and(|bass| bass > 11)
-                || quality_bit(&c.quality).is_none()
+                || !supports_target_quality(&c.quality)
+                || c.bass_quality
+                    .as_deref()
+                    .is_some_and(|quality| !supports_target_quality(quality))
                 || !(1..=16).contains(&c.bars)
         })
     {
@@ -294,18 +559,12 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
         .sources
         .iter()
         .map(|source| {
-            let selected = doc
-                .routes
-                .iter()
-                .filter(|r| r.source == *source && r.sections.contains(&section.label))
-                .collect::<Vec<_>>();
-            if selected.len() != 1 {
-                return Err(bad(format!(
+            playback_route(doc, &section.label, *source).ok_or_else(|| {
+                bad(format!(
                     "Source {source} needs exactly one Ctb2 route in {}",
                     section.label
-                )));
-            }
-            Ok(selected[0])
+                ))
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     // Source controllers/voices cannot be merged reliably onto one external part.
@@ -385,13 +644,13 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
             .collect::<Vec<_>>();
         for n in &notes {
             for c in &config.chords {
-                let _ = rule(r, n.pitch, c)?;
+                let _ = rule(r, n.pitch, c, drum)?;
             }
         }
         if drum
             && notes.iter().any(|n| {
-                rule(r, n.pitch, &config.chords[0])
-                    .is_ok_and(|(r, _)| r.ntr != "root_fixed" || r.ntt != "bypass")
+                rule(r, n.pitch, &config.chords[0], drum)
+                    .is_ok_and(|(r, _, _)| r.ntr != "root_fixed" || r.ntt != "bypass")
             })
         {
             return Err(bad("Drum preview needs fixed/bypass pitch rules"));
@@ -524,6 +783,7 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
     // Origin/cycle ownership keeps unchanged parts sounding through a slash-only
     // change. A source wrap remains a new pattern cycle.
     let mut previous_notes: HashMap<(u64, u64), (u8, String, u64, usize)> = HashMap::new();
+    let mut slides = HashMap::new();
     let mut steps = Vec::new();
     let mut position = 0;
     let mut changed = 0;
@@ -537,7 +797,7 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
         if let Some((previous, bars)) = spans.last_mut()
             && previous.root == chord.root
             && previous.quality == chord.quality
-            && canonical_bass(previous) == canonical_bass(chord)
+            && previous.alternate() == chord.alternate()
         {
             *bars += u64::from(chord.bars);
         } else {
@@ -548,10 +808,25 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
         warnings
             .insert("Adjacent identical harmonic steps are combined to preserve held notes".into());
     }
-    if config.chords.iter().any(|c| canonical_bass(c).is_some()) {
-        warnings.insert("Slash bass substitutes the target root only in active Ctb2 regions with NTT Bass enabled; other parts keep the chord root".into());
+    if config
+        .chords
+        .iter()
+        .any(|c| c.alternate() != (c.root, c.quality.as_str()))
+    {
+        warnings.insert("Only Ctb2 regions with NTT Bass enabled use the alternate chord root or quality".into());
     }
+    let firmware = firmware_ntt::configured()?.is_some();
+    // The firmware reader carries the fractional remainder between events.
+    // Scale cumulative ticks before taking a difference at a chord change.
+    let firmware_tick = |tick| u128::from(tick) * 1920 / u128::from(doc.style.ppq);
+    let mut previous_roots = None;
+    let mut to_root_until = 0;
     for (chord, bars) in spans {
+        let roots = (chord.root, chord.alternate().0);
+        if firmware && previous_roots.is_some_and(|previous| previous != roots) {
+            to_root_until = firmware_tick(position) + 960;
+        }
+        previous_roots = Some(roots);
         let end = position + bars * per_bar;
         let before = packets.len();
         let mut cursor = position;
@@ -567,89 +842,118 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
             let from = section.start + phase;
             let to = from + (slice_end - cursor);
             for (route, info) in routes.iter().zip(&infos) {
-                if !enabled(route, chord) {
-                    suppressed += doc
-                        .notes
-                        .iter()
-                        .filter(|n| n.channel == route.source && n.start >= from && n.start < to)
-                        .count();
-                }
-                if enabled(route, chord) {
-                    for n in doc.notes.iter().filter(|n| {
-                        n.channel == route.source && n.start < to && n.start + n.duration > from
-                    }) {
-                        let (rule, rtr) = rule(route, n.pitch, chord)?;
-                        let fixed = info.drum || (rule.ntr == "root_fixed" && rule.ntt == "bypass");
-                        let effective_root = if fixed { 0 } else { rule.target_root };
-                        let effective_quality = if fixed { "" } else { chord.quality.as_str() };
-                        let carried = n.start < from;
-                        let finish = cursor + ((n.start + n.duration).min(to) - from);
-                        let origin = (n.id, cursor / length);
-                        if carried
-                            && let Some((root, quality, last_end, off)) =
-                                previous_notes.get_mut(&origin)
-                            && *last_end == cursor
-                            && *root == effective_root
-                            && *quality == effective_quality
-                        {
+                for n in doc.notes.iter().filter(|n| {
+                    n.channel == route.source && n.start < to && n.start + n.duration > from
+                }) {
+                    let (rule, rtr, ntt) = rule(route, n.pitch, chord, info.drum)?;
+                    if !enabled(route, rule.target_root, rule.target_quality) {
+                        suppressed += usize::from(n.start >= from);
+                        continue;
+                    }
+                    let stop_on_change = rtr == 0 || (firmware && rtr == 5);
+                    let fixed = info.drum
+                        || (rule.ntr == "root_fixed"
+                            && rule.ntt == "bypass"
+                            && !(firmware && stop_on_change));
+                    let (effective_root, effective_quality) = if fixed {
+                        (0, "")
+                    } else if rule.ntr == "guitar" && n.pitch % 12 > 1 {
+                        (chord.root, chord.quality.as_str())
+                    } else {
+                        (rule.target_root, rule.target_quality)
+                    };
+                    let carried = n.start < from;
+                    let start = cursor + (n.start.max(from) - from);
+                    let to_root = matches!(rtr, 2 | 4) && firmware_tick(start) < to_root_until;
+                    let finish = cursor + ((n.start + n.duration).min(to) - from);
+                    let origin = (n.id, cursor / length);
+                    if carried
+                        && let Some((root, quality, last_end, off)) =
+                            previous_notes.get_mut(&origin)
+                        && *last_end == cursor
+                        && *root == effective_root
+                        && *quality == effective_quality
+                        && !to_root
+                    {
+                        packets[*off].at = at(finish);
+                        *last_end = finish;
+                        continue;
+                    }
+                    if carried && cursor > 0 && stop_on_change {
+                        suppressed += 1;
+                        continue;
+                    }
+                    let mut pitch = if info.drum {
+                        (rule.note_limit_low..=rule.note_limit_high)
+                            .contains(&n.pitch)
+                            .then_some(n.pitch)
+                    } else {
+                        converted(n.pitch, &rule, Some((ntt, route.bytes[19], chord)), to_root)?
+                    };
+                    if carried && cursor > 0 && !info.drum {
+                        rearticulations += 1;
+                        if !firmware && matches!(rtr, 1 | 2) {
+                            warnings.insert("Held-note pitch-shift RTR is rearticulated at chord boundaries; smooth Yamaha pitch-shift is not reproduced".into());
+                        }
+                        if !firmware && matches!(rtr, 2 | 4) && rule.ntr != "guitar" {
+                            let mut root_rule = PitchRule {
+                                source_root: n.pitch % 12,
+                                source_quality: "Major",
+                                target_quality: "Major",
+                                ntr: "root_fixed",
+                                // Explicit to-root RTR is a conversion, unlike
+                                // the literal Root Fixed + Bypass NTT pair.
+                                ntt: "chord",
+                                ..rule
+                            };
+                            let low = root_rule.note_limit_low;
+                            let high = root_rule.note_limit_high;
+                            if (low | high) & 128 != 0 {
+                                root_rule.note_limit_low = 0;
+                                root_rule.note_limit_high = 127;
+                                pitch = converted(n.pitch, &root_rule, None, false)?
+                                    .and_then(|pitch| apply_bypass_limits(i16::from(pitch), low, high));
+                            } else {
+                                pitch = converted(n.pitch, &root_rule, None, false)?;
+                            }
+                        }
+                    }
+                    let Some(pitch) = pitch else {
+                        suppressed += 1;
+                        continue;
+                    };
+                    if firmware && carried && !info.drum && matches!(rtr, 1..=4)
+                        && let Some((root, quality, last_end, off)) = previous_notes.get_mut(&origin)
+                        && *last_end == cursor
+                    {
+                        if packets[*off].data[1] == pitch {
                             packets[*off].at = at(finish);
                             *last_end = finish;
+                            *root = effective_root;
+                            *quality = effective_quality.to_owned();
+                            rearticulations -= 1;
                             continue;
                         }
-                        if carried && cursor > 0 && rtr == 0 {
-                            suppressed += 1;
-                            continue;
-                        }
-                        let mut pitch = if info.drum {
-                            (rule.note_limit_low..=rule.note_limit_high)
-                                .contains(&n.pitch)
-                                .then_some(n.pitch)
-                        } else {
-                            converted(n.pitch, &rule)?
-                        };
-                        if carried && cursor > 0 && !info.drum {
-                            rearticulations += 1;
-                            if matches!(rtr, 1 | 2) {
-                                warnings.insert("Held-note pitch-shift RTR is rearticulated at chord boundaries; smooth Yamaha pitch-shift is not reproduced".into());
-                            }
-                            if matches!(rtr, 2 | 4) {
-                                let root_rule = PitchRule {
-                                    source_root: n.pitch % 12,
-                                    source_quality: "Major",
-                                    target_quality: "Major",
-                                    ntr: "root_fixed",
-                                    // Explicit to-root RTR is a conversion, unlike
-                                    // the literal Root Fixed + Bypass NTT pair.
-                                    ntt: "chord",
-                                    ..rule
-                                };
-                                pitch = converted(n.pitch, &root_rule)?;
-                            }
-                        }
-                        let Some(pitch) = pitch else {
-                            suppressed += 1;
-                            continue;
-                        };
-                        changed += usize::from(pitch != n.pitch);
-                        let start = cursor + (n.start.max(from) - from);
-                        packets.push(Packet {
-                            at: at(start),
-                            data: vec![0x90 | (route.destination - 1), pitch, n.velocity],
-                        });
-                        packets.push(Packet {
-                            at: at(finish),
-                            data: vec![0x80 | (route.destination - 1), pitch, 0],
-                        });
-                        previous_notes.insert(
-                            origin,
-                            (
-                                effective_root,
-                                effective_quality.to_owned(),
-                                finish,
-                                packets.len() - 1,
-                            ),
-                        );
+                        slides.insert(packets.len(), *off);
                     }
+                    changed += usize::from(pitch != n.pitch);
+                    packets.push(Packet {
+                        at: at(start),
+                        data: vec![0x90 | (route.destination - 1), pitch, n.velocity],
+                    });
+                    packets.push(Packet {
+                        at: at(finish),
+                        data: vec![0x80 | (route.destination - 1), pitch, 0],
+                    });
+                    previous_notes.insert(
+                        origin,
+                        (
+                            effective_root,
+                            effective_quality.to_owned(),
+                            finish,
+                            packets.len() - 1,
+                        ),
+                    );
                 }
                 // Chord masks gate notes, not the source controller timeline.
                 for e in events.iter().filter(|e| {
@@ -695,7 +999,14 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
             return Err(bad("Preview exceeds the 500,000-message limit"));
         }
     }
-    packets.sort_by_key(|p| {
+    let slide_offs: HashSet<_> = slides.values().copied().collect();
+    let slide_sources: HashMap<_, _> = slides.into_iter()
+        .map(|(on, off)| (on, packets[off].clone()))
+        .collect();
+    let mut ordered: Vec<_> = packets.into_iter().enumerate()
+        .filter(|(index, _)| !slide_offs.contains(index))
+        .collect();
+    ordered.sort_by_key(|(_, p)| {
         (
             p.at,
             match p.data[0] & 0xf0 {
@@ -707,27 +1018,43 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
     });
     let mut active = BTreeMap::<(u8, u8), usize>::new();
     let mut coalesced = 0;
-    packets.retain(|p| {
-        let status = p.data[0] & 0xf0;
-        if !matches!(status, 0x80 | 0x90) {
-            return true;
-        }
-        let entry = active.entry((p.data[0] & 15, p.data[1])).or_default();
-        if status == 0x90 {
-            let emit = *entry == 0;
-            *entry += 1;
-            if !emit {
-                coalesced += 1;
+    let mut portamento = 0;
+    let mut packets = Vec::with_capacity(ordered.len() + slide_sources.len() * 2);
+    for (index, packet) in ordered {
+        if let Some(source) = slide_sources.get(&index) {
+            let channel = packet.data[0] & 15;
+            let old = source.data[1];
+            let new = packet.data[1];
+            if active.get(&(channel, old)) == Some(&1)
+                && active.get(&(channel, new)).copied().unwrap_or(0) == 0
+            {
+                portamento += 1;
+                packets.push(Packet { at: packet.at, data: vec![0xb0 | channel, 84, old] });
+                keep_packet(&packet, &mut active, &mut coalesced);
+                packets.push(packet);
+                keep_packet(source, &mut active, &mut coalesced);
+                packets.push(source.clone());
+                continue;
             }
-            emit
-        } else {
-            *entry = entry.saturating_sub(1);
-            *entry == 0
+            if keep_packet(source, &mut active, &mut coalesced) {
+                packets.push(source.clone());
+            }
         }
-    });
+        if keep_packet(&packet, &mut active, &mut coalesced) {
+            packets.push(packet);
+        }
+    }
+    if packets.len() > 500_000 {
+        return Err(bad("Preview exceeds the 500,000-message limit"));
+    }
     if coalesced > 0 {
         warnings.insert(format!(
             "{coalesced} overlapping converted note-ons coalesced to prevent early note-offs"
+        ));
+    }
+    if portamento > 0 {
+        warnings.insert(format!(
+            "{portamento} held-note changes use MIDI portamento control on the destination device"
         ));
     }
     if active.values().any(|v| *v != 0) {
@@ -754,7 +1081,11 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
             coverage(
                 "CASM pitch/masks",
                 "limited",
-                "Chord-root and chord-type masks, source zones, eleven non-guitar NTT tables, source chord/root, high key and note limits; Root Fixed + Bypass preserves pitch; held notes rearticulated, optional slash bass honors each active region NTT Bass flag; adjacent identical chords preserve held notes; Auto Start pre-chord behavior is not used by explicit progression; other bytes unmodeled",
+                if firmware {
+                    "Firmware pitch tables, source zones, chord masks and Bass pairs. Eligible held notes use portamento control. Auto Start is outside explicit progression."
+                } else {
+                    "Built-in pitched conversion, source zones, chord masks and Bass pairs. Held pitch changes rearticulate. Auto Start is outside explicit progression."
+                },
                 changed,
             ),
             coverage(
@@ -797,6 +1128,10 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
             setup,
             packets,
             duration: at(total_ticks),
+            bars: vec![at(total_ticks)],
+            beats: vec![at(total_ticks)],
+            section: None,
+            tempo: None,
         },
         report,
         channels: destinations,

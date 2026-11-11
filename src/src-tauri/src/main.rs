@@ -38,12 +38,14 @@ struct Studio {
     transport: Transport,
     monitor: InputMonitor,
     capture: MidiCapture,
+    parked_captures: HashMap<String, MidiCapture>,
     epoch: u64,
     exchange_nonce: u64,
     pending_exchange: Option<PendingExchange>,
     pending_live: Option<PendingLive>,
     /// Labels `project-2` … for additional Genos windows.
     projects: HashMap<String, ProjectDoc>,
+    project_epoch: u64,
     /// SFM-VIEW-TRANSPORT-MIDI-OWNER: only one project window owns MIDI hardware.
     midi_owner: String,
     /// The main window was closed while project windows stayed open.
@@ -57,11 +59,13 @@ impl Default for Studio {
             transport: Transport::default(),
             monitor: InputMonitor::default(),
             capture: MidiCapture::default(),
+            parked_captures: HashMap::new(),
             epoch: 0,
             exchange_nonce: 0,
             pending_exchange: None,
             pending_live: None,
             projects: HashMap::new(),
+            project_epoch: 0,
             midi_owner: "main".into(),
             main_closed: false,
         }
@@ -111,9 +115,10 @@ fn doc_epoch(s: &Studio, label: &str) -> u64 {
         s.projects.get(label).map(|d| d.epoch).unwrap_or(0)
     }
 }
-/// Next epoch when replacing a secondary project document.
-fn next_project_epoch(s: &Studio, label: &str) -> u64 {
-    s.projects.get(label).map(|d| d.epoch + 1).unwrap_or(1)
+/// A reused project window label must never reuse its previous document epoch.
+fn next_project_epoch(s: &mut Studio) -> u64 {
+    s.project_epoch += 1;
+    s.project_epoch
 }
 fn resolve_doc_label(doc_label: Option<&str>) -> String {
     let label = doc_label.unwrap_or("main");
@@ -433,12 +438,14 @@ fn search_drum_kits(query: String, app: tauri::AppHandle) -> Result<voice_catalo
 fn drum_channel_status(
     section: u64,
     revision: u64,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
     app: tauri::AppHandle,
 ) -> Result<Vec<voice_catalog::DrumChannelStatus>, String> {
+    let label = resolve_doc_label(doc_label.as_deref());
     let catalog = voice_catalog::available(&catalog_file(&app)?);
     let s = state.lock().map_err(error)?;
-    let session = s.session.as_ref().ok_or("Open a Style first")?;
+    let session = session_ref(&s, &label)?;
     if session.revision != revision {
         return Err("Document changed; refresh drum kit status".into());
     }
@@ -557,8 +564,13 @@ fn remap_chord_preview_notes(
 #[tauri::command]
 fn recognize_chord_preview(
     notes: Vec<u8>,
+    single_finger: Option<bool>,
 ) -> Result<Option<chord_preview::RecognizedChord>, String> {
-    Ok(chord_preview::recognize(&notes, None))
+    Ok(if single_finger == Some(true) {
+        chord_preview::recognize_single_finger(&notes)
+    } else {
+        chord_preview::recognize(&notes, None)
+    })
 }
 #[tauri::command]
 fn pitch_shift_bend_message(
@@ -746,12 +758,14 @@ fn resolve_catalog_voice(
     section: u64,
     channel: u8,
     revision: u64,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
     app: tauri::AppHandle,
 ) -> Result<Option<voice_catalog::Voice>, String> {
+    let label = resolve_doc_label(doc_label.as_deref());
     let address = {
         let s = state.lock().map_err(error)?;
-        let session = s.session.as_ref().ok_or("Open a Style first")?;
+        let session = session_ref(&s, &label)?;
         if session.revision != revision {
             return Err("Document changed; refresh the voice lookup".into());
         }
@@ -773,19 +787,21 @@ fn apply_catalog_voice(
     channel: u8,
     revision: u64,
     address: Address,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
     app: tauri::AppHandle,
 ) -> Result<View, String> {
+    let label = resolve_doc_label(doc_label.as_deref());
     let catalog = voice_catalog::available(&catalog_file(&app)?);
     if catalog.find(address).is_none() {
         return Err("Voice is not in the Genos factory catalog".into());
     }
-    let recovery = recovery_path(&app)?;
+    let recovery = recovery_path_for(&app, &label)?;
     let mut s = state.lock().map_err(error)?;
     if s.transport.status().playing || s.capture.is_recording() {
         return Err("Stop playback and capture before applying a voice".into());
     }
-    let session = s.session.as_mut().ok_or("Open a Style first")?;
+    let session = session_mut(&mut s, &label)?;
     session
         .execute(
             revision,
@@ -821,31 +837,43 @@ struct NativeDrumContext {
 #[tauri::command]
 fn inspect_style_effects(
     revision: u64,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<genos_core::style_effects::Header, String> {
     let s = state.lock().map_err(error)?;
-    let session = s.session.as_ref().ok_or("Open a Style first")?;
+    let session = session_ref(&s, &resolve_doc_label(doc_label.as_deref()))?;
     if session.revision != revision {
         return Err("Document changed; reopen Effect types".into());
     }
     genos_core::style_effects::inspect(&session.document).map_err(error)
 }
 #[tauri::command]
-fn preview_style_effects(revision: u64, state: State<'_, Shared>) -> Result<EffectPreview, String> {
+fn preview_style_effects(
+    revision: u64,
+    doc_label: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<EffectPreview, String> {
     let s = state.lock().map_err(error)?;
-    let session = s.session.as_ref().ok_or("Open a Style first")?;
+    let label = resolve_doc_label(doc_label.as_deref());
+    let session = session_ref(&s, &label)?;
     if session.revision != revision {
         return Err("Document changed; select initial effect preview again".into());
     }
     Ok(EffectPreview {
-        token: format!("{}:{}", s.epoch, session.revision),
+        token: effect_preview_token(&s, &label, revision),
         setup: genos_core::style_effects::preview_setup(&session.document).map_err(error)?,
     })
 }
+
+fn effect_preview_token(s: &Studio, label: &str, revision: u64) -> String {
+    format!("{label}:{}:{revision}", doc_epoch(s, label))
+}
+
 #[tauri::command]
 fn apply_style_effects(
     revision: u64,
     changes: Vec<genos_core::style_effects::Change>,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
     app: tauri::AppHandle,
 ) -> Result<View, String> {
@@ -872,15 +900,17 @@ fn apply_style_effects(
             return Err("Effect type is not in the imported catalog".into());
         }
     }
+    let label = resolve_doc_label(doc_label.as_deref());
+    let recovery = recovery_path_for(&app, &label)?;
     let mut s = state.lock().map_err(error)?;
     if s.transport.status().playing || s.capture.is_recording() {
         return Err("Stop playback and capture before editing Style effects".into());
     }
-    let session = s.session.as_mut().ok_or("Open a Style first")?;
+    let session = session_mut(&mut s, &label)?;
     session
         .execute(revision, Command::SetStyleEffects { changes })
         .map_err(error)?;
-    Ok(checkpoint(session, &recovery_path(&app)?))
+    Ok(checkpoint(session, &recovery))
 }
 fn native_drum_kit(app: &tauri::AppHandle, address: Address) -> Result<String, String> {
     let catalog = voice_catalog::available(&catalog_file(app)?);
@@ -894,11 +924,13 @@ fn native_drum_kit(app: &tauri::AppHandle, address: Address) -> Result<String, S
 fn inspect_native_drums(
     channel: u8,
     revision: u64,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
     app: tauri::AppHandle,
 ) -> Result<NativeDrumContext, String> {
+    let label = resolve_doc_label(doc_label.as_deref());
     let s = state.lock().map_err(error)?;
-    let session = s.session.as_ref().ok_or("Open a Style first")?;
+    let session = session_ref(&s, &label)?;
     if session.revision != revision {
         return Err("Document changed; reopen Drum Setup".into());
     }
@@ -912,15 +944,18 @@ fn apply_native_drums(
     revision: u64,
     address: Address,
     changes: Vec<genos_core::native_drums::Change>,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
     app: tauri::AppHandle,
 ) -> Result<View, String> {
+    let label = resolve_doc_label(doc_label.as_deref());
+    let recovery = recovery_path_for(&app, &label)?;
     let mut s = state.lock().map_err(error)?;
     if s.transport.status().playing || s.capture.is_recording() {
         return Err("Stop playback and capture before changing Drum Setup".into());
     }
     native_drum_kit(&app, address)?;
-    let session = s.session.as_mut().ok_or("Open a Style first")?;
+    let session = session_mut(&mut s, &label)?;
     session
         .execute(
             revision,
@@ -931,7 +966,7 @@ fn apply_native_drums(
             },
         )
         .map_err(error)?;
-    Ok(checkpoint(session, &recovery_path(&app)?))
+    Ok(checkpoint(session, &recovery))
 }
 #[tauri::command]
 fn reset_native_drums(
@@ -939,15 +974,18 @@ fn reset_native_drums(
     revision: u64,
     address: Address,
     notes: Vec<u8>,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
     app: tauri::AppHandle,
 ) -> Result<View, String> {
+    let label = resolve_doc_label(doc_label.as_deref());
+    let recovery = recovery_path_for(&app, &label)?;
     let mut s = state.lock().map_err(error)?;
     if s.transport.status().playing || s.capture.is_recording() {
         return Err("Stop playback and capture before changing Drum Setup".into());
     }
     native_drum_kit(&app, address)?;
-    let session = s.session.as_mut().ok_or("Open a Style first")?;
+    let session = session_mut(&mut s, &label)?;
     session
         .execute(
             revision,
@@ -958,7 +996,7 @@ fn reset_native_drums(
             },
         )
         .map_err(error)?;
-    Ok(checkpoint(session, &recovery_path(&app)?))
+    Ok(checkpoint(session, &recovery))
 }
 fn remember(app: &tauri::AppHandle, path: &Path) {
     if let Ok(dir) = app_data(app) {
@@ -1007,7 +1045,7 @@ async fn open_document(
         s.pending_exchange = None;
         s.pending_live = None;
     } else {
-        let epoch = next_project_epoch(&s, &label);
+        let epoch = next_project_epoch(&mut s);
         s.projects.insert(
             label,
             ProjectDoc {
@@ -1056,7 +1094,7 @@ async fn create_blank_document(
         s.pending_exchange = None;
         s.pending_live = None;
     } else {
-        let epoch = next_project_epoch(&s, &label);
+        let epoch = next_project_epoch(&mut s);
         s.projects.insert(
             label,
             ProjectDoc {
@@ -1074,6 +1112,7 @@ async fn create_blank_document(
 async fn edit_document(
     revision: u64,
     command: Command,
+    ui_state: Option<project::ProjectUiState>,
     doc_label: Option<String>,
     state: State<'_, Shared>,
     app: tauri::AppHandle,
@@ -1097,15 +1136,12 @@ async fn edit_document(
         if matches!(&command, Command::SetVoice { .. }) && s.capture.is_recording() {
             return Err("Stop capture before applying a voice".into());
         }
-        if label == "main" {
-            let session = s.session.as_mut().ok_or("Open a Style first")?;
-            session.execute(revision, command).map_err(error)?;
-            Ok(checkpoint(session, &recovery))
-        } else {
-            let doc = s.projects.get_mut(&label).ok_or("Open a Style first")?;
-            doc.session.execute(revision, command).map_err(error)?;
-            Ok(checkpoint(&doc.session, &recovery))
+        let session = session_mut(&mut s, &label)?;
+        session.execute(revision, command).map_err(error)?;
+        if let Some(ui) = ui_state {
+            session.set_ui_state(ui);
         }
+        Ok(checkpoint(session, &recovery))
     })
     .await
     .map_err(error)?
@@ -1235,7 +1271,7 @@ async fn restore_recovery(
         s.session = Some(session);
         s.epoch += 1;
     } else {
-        let epoch = next_project_epoch(&s, &label);
+        let epoch = next_project_epoch(&mut s);
         s.projects.insert(
             label,
             ProjectDoc {
@@ -1289,6 +1325,7 @@ fn play(
     index: usize,
     name: String,
     looping: bool,
+    live_play: Option<bool>,
     effects_token: Option<String>,
     from_tick: Option<u64>,
     doc_label: Option<String>,
@@ -1300,7 +1337,7 @@ fn play(
     let session = session_ref(&s, &label)?;
     let initial_effects = effects_token.is_some();
     if let Some(token) = effects_token {
-        if token != format!("{}:{}", doc_epoch(&s, &label), session.revision) {
+        if token != effect_preview_token(&s, &label, session.revision) {
             return Err("Document changed; select initial effect preview again".into());
         }
         if s.capture.is_recording() {
@@ -1308,8 +1345,21 @@ fn play(
         }
     }
     let doc = session.document.clone();
+    let rules = doc.clone();
+    let initial_chord =
+        (live_play == Some(true) && genos_core::live_preview::supports_target_quality("Genos:34"))
+            .then(|| midi::LiveChord {
+                root: 0,
+                quality: "Genos:34".into(),
+                bass: None,
+                bass_quality: None,
+            });
     s.transport
-        .play_with_options(
+        .set_routed_pitch_mapper(std::sync::Arc::new(move |section, ch, pitch, chord, in_window| {
+            genos_core::live_preview::follow_routed_pitch(&rules, section, ch, pitch, chord, in_window)
+        }));
+    s.transport
+        .play_with_initial_chord(
             &doc,
             midi::PlaybackOptions {
                 section,
@@ -1320,8 +1370,82 @@ fn play(
                 initial_effects,
                 from_tick,
             },
+            initial_chord,
         )
         .map_err(error)
+}
+#[tauri::command]
+async fn genos_part_defaults(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || genos_core::casm::genos_part_defaults(bytes))
+        .await
+        .map_err(error)?
+        .map_err(error)
+}
+
+/// Live style play: the style follows this chord from the next beat (`None` = literal notes).
+#[tauri::command]
+fn set_live_chord(
+    root: Option<u8>,
+    quality: Option<String>,
+    bass: Option<u8>,
+    bass_quality: Option<String>,
+    doc_label: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<(), String> {
+    let s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    let chord = match (root, quality) {
+        (Some(root), Some(quality)) => {
+            if root > 11 || bass.is_some_and(|b| b > 11) {
+                return Err("Chord root and bass must be 0..11".into());
+            }
+            if !genos_core::live_preview::supports_target_quality(&quality)
+                || bass_quality
+                    .as_deref()
+                    .is_some_and(|q| !genos_core::live_preview::supports_target_quality(q))
+            {
+                return Err("Unsupported chord quality".into());
+            }
+            Some(midi::LiveChord {
+                root,
+                quality,
+                bass,
+                bass_quality,
+            })
+        }
+        _ => None,
+    };
+    s.transport.follow_chord(chord);
+    Ok(())
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueuedSection {
+    id: u64,
+    looping: bool,
+}
+/// Live style play: queue sections using the transport's Fill and bar timing.
+#[tauri::command]
+fn queue_sections(
+    sections: Vec<QueuedSection>,
+    channels: Vec<u8>,
+    doc_label: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<(), String> {
+    let label = resolve_doc_label(doc_label.as_deref());
+    let s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &label)?;
+    let doc = session_ref(&s, &label)?.document.clone();
+    let steps = sections
+        .iter()
+        .map(|q| {
+            Ok(midi::Step {
+                plan: midi::plan_from(&doc, q.id, &channels, None).map_err(error)?,
+                looping: q.looping,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    s.transport.queue_switch(steps).map_err(error)
 }
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1353,14 +1477,21 @@ fn claim_midi(
     let mut s = state.lock().map_err(error)?;
     if s.midi_owner != label {
         // SFM: stop play/capture/monitor before switching the lease.
-        if s.transport.status().playing {
-            s.transport.stop();
-        }
         if s.capture.is_recording() {
             return Err("Stop recording in the other project window before switching MIDI.".into());
         }
+        if s.transport.status().playing {
+            s.transport.stop();
+        }
         if s.monitor.is_active() {
             s.monitor.stop();
+        }
+        s.transport.follow_chord(None);
+        let previous = s.midi_owner.clone();
+        let incoming = s.parked_captures.remove(&label).unwrap_or_default();
+        let outgoing = std::mem::replace(&mut s.capture, incoming);
+        if midi_owner_is_open(&s) {
+            s.parked_captures.insert(previous, outgoing);
         }
         s.midi_owner = label.clone();
     }
@@ -1371,8 +1502,10 @@ fn claim_midi(
     })
 }
 #[tauri::command]
-fn stop(state: State<'_, Shared>) -> Result<(), String> {
-    state.lock().map_err(error)?.transport.stop();
+fn stop(doc_label: Option<String>, state: State<'_, Shared>) -> Result<(), String> {
+    let mut s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    s.transport.stop();
     Ok(())
 }
 #[tauri::command]
@@ -1407,8 +1540,16 @@ fn test_note(
     .map_err(error)
 }
 #[tauri::command]
-fn transport_status(state: State<'_, Shared>) -> Result<midi::Status, String> {
-    Ok(state.lock().map_err(error)?.transport.status())
+fn transport_status(
+    doc_label: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<midi::Status, String> {
+    let label = resolve_doc_label(doc_label.as_deref());
+    let s = state.lock().map_err(error)?;
+    if s.midi_owner != label {
+        return Ok(midi::Status::default());
+    }
+    Ok(s.transport.status())
 }
 #[tauri::command]
 fn start_monitor(
@@ -1425,15 +1566,20 @@ fn start_monitor(
     s.monitor.start(&name).map_err(error)
 }
 #[tauri::command]
-fn stop_monitor(state: State<'_, Shared>) -> Result<(), String> {
-    state.lock().map_err(error)?.monitor.stop();
+fn stop_monitor(doc_label: Option<String>, state: State<'_, Shared>) -> Result<(), String> {
+    let mut s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    s.monitor.stop();
     Ok(())
 }
 #[tauri::command]
 fn monitor_snapshot(
+    doc_label: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<(Option<String>, Vec<midi::MonitorEvent>), String> {
-    Ok(state.lock().map_err(error)?.monitor.snapshot())
+    let s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    Ok(s.monitor.snapshot())
 }
 /// Held pitches on the active input monitor for MIDI LH chord recognition (SFM-045).
 #[tauri::command]
@@ -1442,18 +1588,37 @@ fn monitor_held_notes(
     channel: Option<u8>,
     // Inclusive LH upper pitch; None = no split (SFM chordPreviewSplit default 59).
     max_pitch: Option<u8>,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<Vec<u8>, String> {
     let ch = channel.filter(|c| (1..=16).contains(c));
-    Ok(state
-        .lock()
-        .map_err(error)?
-        .monitor
-        .held_notes(ch, max_pitch))
+    let s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    Ok(s.monitor.held_notes(ch, max_pitch))
+}
+/// Single Finger chord captured at the latest left-hand note-on.
+#[tauri::command]
+fn monitor_single_finger_chord(
+    doc_label: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<Option<chord_preview::RecognizedChord>, String> {
+    let s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    Ok(s.monitor.single_finger_chord())
+}
+
+/// Chord reported by the keyboard's arranger (XF chord message), if it sends one.
+#[tauri::command]
+fn monitor_xf_chord(doc_label: Option<String>, state: State<'_, Shared>) -> Result<Option<midi::XfChord>, String> {
+    let s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    Ok(s.monitor.xf_chord())
 }
 #[tauri::command]
-fn clear_monitor(state: State<'_, Shared>) -> Result<(), String> {
-    state.lock().map_err(error)?.monitor.clear();
+fn clear_monitor(doc_label: Option<String>, state: State<'_, Shared>) -> Result<(), String> {
+    let s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    s.monitor.clear();
     Ok(())
 }
 #[tauri::command]
@@ -1485,8 +1650,9 @@ fn start_capture(
     s.capture.start(&name, thru).map_err(error)
 }
 #[tauri::command]
-fn stop_capture(state: State<'_, Shared>) -> Result<(), String> {
+fn stop_capture(doc_label: Option<String>, state: State<'_, Shared>) -> Result<(), String> {
     let mut s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
     s.capture.stop();
     // End overdub accompaniment with the take (SFM parts recording).
     if s.transport.status().playing {
@@ -1500,10 +1666,13 @@ fn set_playback_channels(
     channels: Vec<u8>,
     index: usize,
     name: String,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<(), String> {
+    let label = resolve_doc_label(doc_label.as_deref());
     let muted = {
         let s = state.lock().map_err(error)?;
+        require_midi_owner(&s, &label)?;
         let prev = s.transport.audible_channels();
         s.transport
             .set_audible_channels(channels.clone())
@@ -1522,44 +1691,69 @@ fn set_playback_channels(
     midi::panic_release(index, &name, &muted).map_err(error)
 }
 #[tauri::command]
-fn capture_snapshot(state: State<'_, Shared>) -> Result<CaptureSnapshot, String> {
-    Ok(state.lock().map_err(error)?.capture.snapshot_tail(128))
+fn capture_snapshot(
+    doc_label: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<CaptureSnapshot, String> {
+    let s = state.lock().map_err(error)?;
+    let label = resolve_doc_label(doc_label.as_deref());
+    Ok(capture_for_project(&s, &label).map_or_else(
+        || MidiCapture::default().snapshot_tail(128),
+        |take| take.snapshot_tail(128),
+    ))
+}
+
+fn capture_for_project<'a>(s: &'a Studio, label: &str) -> Option<&'a MidiCapture> {
+    if s.midi_owner == label {
+        Some(&s.capture)
+    } else {
+        s.parked_captures.get(label)
+    }
 }
 #[tauri::command]
 fn capture_marker(
     label: String,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<capture::CaptureMarker, String> {
-    state
-        .lock()
-        .map_err(error)?
-        .capture
-        .add_marker(&label)
-        .map_err(error)
+    let s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    s.capture.add_marker(&label).map_err(error)
 }
 #[tauri::command]
 fn capture_inject_cc(
     channel: u8,
     controller: u8,
     value: u8,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<genos_core::midi::MonitorEvent, String> {
-    state
-        .lock()
-        .map_err(error)?
-        .capture
-        .inject_cc(channel, controller, value)
-        .map_err(error)
+    let s = state.lock().map_err(error)?;
+    require_midi_owner(&s, &resolve_doc_label(doc_label.as_deref()))?;
+    s.capture.inject_cc(channel, controller, value).map_err(error)
 }
 #[tauri::command]
-fn clear_capture(state: State<'_, Shared>) -> Result<(), String> {
-    state.lock().map_err(error)?.capture.clear().map_err(error)
+fn clear_capture(doc_label: Option<String>, state: State<'_, Shared>) -> Result<(), String> {
+    let s = state.lock().map_err(error)?;
+    let label = resolve_doc_label(doc_label.as_deref());
+    if let Some(take) = capture_for_project(&s, &label) {
+        take.clear().map_err(error)?;
+    }
+    Ok(())
 }
 #[tauri::command]
-async fn export_capture_midi(path: String, state: State<'_, Shared>) -> Result<(), String> {
+async fn export_capture_midi(
+    path: String,
+    doc_label: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<(), String> {
     let bytes = {
         let s = state.lock().map_err(error)?;
-        s.capture.to_smf_bytes().map_err(error)?
+        let label = resolve_doc_label(doc_label.as_deref());
+        capture_for_project(&s, &label)
+            .ok_or("No capture in this project")?
+            .to_smf_bytes()
+            .map_err(error)?
     };
     tauri::async_runtime::spawn_blocking(move || {
         project::write_new(Path::new(&path), &bytes).map_err(error)
@@ -1572,11 +1766,12 @@ async fn export_capture_midi(path: String, state: State<'_, Shared>) -> Result<(
 async fn export_section_csv(
     path: String,
     section: u64,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<(), String> {
     let csv = {
         let s = state.lock().map_err(error)?;
-        let session = s.session.as_ref().ok_or("Open a Style first")?;
+        let session = session_ref(&s, &resolve_doc_label(doc_label.as_deref()))?;
         export_csv::section_notes_csv(&session.document, section).map_err(error)?
     };
     tauri::async_runtime::spawn_blocking(move || {
@@ -1590,11 +1785,12 @@ async fn export_section_csv(
 async fn export_section_json(
     path: String,
     section: u64,
+    doc_label: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<(), String> {
     let text = {
         let s = state.lock().map_err(error)?;
-        let session = s.session.as_ref().ok_or("Open a Style first")?;
+        let session = session_ref(&s, &resolve_doc_label(doc_label.as_deref()))?;
         export_json::section_snapshot_pretty(&session.document, section).map_err(error)?
     };
     tauri::async_runtime::spawn_blocking(move || {
@@ -1604,6 +1800,15 @@ async fn export_section_json(
     .map_err(error)??;
     Ok(())
 }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CaptureVoice {
+    channel: u8,
+    bank_msb: u8,
+    bank_lsb: u8,
+    program: u8,
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri IPC command surface
 fn apply_capture_to_section(
@@ -1617,6 +1822,7 @@ fn apply_capture_to_section(
     include_controllers: Option<bool>,
     // 0/None = OMNI (all channels); 1..=16 = keep only that input channel before arm remap.
     input_channel: Option<u8>,
+    voice: Option<CaptureVoice>,
     doc_label: Option<String>,
     state: State<'_, Shared>,
     app: tauri::AppHandle,
@@ -1624,8 +1830,8 @@ fn apply_capture_to_section(
     let label = resolve_doc_label(doc_label.as_deref());
     let recovery = recovery_path_for(&app, &label)?;
     let mut s = state.lock().map_err(error)?;
-    require_midi_owner(&s, &label)?;
-    if s.transport.status().playing || s.capture.is_recording() {
+    let take = capture_for_project(&s, &label).ok_or("No capture in this project")?;
+    if (s.midi_owner == label && s.transport.status().playing) || take.is_recording() {
         return Err("Stop playback and capture before applying the take".into());
     }
     let (start, end, ppq, tempo) = {
@@ -1652,9 +1858,8 @@ fn apply_capture_to_section(
         return Err("Record data must include notes and/or controllers".into());
     }
     let mut notes = if want_notes {
-        match s
-            .capture
-            .to_note_inputs_quantized(start, end, ppq, tempo, 0, step, offset)
+        match take
+            .to_note_inputs_quantized(start, end, ppq, tempo, 0, step, offset, input_channel)
         {
             Ok(n) => n,
             Err(e) => {
@@ -1670,13 +1875,12 @@ fn apply_capture_to_section(
         Vec::new()
     };
     let mut channel_events = if want_controllers {
-        s.capture
-            .to_channel_events_quantized(start, end, ppq, tempo, 0, step, offset)
+        take
+            .to_channel_events_quantized(start, end, ppq, tempo, 0, step, offset, input_channel)
             .map_err(error)?
     } else {
         Vec::new()
     };
-    genos_core::capture::retain_input_channel(&mut notes, &mut channel_events, input_channel);
     if let Some(ch) = destination_channel {
         if !(1..=16).contains(&ch) {
             return Err("armed destination channel must be 1..16".into());
@@ -1701,6 +1905,44 @@ fn apply_capture_to_section(
         });
     }
     let session = session_mut(&mut s, &label)?;
+    if let Some(voice) = voice {
+        if !want_controllers
+            || !(1..=16).contains(&voice.channel)
+            || destination_channel.is_some_and(|channel| channel != voice.channel)
+            || [voice.bank_msb, voice.bank_lsb, voice.program]
+                .iter()
+                .any(|&value| value > 127)
+        {
+            return Err("Invalid captured voice assignment".into());
+        }
+        let track = session
+            .document
+            .notes
+            .iter()
+            .find(|note| note.channel == voice.channel && note.start >= start && note.start < end)
+            .map(|note| note.track)
+            .or_else(|| {
+                notes
+                    .iter()
+                    .find(|note| note.channel == voice.channel)
+                    .map(|note| note.track)
+            })
+            .unwrap_or(0);
+        let channel = voice.channel - 1;
+        channel_events.extend(
+            [
+                vec![0xb0 | channel, 0, voice.bank_msb],
+                vec![0xb0 | channel, 32, voice.bank_lsb],
+                vec![0xc0 | channel, voice.program],
+            ]
+            .into_iter()
+            .map(|data| genos_core::edit::ChannelEventInput {
+                track,
+                tick: start,
+                data,
+            }),
+        );
+    }
     session
         .execute(
             revision,
@@ -2176,6 +2418,7 @@ fn main() {
             stop_monitor,
             monitor_snapshot,
             monitor_held_notes,
+            monitor_single_finger_chord,
             clear_monitor,
             start_capture,
             stop_capture,
@@ -2215,6 +2458,10 @@ fn main() {
             play_live_style,
             apply_style_effects,
             apply_genos_system_effect,
+            queue_sections,
+            set_live_chord,
+            genos_part_defaults,
+            monitor_xf_chord,
             chord_preview_vocabulary,
             inspect_chord_preview,
             remap_chord_preview_notes,
@@ -2233,39 +2480,53 @@ fn main() {
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                let label = window.label();
+                if label != "main" && !label.starts_with("project-") {
+                    return;
+                }
                 let state = window.state::<Shared>();
                 let mut s = state.lock().unwrap_or_else(|p| p.into_inner());
-                let label = window.label().to_string();
                 let mut released = None;
                 if label == "main" {
                     s.main_closed = true;
+                    s.session = None;
+                    s.pending_exchange = None;
+                    s.pending_live = None;
+                } else {
+                    s.projects.remove(label);
                 }
-                if label == "main" || label.starts_with("project-") {
-                    // A closed window releases its document and any MIDI lease.
-                    if label != "main" {
-                        s.projects.remove(&label);
-                    }
-                    if s.midi_owner == label {
-                        let mut open: Vec<String> = s.projects.keys().cloned().collect();
-                        open.sort();
-                        let next = if s.main_closed {
-                            open.into_iter().next()
-                        } else {
-                            Some("main".to_string())
-                        };
-                        if let Some(next) = next {
-                            s.midi_owner = next;
-                            released = Some((
-                                s.midi_owner.clone(),
-                                s.projects.len() + usize::from(!s.main_closed),
-                            ));
-                        }
+                s.parked_captures.remove(label);
+                if s.midi_owner == label {
+                    s.transport.stop();
+                    s.transport.follow_chord(None);
+                    s.monitor.stop();
+                    s.capture.stop();
+                    s.capture = MidiCapture::default();
+                    let next = if s.main_closed {
+                        s.projects.keys().min().cloned()
+                    } else {
+                        Some("main".to_string())
+                    };
+                    if let Some(next) = next {
+                        s.capture = s.parked_captures.remove(&next).unwrap_or_default();
+                        s.midi_owner = next;
+                        released = Some((
+                            s.midi_owner.clone(),
+                            s.projects.len() + usize::from(!s.main_closed),
+                        ));
                     }
                 }
-                s.transport.stop();
-                s.monitor.stop();
-                s.capture.stop();
                 drop(s);
+                for tool in ["piano-roll", "mixer"] {
+                    let tool_label = if label == "main" {
+                        tool.to_owned()
+                    } else {
+                        format!("{tool}-{label}")
+                    };
+                    if let Some(detached) = window.app_handle().get_webview_window(&tool_label) {
+                        let _ = detached.destroy();
+                    }
+                }
                 if let Some((owner, windows)) = released {
                     // Tell the remaining windows who holds MIDI now.
                     let _ = window.app_handle().emit(
@@ -2308,6 +2569,7 @@ mod exchange_preview_tests {
         let mut s = Studio {
             session: Some(session()),
             epoch: 1,
+            project_epoch: 1,
             ..Default::default()
         };
         s.projects.insert(
@@ -2338,6 +2600,18 @@ mod exchange_preview_tests {
         )
         .unwrap()
     }
+    #[test]
+    fn initial_effect_tokens_distinguish_projects_and_reused_window_labels() {
+        let mut s = studio();
+        let original = effect_preview_token(&s, "project-2", 0);
+        assert_ne!(original, effect_preview_token(&s, "main", 0));
+
+        let mut reopened = s.projects.remove("project-2").unwrap();
+        reopened.epoch = next_project_epoch(&mut s);
+        s.projects.insert("project-2".into(), reopened);
+        assert_ne!(original, effect_preview_token(&s, "project-2", 0));
+    }
+
     #[test]
     fn both_windows_keep_their_own_preview_even_with_equal_epochs_revisions_and_counters() {
         let mut s = studio();
@@ -2386,6 +2660,22 @@ mod exchange_preview_tests {
 #[cfg(test)]
 mod midi_lease_tests {
     use super::*;
+
+    #[test]
+    fn capture_lookup_keeps_the_active_and_parked_takes_separate() {
+        let mut s = Studio::default();
+        s.parked_captures
+            .insert("project-2".into(), MidiCapture::default());
+        assert!(std::ptr::eq(
+            capture_for_project(&s, "main").unwrap(),
+            &s.capture,
+        ));
+        assert!(std::ptr::eq(
+            capture_for_project(&s, "project-2").unwrap(),
+            &s.parked_captures["project-2"],
+        ));
+        assert!(capture_for_project(&s, "project-3").is_none());
+    }
 
     #[test]
     fn main_owns_midi_by_default() {

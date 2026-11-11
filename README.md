@@ -64,14 +64,51 @@ npm ci
 npm run desktop
 ```
 
-Create a Windows release and installer:
+Create a Windows release and installer locally:
 
 ```powershell
 cd src
 npm run package
 ```
 
-The executable is written to `src/target/release/`; the NSIS installer is written under `src/target/release/bundle/nsis/`. Dependency notices are generated during the build.
+The executable is written to `src/target/release/`; the NSIS installer (current-user, Start Menu folder **Genos Style Studio**) is written under `src/target/release/bundle/nsis/`. Dependency notices are generated during the build.
+
+### Genos firmware tables for live preview
+
+For pitched and Guitar Ctb2 preview using Genos 2.13 build 52 tables, set
+`GENOS_NTT_PRG` to the local `GENOSSETUP.PRG` before starting the app.
+Alternatively, set `GENOS_NTT_ELF` to the extracted `17wsh.elf`.
+The update image takes precedence if both variables are set. The app verifies
+the SHA-256 and loads the tables on first use. If neither variable is set,
+the app uses its built-in preview rules. Supply the firmware file locally.
+With firmware configured, the Source Tracks dialog also offers **Use Genos
+part defaults** to draft a CASM reset for destination parts 9–16.
+
+### GitHub Release (NSIS)
+
+CI builds the same NSIS installer on `windows-latest` and attaches it to a GitHub Release.
+
+1. Bump the shared app version (keeps `package.json`, `tauri.conf.json`, both `Cargo.toml` files and `package-lock.json` aligned):
+
+```powershell
+cd src
+npm run bump -- 0.1.1
+```
+
+2. Commit the version bump, then tag and push:
+
+```powershell
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+Pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which produces `GenosStyleStudio_<version>_x64-setup.exe` and opens a **draft prerelease**. Publish the draft from the GitHub Releases page when you are ready.
+
+You can also run **Actions → Release → Run workflow** for a manual draft without pushing a tag first.
+
+Repository settings: under **Settings → Actions → General → Workflow permissions**, allow read and write so the release job can create releases with `GITHUB_TOKEN`.
+
+Windows code signing is not configured yet; SmartScreen may warn on first run until a signing certificate is added.
 
 ## Checks
 

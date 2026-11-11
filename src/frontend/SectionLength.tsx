@@ -2,6 +2,7 @@ import { restoreEditorFocus } from "./modal";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Section, View } from "./contracts";
 import { trapModalFocus } from "./modal";
+import { meterAt } from "./pianoEditing";
 import { useStudio } from "./store";
 
 function isFillBreak(label: string): boolean {
@@ -18,11 +19,6 @@ function isFillBreak(label: string): boolean {
   );
 }
 
-function barsOf(view: View, section: Section): number {
-  const bar = ((view.ppq * 4) / view.denominator) * view.numerator;
-  return (section.end - section.start) / bar;
-}
-
 export function SectionLength({
   view,
   section,
@@ -36,13 +32,21 @@ export function SectionLength({
   const dialog = useRef<HTMLElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
-  const currentBars = Math.round(barsOf(view, section));
+  const { bar, denominator } = meterAt(view, section.start);
+  const currentBars = (section.end - section.start) / bar;
+  const validLength =
+    denominator <= 32 &&
+    Number.isInteger(bar) &&
+    bar > 0 &&
+    Number.isInteger(currentBars) &&
+    currentBars > 0;
+  const initialBars = validLength ? currentBars : 1;
   const fillBreak = isFillBreak(section.label);
   const [mode, setMode] = useState<"fillBreak" | "shorten">(
     fillBreak ? "fillBreak" : "shorten",
   );
   const [bars, setBars] = useState(
-    fillBreak ? Math.min(8, Math.max(1, currentBars)) : Math.max(1, currentBars - 1),
+    fillBreak ? Math.min(8, initialBars) : Math.max(1, initialBars - 1),
   );
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,21 +57,22 @@ export function SectionLength({
     return () => restoreEditorFocus(prior);
   }, []);
 
-  const maxBars = mode === "fillBreak" ? 8 : Math.max(1, currentBars - 1);
+  const maxBars = mode === "fillBreak" ? 8 : Math.max(1, initialBars - 1);
   const minBars = 1;
   const preview = useMemo(() => {
+    if (!validLength) return "This section needs a supported meter and a whole number of bars.";
     if (mode === "shorten") {
       return `Shorten ${section.label}: ${currentBars} → ${bars} bars. Notes past the new end are removed; crossing notes are clipped. CASM and Voices stay.`;
     }
     return `Set ${section.label} length to ${bars} bars (1–8). Shortening rejects if MIDI would be lost — use Shorten Section instead.`;
-  }, [mode, section.label, currentBars, bars]);
+  }, [mode, section.label, currentBars, bars, validLength]);
 
   const dismiss = () => {
     if (!busy) close.current();
   };
 
   const apply = async () => {
-    if (busy) return;
+    if (busy || !validLength) return;
     if (mode === "shorten" && !confirm) {
       setError("Confirm deleting data after the new section end.");
       return;
@@ -124,9 +129,9 @@ export function SectionLength({
           </button>
         </div>
         <p className="source-zone">
-          {section.label} · current {currentBars} bars
+          {section.label}{validLength && ` · current ${currentBars} bars`}
         </p>
-        <fieldset className="field" disabled={busy}>
+        <fieldset className="field" disabled={busy || !validLength}>
           {fillBreak && (
             <label>
               <span>Tool</span>
@@ -196,6 +201,7 @@ export function SectionLength({
             className="primary"
             disabled={
               busy ||
+              !validLength ||
               (mode === "shorten" && (!confirm || bars >= currentBars)) ||
               (mode === "fillBreak" && bars === currentBars)
             }

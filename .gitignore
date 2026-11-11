@@ -1,6 +1,8 @@
 # Publish only the application workspace and repository rules.
 /*
 !/.gitignore
+!/.github/
+!/.github/**
 !/src/
 !/assets/
 !/assets/**

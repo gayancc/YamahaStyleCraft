@@ -30,7 +30,15 @@
     "active": true,
     "targets": ["nsis"],
     "shortDescription": "Yamaha Style and MIDI editor",
+    "longDescription": "Windows desktop editor for Yamaha Genos Style files (SFF2), with MIDI playback, voice assignment and expansion recovery tooling.",
     "category": "Music",
-    "resources": { "../../docs/development/third-party/": "third-party/" }
+    "resources": { "../../docs/development/third-party/": "third-party/" },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "startMenuFolder": "Genos Style Studio"
+      }
+    }
   }
 }

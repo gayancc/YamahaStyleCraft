@@ -1,5 +1,8 @@
 //! SFM-PITCH-RANGE: Genos/Genos2 RPN 0,0 fingerprint (not proprietary SysEx).
-use genos_core::edit::{Command, Session};
+use genos_core::{
+    channel_eq::{self, EqBand},
+    edit::{Command, Session},
+};
 use std::{fs, path::Path};
 
 fn session() -> Session {
@@ -64,6 +67,56 @@ fn pitch_bend_range_writes_rpn_packet_and_undoes() {
         .filter(|e| matches!(e.data[1], 6 | 100 | 101))
         .collect();
     assert!(packet.len() >= 5);
+    s.undo().unwrap();
+    assert_eq!(s.document.style.bytes().unwrap(), before);
+}
+
+#[test]
+fn range_edit_preserves_same_tick_eq_and_reuses_its_packet() {
+    let mut s = session();
+    let main = s
+        .document
+        .sections
+        .iter()
+        .find(|x| x.label == "Main A")
+        .unwrap();
+    let (section, tick) = (main.id, main.start);
+    s.execute(
+        0,
+        Command::MixerEq {
+            section,
+            channel: 11,
+            band: EqBand::EqLow,
+            value: 79,
+            all_sections: false,
+        },
+    )
+    .unwrap();
+    let range = |semitones| Command::PitchBendRange {
+        section,
+        channel: 11,
+        semitones,
+        all_sections: false,
+    };
+    s.execute(1, range(12)).unwrap();
+    let before = s.document.style.bytes().unwrap();
+    let count = s.document.style.tracks.iter().flatten().count();
+    s.execute(2, range(24)).unwrap();
+    let events: Vec<_> = s.document.style.tracks.iter().flatten().cloned().collect();
+    assert_eq!(events.len(), count);
+    assert_eq!(
+        channel_eq::value_at(&events, 11, tick, EqBand::EqLow),
+        Some(79)
+    );
+    assert_eq!(
+        channel_eq::packet_indices(&events, 11, tick, EqBand::EqLow).len(),
+        5
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.tick == tick && e.data == [0xba, 6, 24])
+    );
     s.undo().unwrap();
     assert_eq!(s.document.style.bytes().unwrap(), before);
 }

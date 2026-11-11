@@ -40,8 +40,9 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.`;
+const appVersion = read("package.json").version;
 let notices =
-  "# Third-party notices\n\nGenosStyleStudio 0.1.0. Locked dependency inventory, including development/build and non-Windows optional crates for completeness. Original SFM binaries, code, graphics and voice catalogues are not included.\n\n";
+  `# Third-party notices\n\nGenosStyleStudio ${appVersion}. Locked dependency inventory, including development/build and non-Windows optional crates for completeness. Original SFM binaries, code, graphics and voice catalogues are not included.\n\n`;
 const licenseFiles = (d) =>
   fs
     .readdirSync(d, { withFileTypes: true })

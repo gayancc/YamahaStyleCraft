@@ -1,3 +1,4 @@
+import { useStudio } from "./store";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { CatalogVoice, MonitorEvent } from "./contracts";
@@ -43,6 +44,7 @@ export function UserVoiceEditor({
   onSave: (voice: CatalogVoice) => void;
   onCancel: () => void;
 }) {
+  const docLabel = useStudio((state) => state.docLabel);
   const [draft, setDraft] = useState(() => toDraft(initial));
   const [learning, setLearning] = useState(false);
   const [note, setNote] = useState("");
@@ -53,35 +55,49 @@ export function UserVoiceEditor({
     let live = true;
     const startedHere = !monitoringActive;
     let baseline = -1;
-    let msb: number | null = null;
-    let lsb: number | null = null;
+    let seenAtBaseline = 0;
+    const banks = new Map<number, { msb?: number; lsb?: number }>();
     const finish = () => {
       if (live) setLearning(false);
     };
     const poll = async () => {
       const [, events] =
-        await invoke<[string | null, MonitorEvent[]]>("monitor_snapshot");
+        await invoke<[string | null, MonitorEvent[]]>("monitor_snapshot", { docLabel });
       if (!live) return;
-      if (baseline < 0) {
+      if (!startedHere && baseline < 0) {
         baseline = events.reduce((m, e) => Math.max(m, e.stampMs), 0);
+        seenAtBaseline = events.filter((e) => e.stampMs === baseline).length;
         return;
       }
+      let atBaseline = 0;
       for (const e of events) {
-        if (e.stampMs <= baseline) continue;
-        baseline = e.stampMs;
+        if (e.stampMs < baseline) continue;
+        if (e.stampMs > baseline) {
+          baseline = e.stampMs;
+          seenAtBaseline = 0;
+          atBaseline = 0;
+        }
+        if (++atBaseline <= seenAtBaseline) continue;
+        seenAtBaseline = atBaseline;
         const [status, d1, d2] = e.data;
         const type = status & 0xf0;
-        if (type === 0xb0 && d1 === 0) msb = d2;
-        else if (type === 0xb0 && d1 === 32) lsb = d2;
-        else if (type === 0xc0) {
+        const channel = status & 15;
+        const bank = banks.get(channel) ?? {};
+        if (type === 0xb0 && e.data.length === 3 && d2 < 128) {
+          if (d1 === 0) bank.msb = d2;
+          else if (d1 === 32) bank.lsb = d2;
+          else continue;
+          banks.set(channel, bank);
+        } else if (type === 0xc0 && e.data.length === 2 && d1 < 128) {
+          const { msb, lsb } = bank;
           set({
-            ...(msb !== null ? { msb: String(msb) } : {}),
-            ...(lsb !== null ? { lsb: String(lsb) } : {}),
+            ...(msb !== undefined ? { msb: String(msb) } : {}),
+            ...(lsb !== undefined ? { lsb: String(lsb) } : {}),
             program: String(d1 + 1),
           });
           setNote(
-            msb === null && lsb === null
-              ? "Program received, but the keyboard sent no bank — check MSB/LSB."
+            msb === undefined || lsb === undefined
+              ? "Program received with incomplete bank data. Check MSB/LSB."
               : "Address learned from the keyboard.",
           );
           finish();
@@ -90,16 +106,32 @@ export function UserVoiceEditor({
       }
     };
     let timer = 0;
+    let polling = false;
+    let monitorOpened = false;
+    const releaseMonitor = () => {
+      if (!monitorOpened) return;
+      monitorOpened = false;
+      void invoke("stop_monitor", { docLabel }).catch(() => undefined);
+    };
     const begin = async () => {
       try {
-        if (startedHere) await invoke("start_monitor", { name: midiInput });
-        if (!live) return;
+        if (startedHere) {
+          await invoke("start_monitor", { name: midiInput, docLabel });
+          monitorOpened = true;
+        }
+        if (!live) {
+          releaseMonitor();
+          return;
+        }
         await poll();
-        timer = window.setInterval(
-          () => void poll().catch(() => undefined),
-          250,
-        );
+        if (!live) return;
+        timer = window.setInterval(() => {
+          if (polling) return;
+          polling = true;
+          void poll().catch(() => undefined).finally(() => { polling = false; });
+        }, 250);
       } catch (err) {
+        if (!live) return;
         setNote(String(err));
         finish();
       }
@@ -115,9 +147,9 @@ export function UserVoiceEditor({
       live = false;
       window.clearInterval(timer);
       window.clearTimeout(timeout);
-      if (startedHere) void invoke("stop_monitor").catch(() => undefined);
+      releaseMonitor();
     };
-  }, [learning, midiInput, monitoringActive]);
+  }, [learning, midiInput, monitoringActive, docLabel]);
 
   const msb = parse(draft.msb, 0, 127);
   const lsb = parse(draft.lsb, 0, 127);
