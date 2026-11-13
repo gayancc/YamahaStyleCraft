@@ -50,6 +50,9 @@ beforeEach(() => {
   props.onTransport.mockReset();
 });
 afterEach(cleanup);
+/** IPC calls other than the read-only firmware status query, which sends nothing. */
+const deviceCalls = () =>
+  mock.invoke.mock.calls.filter(([command]) => command !== "firmware_status");
 it("keeps Escape inside the preview while a native check is pending", async () => {
   let resolve!: (value: unknown) => void;
   mock.invoke.mockImplementation(command => command === "preview_live_style"
@@ -65,7 +68,7 @@ it("keeps Escape inside the preview while a native check is pending", async () =
 });
 it("does not transmit on open or check; applies source channels and progression to preflight", async () => {
   render(<LivePreview {...props} />);
-  expect(mock.invoke).not.toHaveBeenCalled();
+  expect(deviceCalls()).toEqual([]);
   expect(
     (
       screen.getByRole("button", {
@@ -75,7 +78,7 @@ it("does not transmit on open or check; applies source channels and progression 
   ).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Check live preview" }));
   await screen.findByText("Preview ready");
-  expect(mock.invoke.mock.calls[0]).toEqual([
+  expect(deviceCalls()[0]).toEqual([
     "preview_live_style",
     {
       revision: 1,
@@ -187,7 +190,7 @@ it("includes optional slash bass only after selection and invalidates its review
   });
   fireEvent.click(screen.getByText("Check live preview"));
   await screen.findByText("Preview ready");
-  expect(mock.invoke.mock.calls[0][1].config.chords[0]).toEqual({
+  expect(deviceCalls()[0][1].config.chords[0]).toEqual({
     root: 0,
     quality: "Major",
     bars: 1,

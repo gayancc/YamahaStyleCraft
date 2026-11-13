@@ -1132,6 +1132,8 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
             beats: vec![at(total_ticks)],
             section: None,
             tempo: None,
+            // Packets already carry their destination channels.
+            routes: crate::midi::ChannelRoutes::default(),
         },
         report,
         channels: destinations,

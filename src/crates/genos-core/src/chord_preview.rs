@@ -198,10 +198,139 @@ pub fn recognize_single_finger(notes: &[u8]) -> Option<RecognizedChord> {
     Some(RecognizedChord { root, quality: quality.into() })
 }
 
-/// `recognize(notes)` — match pitch-class set against `TONES` under each root.
+/// Genos Fingered chord types (Yamaha XF chord-type numbering) as intervals above the root.
+/// Numbering and inversion handling were checked against a Genos 2.13 on 2026-11-12.
+const FINGERED_TYPES: &[(u8, &[u8])] = &[
+    (0, &[0, 4, 7]),
+    (1, &[0, 4, 7, 9]),
+    (2, &[0, 4, 7, 11]),
+    (3, &[0, 4, 6, 7, 11]),
+    (4, &[0, 2, 4, 7]),
+    (5, &[0, 2, 4, 7, 11]),
+    (6, &[0, 2, 4, 7, 9]),
+    (7, &[0, 4, 8]),
+    (8, &[0, 3, 7]),
+    (9, &[0, 3, 7, 9]),
+    (10, &[0, 3, 7, 10]),
+    (11, &[0, 3, 6, 10]),
+    (12, &[0, 2, 3, 7]),
+    (13, &[0, 2, 3, 7, 10]),
+    (14, &[0, 3, 5, 7, 10]),
+    (15, &[0, 3, 7, 11]),
+    (16, &[0, 2, 3, 7, 11]),
+    (17, &[0, 3, 6]),
+    (18, &[0, 3, 6, 9]),
+    (19, &[0, 4, 7, 10]),
+    (20, &[0, 5, 7, 10]),
+    (21, &[0, 4, 6, 10]),
+    (22, &[0, 2, 4, 7, 10]),
+    (23, &[0, 4, 6, 7, 10]),
+    (24, &[0, 4, 7, 9, 10]),
+    (25, &[0, 1, 4, 7, 10]),
+    (26, &[0, 4, 7, 8, 10]),
+    (27, &[0, 3, 4, 7, 10]),
+    (28, &[0, 4, 8, 11]),
+    (29, &[0, 4, 8, 10]),
+    (30, &[0]),
+    (31, &[0, 7]),
+    (32, &[0, 5, 7]),
+    (33, &[0, 2, 7]),
+    // Root and major third alone follow as a major chord.
+    (0, &[0, 4]),
+];
+
+/// Types whose perfect fifth may be left out (a C-E-Bb voicing still plays C7).
+const FIFTH_OPTIONAL: &[u8] = &[1, 2, 5, 6, 10, 13, 15, 16, 19, 22, 24, 25, 27];
+
+/// Genos Fingered chord type `(root, type id)` for held keys. When several roots fit the
+/// same keys (C6 and Am7), the lowest key decides, then the previous chord.
+pub fn fingered_type(notes: &[u8], previous: Option<&RecognizedChord>) -> Option<(u8, u8)> {
+    let bass = notes.iter().copied().min()? % 12;
+    let pcs: BTreeSet<u8> = notes.iter().map(|n| n % 12).collect();
+    // Rank: complete chord (no omitted fifth), root is the lowest key, matches the previous
+    // chord, type id. The Genos reads C-E-A as A minor, not C6 without its fifth.
+    type Rank = (bool, bool, bool, u8);
+    let mut best: Option<(Rank, (u8, u8))> = None;
+    for &root in &pcs {
+        let intervals: BTreeSet<u8> = pcs.iter().map(|p| (p + 12 - root) % 12).collect();
+        for &(id, tones) in FINGERED_TYPES {
+            let exact = tones.iter().copied().collect::<BTreeSet<_>>() == intervals;
+            let without_fifth = !exact
+                && FIFTH_OPTIONAL.contains(&id)
+                && !intervals.contains(&7)
+                && tones.iter().filter(|&&t| t != 7).copied().collect::<BTreeSet<_>>() == intervals;
+            if !exact && !without_fifth {
+                continue;
+            }
+            let same_as_previous = previous.is_some_and(|p| {
+                p.root == root && p.quality == type_quality(id, firmware_named())
+            });
+            let key = (without_fifth, root != bass, !same_as_previous, id);
+            if best.is_none_or(|(k, _)| key < k) {
+                best = Some((key, (root, id)));
+            }
+        }
+    }
+    best.map(|(_, chord)| chord)
+}
+
+fn firmware_named() -> bool {
+    crate::firmware_ntt::is_configured()
+}
+
+/// App quality for a Genos chord type: the exact `Genos:<id>` when firmware tables are
+/// active, otherwise the nearest of the supported preview qualities.
+pub fn type_quality(id: u8, firmware: bool) -> String {
+    match named_quality(id) {
+        Some(name) => name.into(),
+        None if firmware => format!("Genos:{id}"),
+        None => nearest_quality(id).into(),
+    }
+}
+
+/// Genos chord types that are exactly one of the supported preview qualities.
+fn named_quality(id: u8) -> Option<&'static str> {
+    Some(match id {
+        0 => "Major",
+        2 => "Maj7",
+        7 => "aug",
+        8 => "Minor",
+        10 => "m7",
+        11 => "m7b5",
+        17 => "dim",
+        19 => "7",
+        32 => "sus4",
+        33 => "sus2",
+        _ => return None,
+    })
+}
+
+/// Closest supported quality for any Genos chord type (used without firmware tables).
+fn nearest_quality(id: u8) -> &'static str {
+    named_quality(id).unwrap_or(match id {
+        3 | 5 => "Maj7",
+        9 | 12 | 15 | 16 => "Minor",
+        13 | 14 => "m7",
+        18 => "dim",
+        20 => "sus4",
+        21..=27 => "7",
+        28 | 29 => "aug",
+        // Maj6/Maj(9)/Maj6(9), 1+8, 1+5, and the cancel/no-chord codes.
+        _ => "Major",
+    })
+}
+
+/// Recognize held keys as the Genos Fingered chord, falling back to tension-tolerant
+/// matching of the supported qualities.
 pub fn recognize(notes: &[u8], previous: Option<&RecognizedChord>) -> Option<RecognizedChord> {
     if notes.is_empty() {
         return None;
+    }
+    if let Some((root, id)) = fingered_type(notes, previous) {
+        return Some(RecognizedChord {
+            root,
+            quality: type_quality(id, firmware_named()),
+        });
     }
     let pcs: BTreeSet<u8> = notes.iter().map(|n| n % 12).collect();
     let bass = notes.iter().copied().min().unwrap() % 12;
@@ -298,19 +427,7 @@ fn xf_root(byte: u8) -> Option<u8> {
 }
 
 fn xf_quality(code: u8) -> Option<&'static str> {
-    Some(match code {
-        0x00 | 0x01 | 0x04 | 0x06 | 0x22 | 0x23 => "Major",
-        0x02 | 0x03 | 0x05 => "Maj7",
-        0x07 => "aug",
-        0x08 | 0x09 | 0x0c | 0x0f | 0x10 => "Minor",
-        0x0a | 0x0d | 0x0e => "m7",
-        0x0b => "m7b5",
-        0x11 | 0x12 => "dim",
-        0x13 | 0x15..=0x1f => "7",
-        0x14 | 0x20 => "sus4",
-        0x21 => "sus2",
-        _ => return None,
-    })
+    (code <= 0x23).then(|| nearest_quality(code))
 }
 
 /// Yamaha XF chord message `F0 43 7E ss rr tt bb bt F7`, with subtype 00 or
@@ -1008,6 +1125,87 @@ mod tests {
             ]),
             "Held-note recognition changed relative to the Multi Finger firmware baseline"
         );
+    }
+
+    /// Voicings played into a Genos 2.13 (Fingered, Chord Detect on MIDI channel 1) and the
+    /// chord type its accompaniment followed, observed on 2026-11-12 with LATIN01 Main A.
+    const GENOS_OBSERVED: &[(&[u8], u8, u8)] = &[
+        (&[48, 52, 55], 0, 0),
+        (&[52, 55, 60], 0, 0),
+        (&[43, 48, 52], 0, 0),
+        (&[48, 52, 55, 58], 0, 19),
+        (&[48, 52, 58], 0, 19),
+        (&[48, 51, 55, 58], 0, 10),
+        (&[48, 52, 55, 59], 0, 2),
+        (&[48, 52, 55, 57], 0, 1),
+        (&[48, 50, 52, 55], 0, 4),
+        (&[48, 53, 55], 0, 32),
+        (&[48, 53, 55, 58], 0, 20),
+        (&[48, 51, 54], 0, 17),
+        (&[48, 51, 54, 57], 0, 18),
+        (&[48, 52, 56], 0, 7),
+        (&[48, 51, 54, 58], 0, 11),
+        (&[48, 51, 55, 59], 0, 15),
+        (&[48, 51, 55, 57], 0, 9),
+        (&[48, 55], 0, 31),
+        (&[48], 0, 30),
+        (&[48, 52], 0, 0),
+        // An exact chord on another root beats a fifth-omitted reading on the lowest key.
+        (&[48, 52, 57], 9, 8),
+        (&[45, 48, 52], 9, 8),
+        (&[48, 51, 57], 9, 17),
+    ];
+
+    #[test]
+    fn fingered_types_match_genos_observations() {
+        for &(keys, root, id) in GENOS_OBSERVED {
+            assert_eq!(fingered_type(keys, None), Some((root, id)), "keys {keys:?}");
+        }
+    }
+
+    #[test]
+    fn recognize_keeps_the_genos_root_without_firmware_tables() {
+        // Before: C6 read as A m7, Cm6 as A m7b5, C7sus4 as F sus4, CmM7 as Eb aug.
+        for &(keys, root, _) in GENOS_OBSERVED {
+            let hit = recognize(keys, None).unwrap_or_else(|| panic!("keys {keys:?}"));
+            assert_eq!(hit.root, root, "keys {keys:?} -> {hit:?}");
+            assert!(QUALITIES.contains(&hit.quality.as_str()), "{hit:?}");
+        }
+        let quality = |keys: &[u8]| recognize(keys, None).unwrap().quality;
+        assert_eq!(quality(&[48, 52, 58]), "7");
+        assert_eq!(quality(&[48, 53, 55, 58]), "sus4");
+        assert_eq!(quality(&[48, 51, 55, 59]), "Minor");
+        assert_eq!(quality(&[48, 51, 55, 57]), "Minor");
+        assert_eq!(quality(&[48, 51, 54, 57]), "dim");
+    }
+
+    #[test]
+    fn inversions_take_the_lowest_key_as_root_when_ambiguous() {
+        // A C E G is A m7; C E G A is C6 (Genos type 1).
+        assert_eq!(fingered_type(&[45, 48, 52, 55], None), Some((9, 10)));
+        assert_eq!(fingered_type(&[48, 52, 55, 57], None), Some((0, 1)));
+    }
+
+    #[test]
+    fn xf_augmented_and_interval_types_keep_their_character() {
+        let quality = |code| xf_quality(code).unwrap();
+        // Maj7aug and 7aug are augmented; 1+8 and 1+5 have no seventh.
+        assert_eq!(quality(28), "aug");
+        assert_eq!(quality(29), "aug");
+        assert_eq!(quality(30), "Major");
+        assert_eq!(quality(31), "Major");
+        assert_eq!(quality(19), "7");
+        assert_eq!(quality(20), "sus4");
+        assert!(xf_quality(0x24).is_none());
+    }
+
+    #[test]
+    fn genos_type_names_use_supported_qualities_or_firmware_ids() {
+        assert_eq!(type_quality(19, false), "7");
+        assert_eq!(type_quality(1, false), "Major");
+        assert_eq!(type_quality(1, true), "Genos:1");
+        assert_eq!(type_quality(19, true), "7");
+        assert_eq!(type_quality(30, false), "Major");
     }
 
     #[test]

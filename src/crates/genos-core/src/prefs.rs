@@ -56,6 +56,10 @@ pub struct Prefs {
     /// Per-channel (1..=16) piano-roll display colors (SFM Note colors). Display-only.
     #[serde(default)]
     pub note_colors: Vec<String>,
+    /// The user's own Genos 2.13 update image or extracted ELF, used for exact
+    /// firmware chord conversion. Never bundled; loaded only from this path.
+    #[serde(default)]
+    pub firmware_path: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -99,6 +103,7 @@ impl Default for Prefs {
             recording_offset_ms: 0,
             library_favorites: Vec::new(),
             note_colors: Vec::new(),
+            firmware_path: None,
         }
     }
 }

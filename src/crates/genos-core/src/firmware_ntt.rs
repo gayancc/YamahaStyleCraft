@@ -37,8 +37,44 @@ pub(crate) struct Tables {
 }
 
 static TABLES: OnceLock<std::result::Result<Option<Tables>, String>> = OnceLock::new();
+/// Tables the user selected in the app; they take precedence over the environment.
+static USER_TABLES: OnceLock<Tables> = OnceLock::new();
+
+/// Loads the conversion tables from the user's own Genos 2.13 update image (`.PRG`)
+/// or its extracted ARM ELF. Both are digest-checked; anything else is rejected.
+/// Returns `Ok(false)` when tables were already loaded from a file this session.
+pub fn configure_file(path: &Path) -> Result<bool> {
+    if USER_TABLES.get().is_some() {
+        return Ok(false);
+    }
+    let size = std::fs::metadata(path)
+        .map_err(|e| Error::Unsupported(format!("Cannot read the firmware file: {e}")))?
+        .len();
+    let elf = if size == PRG_SIZE {
+        read_prg_elf(path).map_err(|_| {
+            Error::Unsupported("Expected the verified Genos 2.13 update image".into())
+        })?
+    } else if size == ELF_SIZE as u64 {
+        std::fs::read(path)
+            .map_err(|e| Error::Unsupported(format!("Cannot read the firmware file: {e}")))?
+    } else {
+        return Err(Error::Unsupported(
+            "Choose the Genos 2.13 update file (.PRG) or its extracted 17wsh ELF".into(),
+        ));
+    };
+    let tables = Tables::load(&elf).map_err(Error::Unsupported)?;
+    Ok(USER_TABLES.set(tables).is_ok())
+}
+
+/// Whether Genos firmware conversion tables are active.
+pub fn is_configured() -> bool {
+    configured().is_ok_and(|tables| tables.is_some())
+}
 
 pub(crate) fn configured() -> Result<Option<&'static Tables>> {
+    if let Some(tables) = USER_TABLES.get() {
+        return Ok(Some(tables));
+    }
     TABLES
         .get_or_init(|| {
             if let Some(path) = std::env::var_os("GENOS_NTT_PRG") {
@@ -188,5 +224,29 @@ impl Tables {
             }
             _ => Some(note),
         }
+    }
+}
+
+#[cfg(test)]
+mod configure_file_tests {
+    use super::configure_file;
+
+    #[test]
+    fn rejects_a_file_that_is_not_the_genos_update_or_elf() {
+        let dir = std::env::temp_dir().join(format!("gss-fw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("not-firmware.bin");
+        std::fs::write(&path, b"not firmware").unwrap();
+        let error = configure_file(&path).unwrap_err().to_string();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(error.contains("Genos 2.13 update file"), "{error}");
+    }
+
+    #[test]
+    fn reports_a_missing_file() {
+        let error = configure_file(std::path::Path::new("Z:/missing/genos.prg"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Cannot read the firmware file"), "{error}");
     }
 }

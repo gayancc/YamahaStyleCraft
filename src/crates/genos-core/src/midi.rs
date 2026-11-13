@@ -44,6 +44,59 @@ fn err(e: impl std::fmt::Display) -> Error {
 pub(crate) fn map_err(e: impl std::fmt::Display) -> Error {
     err(e)
 }
+
+/// Attempts to open an input before giving up. Windows MIDI Services fails the first
+/// `midiInOpen` on an idle Bluetooth endpoint (for example a CME WIDI) and then succeeds.
+const INPUT_CONNECT_ATTEMPTS: u32 = 4;
+const INPUT_CONNECT_BACKOFF: Duration = Duration::from_millis(120);
+
+/// Whether a failed input connection is worth retrying. A port another program holds
+/// (`MMSYSERR_ALLOCATED`) and an invalid port are reported at once.
+fn input_connect_is_transient(kind: midir::ConnectErrorKind) -> bool {
+    match kind {
+        midir::ConnectErrorKind::InvalidPort => false,
+        midir::ConnectErrorKind::Other(message) => !message.contains("ALLOCATED"),
+    }
+}
+
+/// Opens an exact input port, retrying the transient Windows open failure.
+/// `make_callback` builds a fresh callback for each attempt because midir consumes it.
+pub fn connect_input<F>(
+    mut input: MidiInput,
+    port: &midir::MidiInputPort,
+    label: &str,
+    mut make_callback: impl FnMut() -> F,
+) -> Result<midir::MidiInputConnection<()>>
+where
+    F: FnMut(u64, &[u8], &mut ()) + Send + 'static,
+{
+    let mut attempt = 1;
+    loop {
+        match input.connect(port, label, make_callback(), ()) {
+            Ok(connection) => return Ok(connection),
+            Err(e) if attempt < INPUT_CONNECT_ATTEMPTS && input_connect_is_transient(e.kind()) => {
+                input = e.into_inner();
+                thread::sleep(INPUT_CONNECT_BACKOFF * attempt);
+                attempt += 1;
+            }
+            Err(e) if e.kind() == midir::ConnectErrorKind::InvalidPort => {
+                return Err(Error::Midi(
+                    "MIDI input disconnected; refresh devices".into(),
+                ));
+            }
+            Err(e) if !input_connect_is_transient(e.kind()) => {
+                return Err(Error::Midi(
+                    "MIDI input is in use by another program; close it and try again".into(),
+                ));
+            }
+            Err(e) => {
+                return Err(Error::Midi(format!(
+                    "{e} after {INPUT_CONNECT_ATTEMPTS} attempts; reconnect the device and try again"
+                )));
+            }
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Packet {
     pub at: Duration,
@@ -62,6 +115,44 @@ pub struct Plan {
     pub section: Option<u64>,
     /// Tempo segments for converting playback deadlines to musical time.
     pub tempo: Option<TempoClock>,
+    /// Output channel for each source channel: the section's CASM destination part.
+    pub routes: ChannelRoutes,
+}
+
+/// Maps each source channel (index 0..16) to the 1-based channel the instrument part
+/// receives, so a Style track plays on its CASM destination part as the Genos plays it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelRoutes([u8; 16]);
+
+impl Default for ChannelRoutes {
+    fn default() -> Self {
+        Self(std::array::from_fn(|i| i as u8 + 1))
+    }
+}
+
+impl ChannelRoutes {
+    /// Destination channel (1..16) for a source channel (1..16).
+    pub fn destination(&self, source: u8) -> u8 {
+        self.0[usize::from(source.clamp(1, 16) - 1)]
+    }
+
+    fn set(&mut self, source: u8, destination: u8) {
+        if (1..=16).contains(&source) && (1..=16).contains(&destination) {
+            self.0[usize::from(source - 1)] = destination;
+        }
+    }
+
+    /// Rewrites a channel message onto its destination channel; other messages pass through.
+    fn apply<'a>(&self, data: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {
+        match packet_channel(data) {
+            Some(source) if self.destination(source) != source => {
+                let mut routed = data.to_vec();
+                routed[0] = (data[0] & 0xf0) | (self.destination(source) - 1);
+                std::borrow::Cow::Owned(routed)
+            }
+            _ => std::borrow::Cow::Borrowed(data),
+        }
+    }
 }
 
 impl Plan {
@@ -166,6 +257,7 @@ pub fn plan_from_phrases(
         beats: vec![at(end)],
         section: None,
         tempo: None,
+        routes: ChannelRoutes::default(),
     })
 }
 
@@ -330,8 +422,23 @@ pub fn plan_from(
     let mut held_seek_sources = 0;
     let mut rhythm_sources = 0;
     let mut has_section_routes = doc.routes.iter().any(|route| route.sections.contains(&s.label));
+    let mut channel_routes = ChannelRoutes::default();
     for source in 1..=16 {
         let resolved = doc.firmware_cseg_route(&s.label, source);
+        let candidates = || doc.routes.iter()
+            .filter(|route| route.source == source && route.sections.contains(&s.label));
+        match resolved {
+            Some(Some(route)) => channel_routes.set(source, route.destination),
+            Some(None) => {}
+            None => {
+                let mut destinations = candidates().map(|route| route.destination);
+                if let Some(first) = destinations.next()
+                    && destinations.all(|destination| destination == first)
+                {
+                    channel_routes.set(source, first);
+                }
+            }
+        }
         let mut routes = doc.routes.iter()
             .filter(|route| resolved.is_none() && route.source == source && route.sections.contains(&s.label));
         if let Some(first) = resolved.unwrap_or_else(|| routes.next()) {
@@ -358,6 +465,7 @@ pub fn plan_from(
         bars,
         beats,
         section: Some(section),
+        routes: channel_routes,
         tempo: Some(TempoClock {
             segments,
             meter: Some(FillMeter {
@@ -429,6 +537,9 @@ pub struct Status {
     beats: Vec<Duration>,
     #[serde(skip)]
     tempo: Option<TempoClock>,
+    /// Destination part of each source in the sounding section.
+    #[serde(skip)]
+    routes: ChannelRoutes,
 }
 /// Chord played on the keyboard's left hand that the style should follow.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -552,6 +663,19 @@ impl Transport {
         status
     }
     /// Channels currently allowed through live mute/solo (copy).
+    /// Output channels the given source channels currently sound on (their CASM
+    /// destination parts in the playing section), for releasing muted sources.
+    pub fn output_channels(&self, sources: &[u8]) -> Vec<u8> {
+        let routes = self.status.lock().unwrap_or_else(|p| p.into_inner()).routes;
+        let mut outputs: Vec<u8> = sources
+            .iter()
+            .filter(|ch| (1..=16).contains(*ch))
+            .map(|&ch| routes.destination(ch))
+            .collect();
+        outputs.sort_unstable();
+        outputs.dedup();
+        outputs
+    }
     pub fn audible_channels(&self) -> Vec<u8> {
         self.audible
             .lock()
@@ -880,8 +1004,23 @@ struct Live<'a, F: FnMut(&[u8]) -> std::result::Result<(), String>> {
     section: Option<u64>,
     fill_section: Option<u64>,
     clock: Option<(Instant, f64, TempoClock)>,
+    /// Destination part of each source, so sources sharing a part share its notes.
+    routes: ChannelRoutes,
 }
 impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
+    /// Whether `pitch` already sounds on the part `channel` (0-based source) plays on.
+    /// Within one source only chord-mapped notes are shared; across sources sharing a
+    /// destination part an equal pitch is always the same sounding key.
+    fn part_sounds(&self, channel: u8, pitch: u8, routed: bool) -> bool {
+        let part = self.routes.destination(channel + 1);
+        (0..16u8)
+            .filter(|&other| self.routes.destination(other + 1) == part)
+            .any(|other| {
+                self.notes[usize::from(other)].iter().any(|note| {
+                    note.output == Some(pitch) && (other != channel || routed || note.routed)
+                })
+            })
+    }
     fn is_rhythm(&self, channel: u8) -> bool {
         let sources = self.clock.as_ref()
             .and_then(|(_, _, clock)| clock.rhythm_sources)
@@ -942,11 +1081,8 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
             let mapped = self.mapped(channel, source, at);
             let routed = mapped.is_some();
             let output = mapped.map_or(Some(source), |pitch| pitch.pitch);
-            let notes = &mut self.notes[usize::from(channel)];
-            let shared = output.is_some() && notes.iter().any(|note| {
-                note.output == output && (routed || note.routed)
-            });
-            notes.push(SourceNote {
+            let shared = output.is_some_and(|pitch| self.part_sounds(channel, pitch, routed));
+            self.notes[usize::from(channel)].push(SourceNote {
                 source,
                 output,
                 velocity: data[2],
@@ -965,7 +1101,7 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
         let Some(pitch) = note.output else {
             return Ok(());
         };
-        if notes.iter().any(|other| other.output == Some(pitch) && (note.routed || other.routed)) {
+        if self.part_sounds(channel, pitch, note.routed) {
             return Ok(());
         }
         (self.send)(&[data[0], pitch, data[2]])
@@ -1118,6 +1254,10 @@ fn splice_fill(plan: &mut Plan, fill: Plan, handoff: FillHandoff, at: Duration) 
     if let Some(clock) = &mut plan.tempo {
         clock.rhythm_sources = fill_clock.rhythm_sources;
     }
+    // The fill's sources play on the fill's destination parts.
+    for source in (1..=16u8).filter(|&source| !handoff.rhythm_only || fill_rhythm & channel_bit(source) != 0) {
+        plan.routes.set(source, fill.routes.destination(source));
+    }
     if !handoff.rhythm_only {
         plan.section = fill.section;
     }
@@ -1133,18 +1273,30 @@ fn run_plan(
     chord: &Mutex<ChordState>,
     cancel: &(Mutex<bool>, Condvar),
     status: &Mutex<Status>,
-    send: impl FnMut(&[u8]) -> std::result::Result<(), String>,
+    mut send: impl FnMut(&[u8]) -> std::result::Result<(), String>,
 ) -> Option<String> {
     let mut failure = None;
+    // Source tracks are played on their CASM destination parts; the active table follows
+    // the sounding section. Every output channel is remembered for the final release.
+    let routes = std::cell::Cell::new(plan.routes);
+    let used_outputs = std::cell::Cell::new(0u16);
+    let routed_send = |data: &[u8]| {
+        let routed = routes.get().apply(data);
+        if let Some(channel) = packet_channel(&routed) {
+            used_outputs.set(used_outputs.get() | channel_bit(channel));
+        }
+        send(&routed)
+    };
     let mut live = Live {
         cancel,
         switch,
         chord,
-        send,
+        send: routed_send,
         notes: std::array::from_fn(|_| Vec::new()),
         section: plan.section,
         fill_section: None,
         clock: None,
+        routes: plan.routes,
     };
     'play: {
         // Send once, before any timed channel setup or notes, never each loop.
@@ -1180,6 +1332,9 @@ fn run_plan(
             }
             live.section = step.plan.section;
             live.fill_section = fill_section;
+            routes.set(step.plan.routes);
+            live.routes = step.plan.routes;
+            status.lock().unwrap_or_else(|p| p.into_inner()).routes = step.plan.routes;
             live.clock = step.plan.tempo.clone().map(|tempo| (start, quarters, tempo));
             let mut switched = false;
             for packet in &step.plan.packets[packet_index..] {
@@ -1274,6 +1429,9 @@ fn run_plan(
                     packet_index = step.plan.packets.partition_point(|packet| packet.at < elapsed);
                     live.section = step.plan.section;
                     live.fill_section = None;
+                    routes.set(step.plan.routes);
+                    live.routes = step.plan.routes;
+                    status.lock().unwrap_or_else(|p| p.into_inner()).routes = step.plan.routes;
                     live.clock = step.plan.tempo.clone().map(|clock| (start, quarters, clock));
                     for data in seek_packets(&step.plan, elapsed, false) {
                         if packet_channel(data).is_some_and(|ch| {
@@ -1298,7 +1456,9 @@ fn run_plan(
                     Some(next) => {
                         let completing_fill = fill_section.take().is_some()
                             || step.plan.tempo.as_ref().is_some_and(|clock| clock.fill);
-                        if completing_fill
+                        // Notes still held must be released on the parts they started on.
+                        let reroutes = next.plan.routes != step.plan.routes;
+                        if (completing_fill || reroutes)
                             && let Err(e) = live.release(channels.iter().copied())
                         {
                             failure = Some(e);
@@ -1318,9 +1478,14 @@ fn run_plan(
             }
         }
     }
-    let Live { mut send, .. } = live;
-    // Release selected routes even if startup fails or is cancelled.
-    for ch in channels {
+    drop(live);
+    // Release selected sources and every destination part they reached, even if startup
+    // fails or is cancelled.
+    let final_routes = routes.get();
+    let released = channels.iter().fold(used_outputs.get(), |bits, &ch| {
+        bits | channel_bit(final_routes.destination(ch))
+    });
+    for ch in (1..=16u8).filter(|&ch| released & channel_bit(ch) != 0) {
         let s = ch - 1;
         for data in [[0xb0 | s, 64, 0], [0xb0 | s, 123, 0], [0xb0 | s, 120, 0]] {
             if let Err(e) = send(&data) {
@@ -1586,38 +1751,37 @@ impl InputMonitor {
         let xf = Arc::new(Mutex::new(XfState::default()));
         let callback_xf = xf.clone();
         let started = Instant::now();
-        let connection = input
-            .connect(
-                &matches[0],
-                "GenosStyleStudio monitor",
-                move |_t, data, _| {
-                    update_held_notes(&callback_held, data);
-                    update_xf_chord(&callback_xf, data);
-                    let mut q = callback_events.lock().unwrap_or_else(|p| p.into_inner());
-                    let truncated = data.len() > 1024;
-                    let data = &data[..data.len().min(1024)];
-                    q.push(MonitorEvent {
-                        stamp_ms: started.elapsed().as_millis() as u64,
-                        data: data.to_vec(),
-                        injected: false,
-                        summary: format!(
-                            "{}{}",
-                            summarize(data),
-                            if truncated {
-                                " … display truncated"
-                            } else {
-                                ""
-                            }
-                        ),
-                    });
-                    if q.len() > 200 {
-                        let n = q.len() - 200;
-                        q.drain(0..n);
-                    }
-                },
-                (),
-            )
-            .map_err(err)?;
+        let port = matches[0].clone();
+        let connection = connect_input(input, &port, "GenosStyleStudio monitor", || {
+            let callback_events = callback_events.clone();
+            let callback_held = callback_held.clone();
+            let callback_xf = callback_xf.clone();
+            move |_t, data: &[u8], _: &mut ()| {
+                update_held_notes(&callback_held, data);
+                update_xf_chord(&callback_xf, data);
+                let mut q = callback_events.lock().unwrap_or_else(|p| p.into_inner());
+                let truncated = data.len() > 1024;
+                let data = &data[..data.len().min(1024)];
+                q.push(MonitorEvent {
+                    stamp_ms: started.elapsed().as_millis() as u64,
+                    data: data.to_vec(),
+                    injected: false,
+                    summary: format!(
+                        "{}{}",
+                        summarize(data),
+                        if truncated {
+                            " … display truncated"
+                        } else {
+                            ""
+                        }
+                    ),
+                });
+                if q.len() > 200 {
+                    let n = q.len() - 200;
+                    q.drain(0..n);
+                }
+            }
+        })?;
         self._connection = Some(connection);
         self.events = events;
         self.held = held;
@@ -1894,6 +2058,31 @@ mod plan_from_tests {
         let playback = plan(&doc, id, &[3, 5, 9]).unwrap();
         assert_eq!(playback.rhythm_sources(), channel_bit(3));
         assert_eq!(playback.tempo.unwrap().held_seek_sources, channel_bit(9));
+    }
+
+    #[test]
+    fn plan_plays_each_source_on_its_casm_destination_part() {
+        let mut doc = fixture_doc();
+        let mut pad = doc.routes[0].clone();
+        doc.style.chunks.retain(|chunk| chunk.tag != *b"CASM");
+        let mut doc = Document::from_style(doc.style).unwrap();
+        let id = doc.sections.iter().find(|s| s.label == "Main A").unwrap().id;
+        pad.sections = vec!["Main A".into()];
+        pad.source = 6;
+        pad.destination = 14;
+        let mut other_section = pad.clone();
+        other_section.sections = vec!["Main B".into()];
+        other_section.source = 7;
+        let mut conflicting = pad.clone();
+        conflicting.source = 5;
+        let mut conflicting_other = conflicting.clone();
+        conflicting_other.destination = 15;
+        doc.routes = vec![pad, other_section, conflicting, conflicting_other];
+        let routes = plan(&doc, id, &[5, 6, 7, 9]).unwrap().routes;
+        assert_eq!(routes.destination(6), 14);
+        assert_eq!(routes.destination(7), 7, "routes of other sections do not apply");
+        assert_eq!(routes.destination(5), 5, "ambiguous routes keep the source channel");
+        assert_eq!(routes.destination(9), 9);
     }
 
     #[test]
@@ -2220,6 +2409,7 @@ mod playback_tests {
                 section: Some(section),
                 fill_section: None,
                 clock: Some((at, 0.0, plan.tempo.unwrap())),
+                routes: ChannelRoutes::default(),
             };
             for &pitch in &case.pitches {
                 live.emit(&[0x90 | (source - 1), pitch, 90], at).unwrap();
@@ -2283,6 +2473,7 @@ mod playback_tests {
             section: Some(1),
             fill_section: None,
             clock: None,
+            routes: ChannelRoutes::default(),
         };
         live.emit(&[0x90, 60, 90], at).unwrap();
         state.lock().unwrap().pending = Some((Some(chord(2)), at));
@@ -2348,6 +2539,7 @@ mod playback_tests {
                 section: Some(section),
                 fill_section: None,
                 clock: Some((at, 0.0, plan(&doc, section, &[source]).unwrap().tempo.unwrap())),
+                routes: ChannelRoutes::default(),
             };
             let mut firmware = [0usize; 128];
             let mut app = [false; 128];
@@ -2546,6 +2738,7 @@ mod playback_tests {
             beats: vec![Duration::ZERO],
             section: None,
             tempo: None,
+            routes: ChannelRoutes::default(),
         }
     }
     #[test]
@@ -2701,6 +2894,7 @@ mod playback_tests {
                 held_seek_sources: 0,
                 rhythm_sources: None,
             })),
+            routes: ChannelRoutes::default(),
         };
         live.emit(&[0x90, 64, 90], at).unwrap();
         live.apply_chord().unwrap();
@@ -2757,6 +2951,7 @@ mod playback_tests {
             section: Some(1),
             fill_section: None,
             clock: None,
+            routes: ChannelRoutes::default(),
         };
         live.emit(&[0x90, 64, 90], at).unwrap();
         live.apply_chord().unwrap();
@@ -2787,6 +2982,7 @@ mod playback_tests {
             beats: vec![Duration::from_millis(10)],
             section: Some(1),
             tempo: None,
+            routes: ChannelRoutes::default(),
         };
         let cancel = (Mutex::new(false), Condvar::new());
         let status = Mutex::new(Status::default());
@@ -2840,6 +3036,7 @@ mod playback_tests {
             beats: vec![Duration::from_millis(70)],
             section: Some(1),
             tempo: None,
+            routes: ChannelRoutes::default(),
         };
         let cancel = (Mutex::new(false), Condvar::new());
         let status = Mutex::new(Status::default());
@@ -2918,6 +3115,7 @@ mod playback_tests {
             beats: (1..=4).map(|i| beat * i).collect(),
             section: Some(1),
             tempo: None,
+            routes: ChannelRoutes::default(),
         };
         let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
         let mut transport = Transport::default();
@@ -3011,5 +3209,160 @@ mod playback_tests {
                 usize::from(!cancelled)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod input_connect_tests {
+    use super::input_connect_is_transient;
+    use midir::ConnectErrorKind;
+
+    #[test]
+    fn generic_windows_open_failure_is_retried() {
+        assert!(input_connect_is_transient(ConnectErrorKind::Other(
+            "could not create Windows MM MIDI input port"
+        )));
+    }
+
+    #[test]
+    fn port_held_by_another_program_is_not_retried() {
+        assert!(!input_connect_is_transient(ConnectErrorKind::Other(
+            "could not create Windows MM MIDI input port (MMSYSERR_ALLOCATED)"
+        )));
+    }
+
+    #[test]
+    fn invalid_port_is_not_retried() {
+        assert!(!input_connect_is_transient(ConnectErrorKind::InvalidPort));
+    }
+}
+
+#[cfg(test)]
+mod channel_route_tests {
+    use super::*;
+
+    fn routes(pairs: &[(u8, u8)]) -> ChannelRoutes {
+        let mut routes = ChannelRoutes::default();
+        for &(source, destination) in pairs {
+            routes.set(source, destination);
+        }
+        routes
+    }
+
+    #[test]
+    fn channel_messages_move_to_the_destination_part() {
+        let routes = routes(&[(6, 14)]);
+        assert_eq!(&*routes.apply(&[0x95, 36, 90]), &[0x9d, 36, 90]);
+        assert_eq!(&*routes.apply(&[0x85, 36, 0]), &[0x8d, 36, 0]);
+        assert_eq!(&*routes.apply(&[0xb5, 7, 100]), &[0xbd, 7, 100]);
+        assert_eq!(&*routes.apply(&[0xc5, 4]), &[0xcd, 4]);
+    }
+
+    #[test]
+    fn unrouted_channels_and_system_messages_pass_through() {
+        let routes = routes(&[(6, 14)]);
+        assert_eq!(&*routes.apply(&[0x9a, 60, 90]), &[0x9a, 60, 90]);
+        let sysex = [0xf0, 0x43, 0x10, 0x4c, 0, 0, 0x7e, 0, 0xf7];
+        assert_eq!(&*routes.apply(&sysex), &sysex);
+        assert_eq!(ChannelRoutes::default().destination(16), 16);
+    }
+
+    #[test]
+    fn invalid_destinations_are_ignored() {
+        let mut routes = ChannelRoutes::default();
+        routes.set(6, 0);
+        routes.set(6, 17);
+        routes.set(0, 14);
+        assert_eq!(routes, ChannelRoutes::default());
+    }
+
+    #[test]
+    fn sources_sharing_a_part_do_not_cut_each_others_notes() {
+        let ms = Duration::from_millis;
+        let plan = Plan {
+            setup: vec![],
+            packets: vec![
+                Packet { at: ms(0), data: vec![0x94, 36, 90] },
+                Packet { at: ms(2), data: vec![0x95, 36, 90] },
+                Packet { at: ms(4), data: vec![0x84, 36, 0] },
+                Packet { at: ms(6), data: vec![0x85, 36, 0] },
+            ],
+            duration: ms(10),
+            bars: vec![ms(10)],
+            beats: vec![ms(10)],
+            section: Some(1),
+            tempo: None,
+            routes: routes(&[(5, 14), (6, 14)]),
+        };
+        let mut sent = Vec::new();
+        let failure = run_plan(
+            plan,
+            &[5, 6],
+            &Mutex::new(vec![5, 6]),
+            false,
+            &Mutex::new(None),
+            &Mutex::new(ChordState::default()),
+            &(Mutex::new(false), Condvar::new()),
+            &Mutex::new(Status::default()),
+            |data| {
+                sent.push(data.to_vec());
+                Ok(())
+            },
+        );
+        assert_eq!(failure, None);
+        // One key sounds on part 14 until the last source releases it.
+        assert_eq!(&sent[..2], &[vec![0x9d, 36, 90], vec![0x8d, 36, 0]]);
+    }
+
+    #[test]
+    fn player_sends_and_releases_on_the_destination_part() {
+        let plan = Plan {
+            setup: vec![vec![0xc5, 4]],
+            packets: vec![
+                Packet { at: Duration::ZERO, data: vec![0x95, 36, 90] },
+                Packet { at: Duration::from_millis(5), data: vec![0x85, 36, 0] },
+            ],
+            duration: Duration::from_millis(10),
+            bars: vec![Duration::from_millis(10)],
+            beats: vec![Duration::from_millis(10)],
+            section: Some(1),
+            tempo: None,
+            routes: routes(&[(6, 14)]),
+        };
+        let mut sent = Vec::new();
+        let failure = run_plan(
+            plan,
+            &[6],
+            &Mutex::new(vec![6]),
+            false,
+            &Mutex::new(None),
+            &Mutex::new(ChordState::default()),
+            &(Mutex::new(false), Condvar::new()),
+            &Mutex::new(Status::default()),
+            |data| {
+                sent.push(data.to_vec());
+                Ok(())
+            },
+        );
+        assert_eq!(failure, None);
+        assert_eq!(&sent[..3], &[vec![0xcd, 4], vec![0x9d, 36, 90], vec![0x8d, 36, 0]]);
+        // The final release covers the destination part; channel 6 belongs to another part
+        // of the instrument and is left alone.
+        assert!(sent.contains(&vec![0xbd, 123, 0]));
+        assert!(!sent.iter().any(|data| data[0] & 0x0f == 0x05), "{sent:?}");
+    }
+}
+
+#[cfg(test)]
+mod output_channel_tests {
+    use super::*;
+
+    #[test]
+    fn muted_sources_map_to_the_parts_they_sound_on() {
+        let transport = Transport::default();
+        let mut routes = ChannelRoutes::default();
+        routes.set(6, 14);
+        transport.status.lock().unwrap().routes = routes;
+        assert_eq!(transport.output_channels(&[6, 9, 0, 17]), vec![9, 14]);
     }
 }

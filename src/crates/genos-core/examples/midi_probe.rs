@@ -79,11 +79,180 @@ mod tests {
     }
 }
 
+/// Sends a Universal Non-Realtime Identity Request and reports any Identity Reply.
+/// Works over any transport (USB, WIDI/BLE), so it names the instrument behind a port.
+fn identity(in_name: &str, out_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut input = MidiInput::new("GenosStyleStudio identity")?;
+    input.ignore(Ignore::None);
+    let in_port = input
+        .ports()
+        .into_iter()
+        .find(|p| input.port_name(p).is_ok_and(|n| n == in_name))
+        .ok_or("input port not found")?;
+    let (sender, receiver) = mpsc::sync_channel(4096);
+    let connection = midi::connect_input(input, &in_port, "GenosStyleStudio identity in", || {
+        let sender = sender.clone();
+        move |_, data: &[u8], _: &mut ()| {
+            let _ = sender.try_send(data.to_vec());
+        }
+    })?;
+    let output = midir::MidiOutput::new("GenosStyleStudio identity out")?;
+    let out_port = output
+        .ports()
+        .into_iter()
+        .find(|p| output.port_name(p).is_ok_and(|n| n == out_name))
+        .ok_or("output port not found")?;
+    let mut conn = output.connect(&out_port, "GenosStyleStudio identity send")?;
+    std::thread::sleep(Duration::from_millis(150));
+    conn.send(&[0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7])?;
+    let deadline = Instant::now() + Duration::from_millis(2500);
+    let mut reply = None;
+    let mut other = 0usize;
+    while Instant::now() < deadline && reply.is_none() {
+        if let Ok(data) = receiver.recv_timeout(Duration::from_millis(25)) {
+            if data.len() >= 10 && data[..5] == [0xf0, 0x7e, data[2], 0x06, 0x02] {
+                reply = Some(data);
+            } else if !matches!(data.first(), Some(0xf8 | 0xfe)) {
+                other += 1;
+            }
+        }
+    }
+    drop(conn);
+    drop(connection);
+    let manufacturer = reply.as_ref().map(|r| r[5]);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "result": if reply.is_some() { "IDENTITY_REPLY" } else { "NO_IDENTITY_REPLY" },
+            "input": in_name,
+            "output": out_name,
+            "reply": reply,
+            "yamaha": manufacturer == Some(0x43),
+            "otherMessages": other,
+        }))?
+    );
+    Ok(())
+}
+
+fn parse_hex_message(hex: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let clean: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
+    if clean.is_empty() || !clean.len().is_multiple_of(2) {
+        return Err("hex must have an even number of digits".into());
+    }
+    let message = (0..clean.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&clean[i..i + 2], 16))
+        .collect::<Result<Vec<u8>, _>>()?;
+    if message[0] < 0x80 {
+        return Err("each message must start with a status byte".into());
+    }
+    Ok(message)
+}
+
+/// Sends messages (comma-separated hex; `wNNN` waits NNN ms) and captures every reply.
+fn sysex_request(
+    in_name: &str,
+    out_name: &str,
+    script: &str,
+    capture_ms: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !(100..=120_000).contains(&capture_ms) {
+        return Err("capture must be 100..120000 ms".into());
+    }
+    enum Step {
+        Send(Vec<u8>),
+        Wait(u64),
+    }
+    let steps = script
+        .split(',')
+        .map(|s| match s.trim().strip_prefix('w') {
+            Some(ms) => Ok(Step::Wait(ms.parse()?)),
+            None => parse_hex_message(s).map(Step::Send),
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    let (sender, receiver) = mpsc::sync_channel(65536);
+    // Input "-" sends only, leaving the input free for another program (WinMM inputs are
+    // exclusive), for example while the app's capture is recording.
+    let connection = if in_name == "-" {
+        None
+    } else {
+        let mut input = MidiInput::new("GenosStyleStudio sysex")?;
+        input.ignore(Ignore::None);
+        let in_port = input
+            .ports()
+            .into_iter()
+            .find(|p| input.port_name(p).is_ok_and(|n| n == in_name))
+            .ok_or("input port not found")?;
+        Some(midi::connect_input(input, &in_port, "GenosStyleStudio sysex in", || {
+            let sender = sender.clone();
+            move |timestamp, data: &[u8], _: &mut ()| {
+                let _ = sender.try_send((timestamp, data.to_vec()));
+            }
+        })?)
+    };
+    let output = midir::MidiOutput::new("GenosStyleStudio sysex out")?;
+    let out_port = output
+        .ports()
+        .into_iter()
+        .find(|p| output.port_name(p).is_ok_and(|n| n == out_name))
+        .ok_or("output port not found")?;
+    let mut conn = output.connect(&out_port, "GenosStyleStudio sysex send")?;
+    std::thread::sleep(Duration::from_millis(150));
+    let started = Instant::now();
+    let mut sent = Vec::new();
+    for step in &steps {
+        match step {
+            Step::Send(message) => {
+                conn.send(message)?;
+                sent.push(
+                    json!({ "ms": started.elapsed().as_millis() as u64, "hex": hex(message) }),
+                );
+            }
+            Step::Wait(ms) => std::thread::sleep(Duration::from_millis(*ms)),
+        }
+    }
+    let deadline = started + Duration::from_millis(capture_ms);
+    let mut clocks = 0u32;
+    let mut replies = Vec::new();
+    // The callback queue holds everything received while the steps above ran.
+    while Instant::now() < deadline {
+        match receiver.recv_timeout(Duration::from_millis(25)) {
+            Ok((_, data)) if data.first() == Some(&0xf8) => clocks += 1,
+            Ok((_, data)) if data.first() == Some(&0xfe) => {}
+            Ok((us, data)) => replies.push(json!({ "us": us, "hex": hex(&data) })),
+            Err(_) => {}
+        }
+    }
+    drop(conn);
+    drop(connection);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(
+            &json!({ "sent": sent, "clocks": clocks, "replies": replies })
+        )?
+    );
+    Ok(())
+}
+
+fn hex(data: &[u8]) -> String {
+    data.iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.is_empty() || args[0] == "scan" {
         println!("{}", serde_json::to_string_pretty(&midi::devices()?)?);
         return Ok(());
+    }
+    if args.len() == 3 && args[0] == "identity" {
+        return identity(&args[1], &args[2]);
+    }
+    if (4..=5).contains(&args.len()) && args[0] == "sysex" {
+        let capture_ms = args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(2500);
+        return sysex_request(&args[1], &args[2], &args[3], capture_ms);
     }
     if args.len() == 2 && args[0] == "sections" {
         let bytes = fs::read(&args[1])?;
@@ -339,6 +508,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         channels.sort_unstable();
         channels.dedup();
+        // Optional comma-separated source channels to play alone, e.g. "6".
+        if let Some(only) = args.get(5) {
+            let only = only
+                .split(',')
+                .map(|c| c.trim().parse::<u8>())
+                .collect::<Result<Vec<_>, _>>()?;
+            channels.retain(|c| only.contains(c));
+        }
         if channels.is_empty() {
             return Err("section has no paired notes to play".into());
         }

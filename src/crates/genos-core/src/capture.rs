@@ -112,42 +112,42 @@ impl MidiCapture {
         let callback_bytes = data_bytes.clone();
         let callback_thru = thru_arc.clone();
         let started = Instant::now();
-        let connection = input
-            .connect(
-                &matches[0],
-                "GenosStyleStudio capture",
-                move |_t, data, _| {
-                    // Skip active sensing / clock for musical capture log size.
-                    if matches!(data.first(), Some(0xf8 | 0xfe)) {
-                        return;
-                    }
-                    if let Some(thru) = callback_thru.as_ref()
-                        && let Ok(mut conn) = thru.lock()
-                    {
-                        let _ = conn.send(data);
-                    }
-                    let mut q = callback_events.lock().unwrap_or_else(|p| p.into_inner());
-                    if q.len() >= MAX_EVENTS
-                        || data.len() > MAX_MESSAGE_BYTES
-                        || callback_bytes
-                            .load(Ordering::Relaxed)
-                            .saturating_add(data.len())
-                            > MAX_CAPTURE_BYTES
-                    {
-                        callback_dropped.fetch_add(1, Ordering::Relaxed);
-                        return;
-                    }
-                    callback_bytes.fetch_add(data.len(), Ordering::Relaxed);
-                    q.push(MonitorEvent {
-                        stamp_ms: started.elapsed().as_millis() as u64,
-                        data: data.to_vec(),
-                        summary: midi::summarize_public(data),
-                        injected: false,
-                    });
-                },
-                (),
-            )
-            .map_err(midi::map_err)?;
+        let port = matches[0].clone();
+        let connection = midi::connect_input(input, &port, "GenosStyleStudio capture", || {
+            let callback_events = callback_events.clone();
+            let callback_dropped = callback_dropped.clone();
+            let callback_bytes = callback_bytes.clone();
+            let callback_thru = callback_thru.clone();
+            move |_t, data: &[u8], _: &mut ()| {
+                // Skip active sensing / clock for musical capture log size.
+                if matches!(data.first(), Some(0xf8 | 0xfe)) {
+                    return;
+                }
+                if let Some(thru) = callback_thru.as_ref()
+                    && let Ok(mut conn) = thru.lock()
+                {
+                    let _ = conn.send(data);
+                }
+                let mut q = callback_events.lock().unwrap_or_else(|p| p.into_inner());
+                if q.len() >= MAX_EVENTS
+                    || data.len() > MAX_MESSAGE_BYTES
+                    || callback_bytes
+                        .load(Ordering::Relaxed)
+                        .saturating_add(data.len())
+                        > MAX_CAPTURE_BYTES
+                {
+                    callback_dropped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                callback_bytes.fetch_add(data.len(), Ordering::Relaxed);
+                q.push(MonitorEvent {
+                    stamp_ms: started.elapsed().as_millis() as u64,
+                    data: data.to_vec(),
+                    summary: midi::summarize_public(data),
+                    injected: false,
+                });
+            }
+        })?;
         self.connection = Some(connection);
         self.thru = thru_arc;
         self.events = events;

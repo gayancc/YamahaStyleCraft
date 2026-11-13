@@ -2665,6 +2665,21 @@ kbd {
   padding: 10px;
   border: 1px solid var(--border, var(--fl-s8));
 }
+/* Firmware conversion status in the Live Style preview. */
+.firmware-conversion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 6px;
+}
+.firmware-conversion .connection-dot {
+  width: 8px;
+  height: 8px;
+}
+.firmware-conversion [role="alert"] {
+  flex-basis: 100%;
+}
 .live-sources,
 .live-chords {
   display: flex;

@@ -15,6 +15,9 @@ pub mod expansion_guitar;
 pub mod export_csv;
 pub mod export_json;
 mod firmware_ntt;
+pub use firmware_ntt::{
+    configure_file as configure_firmware, is_configured as firmware_configured,
+};
 pub mod genos_system_effect;
 pub mod guitar_preview;
 pub mod library;

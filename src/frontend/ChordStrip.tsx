@@ -1,6 +1,7 @@
 import { useStudio } from "./store";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { chordTypeLabel } from "./chordTypes";
 
 type Vocabulary = { roots: string[]; qualities: string[] };
 type PreviewMode = "source" | "manual" | "midi";
@@ -190,9 +191,13 @@ export function ChordStrip({
           disabled={!manual}
           onChange={(e) => setQuality(e.target.value)}
         >
-          {(vocab?.qualities ?? ["Major"]).map((q) => (
+          {[
+            ...(vocab?.qualities ?? ["Major"]),
+            // A recognized firmware chord type is shown even though it is not editable here.
+            ...((vocab?.qualities ?? ["Major"]).includes(quality) ? [] : [quality]),
+          ].map((q) => (
             <option key={q} value={q}>
-              {q}
+              {chordTypeLabel(q)}
             </option>
           ))}
         </select>
@@ -257,7 +262,7 @@ export function ChordStrip({
             {midiStatus
               ? midiStatus
               : held.length
-                ? `${rootName}${quality === "Major" ? "" : quality} · ${held.length} notes`
+                ? `${rootName}${quality === "Major" ? "" : chordTypeLabel(quality)} · ${held.length} notes`
                 : "Waiting for LH notes…"}
           </span>
         </>

@@ -1310,6 +1310,57 @@ fn load_prefs(app: tauri::AppHandle) -> Result<Prefs, String> {
 fn save_prefs(prefs: Prefs, app: tauri::AppHandle) -> Result<(), String> {
     prefs::save(&prefs_file(&app)?, &prefs).map_err(error)
 }
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FirmwareStatus {
+    active: bool,
+    path: Option<String>,
+}
+fn firmware_status_for(app: &tauri::AppHandle) -> Result<FirmwareStatus, String> {
+    Ok(FirmwareStatus {
+        active: genos_core::firmware_configured(),
+        path: prefs::load(&prefs_file(app)?).map_err(error)?.firmware_path,
+    })
+}
+/// Whether exact Genos firmware chord conversion is active, and the remembered file.
+#[tauri::command]
+fn firmware_status(app: tauri::AppHandle) -> Result<FirmwareStatus, String> {
+    firmware_status_for(&app)
+}
+/// Load conversion tables from the user's own Genos 2.13 update file and remember it.
+#[tauri::command]
+async fn configure_firmware(path: String, app: tauri::AppHandle) -> Result<FirmwareStatus, String> {
+    let file = PathBuf::from(&path);
+    let replaced =
+        tauri::async_runtime::spawn_blocking(move || genos_core::configure_firmware(&file))
+            .await
+            .map_err(error)?
+            .map_err(error)?;
+    let file = prefs_file(&app)?;
+    let mut saved = prefs::load(&file).map_err(error)?;
+    let changed = saved.firmware_path.as_deref() != Some(path.as_str());
+    saved.firmware_path = Some(path);
+    prefs::save(&file, &saved).map_err(error)?;
+    if !replaced && changed {
+        return Err("Firmware tables are already loaded; restart to use the new file".into());
+    }
+    firmware_status_for(&app)
+}
+/// Load the remembered firmware file in the background at startup.
+fn load_saved_firmware(app: &tauri::AppHandle) {
+    let Some(path) = prefs_file(app)
+        .ok()
+        .and_then(|file| prefs::load(&file).ok())
+        .and_then(|p| p.firmware_path)
+    else {
+        return;
+    };
+    std::thread::spawn(move || {
+        // A moved or replaced file leaves the fallback conversion active;
+        // the firmware status in the app reports it as inactive.
+        let _ = genos_core::configure_firmware(std::path::Path::new(&path));
+    });
+}
 #[tauri::command]
 async fn scan_devices() -> Result<midi::Devices, String> {
     tauri::async_runtime::spawn_blocking(midi::devices)
@@ -1552,18 +1603,35 @@ fn transport_status(
     Ok(s.transport.status())
 }
 #[tauri::command]
-fn start_monitor(
+async fn start_monitor(
     name: String,
     doc_label: Option<String>,
     state: State<'_, Shared>,
 ) -> Result<(), String> {
     let label = resolve_doc_label(doc_label.as_deref());
+    let check = |s: &Studio| -> Result<(), String> {
+        require_midi_owner(s, &label)?;
+        if s.capture.is_recording() {
+            return Err("Stop capture before starting the input monitor".into());
+        }
+        if s.monitor.is_active() {
+            return Err("Stop the current monitor before starting another".into());
+        }
+        Ok(())
+    };
+    check(&*state.lock().map_err(error)?)?;
+    // Open the port without holding the app state: a Bluetooth endpoint may need retries.
+    let monitor = tauri::async_runtime::spawn_blocking(move || {
+        let mut monitor = midi::InputMonitor::default();
+        monitor.start(&name).map(|()| monitor)
+    })
+    .await
+    .map_err(error)?
+    .map_err(error)?;
     let mut s = state.lock().map_err(error)?;
-    require_midi_owner(&s, &label)?;
-    if s.capture.is_recording() {
-        return Err("Stop capture before starting the input monitor".into());
-    }
-    s.monitor.start(&name).map_err(error)
+    check(&s)?;
+    s.monitor = monitor;
+    Ok(())
 }
 #[tauri::command]
 fn stop_monitor(doc_label: Option<String>, state: State<'_, Shared>) -> Result<(), String> {
@@ -1622,7 +1690,7 @@ fn clear_monitor(doc_label: Option<String>, state: State<'_, Shared>) -> Result<
     Ok(())
 }
 #[tauri::command]
-fn start_capture(
+async fn start_capture(
     name: String,
     thru_index: Option<usize>,
     thru_name: Option<String>,
@@ -1630,24 +1698,46 @@ fn start_capture(
     state: State<'_, Shared>,
 ) -> Result<(), String> {
     let label = resolve_doc_label(doc_label.as_deref());
-    let mut s = state.lock().map_err(error)?;
-    require_midi_owner(&s, &label)?;
-    if s.monitor.is_active() {
-        return Err("Stop the input monitor before starting capture".into());
-    }
-    // SFM: Record while Play is running stops ordinary playback first, then
-    // the UI starts overdub playback of existing parts under Mute/Solo.
-    if s.transport.status().playing {
-        s.transport.stop();
-    }
-    let thru = match (thru_index, thru_name.as_deref()) {
+    let thru = match (thru_index, thru_name) {
         (Some(i), Some(n)) => Some((i, n)),
         (None, None) => None,
         _ => {
             return Err("MIDI thru requires both output index and name".into());
         }
     };
-    s.capture.start(&name, thru).map_err(error)
+    let check = |s: &Studio| -> Result<(), String> {
+        require_midi_owner(s, &label)?;
+        if s.monitor.is_active() {
+            return Err("Stop the input monitor before starting capture".into());
+        }
+        if s.capture.is_recording() {
+            return Err("Stop capture before starting a new take".into());
+        }
+        Ok(())
+    };
+    {
+        let mut s = state.lock().map_err(error)?;
+        check(&s)?;
+        // SFM: Record while Play is running stops ordinary playback first, then
+        // the UI starts overdub playback of existing parts under Mute/Solo.
+        if s.transport.status().playing {
+            s.transport.stop();
+        }
+    }
+    // Open the port without holding the app state: a Bluetooth endpoint may need retries.
+    let capture = tauri::async_runtime::spawn_blocking(move || {
+        let mut capture = genos_core::capture::MidiCapture::default();
+        capture
+            .start(&name, thru.as_ref().map(|(i, n)| (*i, n.as_str())))
+            .map(|()| capture)
+    })
+    .await
+    .map_err(error)?
+    .map_err(error)?;
+    let mut s = state.lock().map_err(error)?;
+    check(&s)?;
+    s.capture = capture;
+    Ok(())
 }
 #[tauri::command]
 fn stop_capture(doc_label: Option<String>, state: State<'_, Shared>) -> Result<(), String> {
@@ -1680,9 +1770,12 @@ fn set_playback_channels(
         if !s.transport.status().playing {
             return Ok(());
         }
-        prev.into_iter()
+        let muted_sources = prev
+            .into_iter()
             .filter(|ch| !channels.contains(ch))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        // Release the parts the muted sources sound on (their CASM destinations).
+        s.transport.output_channels(&muted_sources)
     };
     if muted.is_empty() {
         return Ok(());
@@ -2388,7 +2481,13 @@ fn main() {
         )
         .plugin(tauri_plugin_dialog::init())
         .manage(Shared::default())
+        .setup(|app| {
+            load_saved_firmware(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            firmware_status,
+            configure_firmware,
             native_context_menu_enabled,
             write_note_clipboard,
             read_note_clipboard,

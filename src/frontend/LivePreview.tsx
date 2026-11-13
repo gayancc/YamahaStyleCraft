@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Port, Section, TransportStatus, View } from "./contracts";
 import { trapModalFocus } from "./modal";
 import { useStudio } from "./store";
+import { FirmwareConversion } from "./FirmwareConversion";
 
 type Chord = { root: number; quality: string; bars: number; bass?: number; bassQuality?: string };
 type Report = {
@@ -189,10 +190,11 @@ export function LivePreview({
         </div>
         <p>
           Play this section through its Ctb2 routes and a chord progression.
-          Conversion is approximate; check the coverage before Play. Closing
-          stops playback. Slash bass affects only NTT Bass-enabled CASM regions;
-          unchanged chords preserve held notes.
+          Without your Genos update file, conversion is approximate; check the
+          coverage before Play. Closing stops playback. Slash bass affects only
+          NTT Bass-enabled CASM regions; unchanged chords preserve held notes.
         </p>
+        <FirmwareConversion />
         <p className="muted">
           Output: {output?.name ?? "Choose an output in MIDI Devices first"}.
           Initial effects change global keyboard settings. Setup is sent once
