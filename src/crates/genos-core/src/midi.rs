@@ -59,6 +59,28 @@ fn input_connect_is_transient(kind: midir::ConnectErrorKind) -> bool {
     }
 }
 
+/// An open MIDI input. Dropping it stops delivery at once and closes the port on a
+/// background thread: midir 0.11's WinMM close holds its handle lock while `midiInStop` and
+/// `midiInReset` wait for a running callback, and that callback takes the same lock to
+/// requeue a SysEx buffer. A SysEx arriving during close (the Genos sends one after every
+/// Style stop) then deadlocks the closing thread, which must never be the app's.
+pub struct InputConnection {
+    connection: Option<midir::MidiInputConnection<()>>,
+    listening: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for InputConnection {
+    fn drop(&mut self) {
+        self.listening.store(false, std::sync::atomic::Ordering::SeqCst);
+        if let Some(connection) = self.connection.take() {
+            // If the thread cannot start, the connection closes here as before.
+            let _ = thread::Builder::new()
+                .name("midi-input-close".into())
+                .spawn(move || drop(connection));
+        }
+    }
+}
+
 /// Opens an exact input port, retrying the transient Windows open failure.
 /// `make_callback` builds a fresh callback for each attempt because midir consumes it.
 pub fn connect_input<F>(
@@ -66,14 +88,28 @@ pub fn connect_input<F>(
     port: &midir::MidiInputPort,
     label: &str,
     mut make_callback: impl FnMut() -> F,
-) -> Result<midir::MidiInputConnection<()>>
+) -> Result<InputConnection>
 where
     F: FnMut(u64, &[u8], &mut ()) + Send + 'static,
 {
+    let listening = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let mut attempt = 1;
     loop {
-        match input.connect(port, label, make_callback(), ()) {
-            Ok(connection) => return Ok(connection),
+        let mut callback = make_callback();
+        let active = listening.clone();
+        let guarded = move |stamp: u64, data: &[u8], user: &mut ()| {
+            // Nothing is delivered once the connection has been dropped.
+            if active.load(std::sync::atomic::Ordering::SeqCst) {
+                callback(stamp, data, user);
+            }
+        };
+        match input.connect(port, label, guarded, ()) {
+            Ok(connection) => {
+                return Ok(InputConnection {
+                    connection: Some(connection),
+                    listening,
+                });
+            }
             Err(e) if attempt < INPUT_CONNECT_ATTEMPTS && input_connect_is_transient(e.kind()) => {
                 input = e.into_inner();
                 thread::sleep(INPUT_CONNECT_BACKOFF * attempt);
@@ -1704,7 +1740,7 @@ fn summarize(data: &[u8]) -> String {
     }
 }
 pub struct InputMonitor {
-    _connection: Option<midir::MidiInputConnection<()>>,
+    _connection: Option<InputConnection>,
     events: Arc<Mutex<Vec<MonitorEvent>>>,
     /// Held (channel 1..=16, pitch) for MIDI LH chord recognition (SFM-045).
     held: Arc<Mutex<HeldNoteState>>,
@@ -3229,6 +3265,16 @@ mod input_connect_tests {
         assert!(!input_connect_is_transient(ConnectErrorKind::Other(
             "could not create Windows MM MIDI input port (MMSYSERR_ALLOCATED)"
         )));
+    }
+
+    #[test]
+    fn dropping_an_input_stops_delivery_without_waiting_for_close() {
+        let listening = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        drop(super::InputConnection {
+            connection: None,
+            listening: listening.clone(),
+        });
+        assert!(!listening.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

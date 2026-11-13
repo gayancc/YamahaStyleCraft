@@ -37,7 +37,7 @@ pub struct CaptureSnapshot {
 }
 
 pub struct MidiCapture {
-    connection: Option<midir::MidiInputConnection<()>>,
+    connection: Option<midi::InputConnection>,
     /// Optional live MIDI thru while capturing (SFM-044). Not persisted to Style.
     thru: Option<Arc<Mutex<midir::MidiOutputConnection>>>,
     events: Arc<Mutex<Vec<MonitorEvent>>>,
