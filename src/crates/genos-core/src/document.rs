@@ -128,10 +128,7 @@ fn legacy_cseg_routes(records: &[smf::Chunk], labels: &[String]) -> Option<Vec<R
                 let mut bytes = data[..20].to_vec();
                 bytes.extend([0, 127]);
                 let mut region: [u8; 6] = data[20..26].try_into().unwrap();
-                region[1] = LEGACY_NTT
-                    .get(usize::from(region[1]))
-                    .copied()
-                    .unwrap_or(0);
+                region[1] = LEGACY_NTT.get(usize::from(region[1])).copied().unwrap_or(0);
                 for _ in 0..3 {
                     bytes.extend(region);
                 }
@@ -178,20 +175,27 @@ pub fn musical_marker(s: &str) -> bool {
 // Sdec finds names anywhere in its payload. A trailing label takes effect
 // only after another data record.
 fn firmware_sdec_descriptions(records: &[smf::Chunk]) -> impl Iterator<Item = &[u8]> {
-    let through_data = records.iter().rposition(|record| record.tag != *b"Sdec")
+    let through_data = records
+        .iter()
+        .rposition(|record| record.tag != *b"Sdec")
         .map_or(&records[..0], |last| &records[..=last]);
-    through_data.iter().filter(|record| record.tag == *b"Sdec")
+    through_data
+        .iter()
+        .filter(|record| record.tag == *b"Sdec")
         .map(|record| record.data.as_slice())
 }
 
-pub(crate) fn firmware_sdec_sections(records: &[smf::Chunk]) -> impl Iterator<Item = &'static str> + '_ {
-    ORDER.into_iter().filter(|&name| {
-        firmware_sdec_descriptions(records).any(|data| sdec_contains(data, name))
-    })
+pub(crate) fn firmware_sdec_sections(
+    records: &[smf::Chunk],
+) -> impl Iterator<Item = &'static str> + '_ {
+    ORDER
+        .into_iter()
+        .filter(|&name| firmware_sdec_descriptions(records).any(|data| sdec_contains(data, name)))
 }
 
 fn sdec_contains(data: &[u8], name: &str) -> bool {
-    data.windows(name.len()).any(|bytes| bytes == name.as_bytes())
+    data.windows(name.len())
+        .any(|bytes| bytes == name.as_bytes())
 }
 
 #[derive(Default)]
@@ -206,7 +210,10 @@ impl CsegClaims {
         for description in firmware_sdec_descriptions(records) {
             let before = self.pending.len();
             for name in ORDER {
-                if marked.contains(name) && sdec_contains(description, name) && self.claimed.insert(name) {
+                if marked.contains(name)
+                    && sdec_contains(description, name)
+                    && self.claimed.insert(name)
+                {
                     self.pending.push(name);
                 }
             }
@@ -226,8 +233,13 @@ impl Document {
             .is_some_and(|name| self.firmware_indirect_sections.contains(name))
     }
 
-    pub(crate) fn firmware_cseg_group(&self, section: &str) -> Option<&(usize, std::ops::Range<usize>)> {
-        self.firmware_cseg.get(self.firmware_section_name(section)?)?.as_ref()
+    pub(crate) fn firmware_cseg_group(
+        &self,
+        section: &str,
+    ) -> Option<&(usize, std::ops::Range<usize>)> {
+        self.firmware_cseg
+            .get(self.firmware_section_name(section)?)?
+            .as_ref()
     }
 
     /// Ordinary SFF2 loads one CSEG per section and keeps its last record per source.
@@ -302,7 +314,10 @@ impl Document {
                     .trim()
                     .to_string();
                 if musical_marker(&label) {
-                    if let Some(name) = ORDER.into_iter().find(|name| b.starts_with(name.as_bytes())) {
+                    if let Some(name) = ORDER
+                        .into_iter()
+                        .find(|name| b.starts_with(name.as_bytes()))
+                    {
                         firmware_markers.insert(label.clone(), name);
                     }
                     sections.push(Section {
@@ -375,9 +390,16 @@ impl Document {
         let mut firmware_cseg = HashMap::new();
         let mut firmware_indirect_sections = HashSet::new();
         let mut claims = CsegClaims::default();
-        let format = style.tracks.iter().flatten().filter_map(|e| e.meta(6))
+        let format = style
+            .tracks
+            .iter()
+            .flatten()
+            .filter_map(|e| e.meta(6))
             .find(|marker| matches!(*marker, b"SFF1" | b"SFF2"));
-        let ordinary = !style.chunks.iter().any(|c| matches!(&c.tag, b"Ghst" | b"Rsec" | b"Rtrk"));
+        let ordinary = !style
+            .chunks
+            .iter()
+            .any(|c| matches!(&c.tag, b"Ghst" | b"Rsec" | b"Rtrk"));
         let ordinary_sff2 = ordinary && format == Some(b"SFF2");
         let mut legacy_playback = (ordinary && format == Some(b"SFF1")).then(HashMap::new);
         for (chunk, c) in style
@@ -417,7 +439,8 @@ impl Document {
                                 let earlier_claims = claims.pending.len();
                                 if claims.scan(&records, &marked_sections) {
                                     if earlier_claims > 0 {
-                                        firmware_indirect_sections.extend(claims.pending.iter().copied());
+                                        firmware_indirect_sections
+                                            .extend(claims.pending.iter().copied());
                                     }
                                     let range = group_offset + 8..group_offset + 8 + g.data.len();
                                     for name in claims.pending.drain(..) {
@@ -429,18 +452,25 @@ impl Document {
                             Some(_) => {}
                             None => {
                                 firmware_indirect_sections.extend(claims.pending.drain(..));
-                                warnings.push("Unsupported SFF1 Ctab/Cntt group retained opaque.".into());
+                                warnings.push(
+                                    "Unsupported SFF1 Ctab/Cntt group retained opaque.".into(),
+                                );
                             }
                         }
                     }
                     if ordinary_sff2
-                        && records.iter().any(|r| r.tag != *b"Sdec" && !ignored_legacy(r))
+                        && records
+                            .iter()
+                            .any(|r| r.tag != *b"Sdec" && !ignored_legacy(r))
                     {
                         let supported = records.first().is_some_and(|r| r.tag == *b"Sdec")
                             && records[1..].iter().all(|r| {
-                                r.tag == *b"Sdec" || ignored_legacy(r)
-                                    || (r.tag == *b"Ctb2" && supported_ctb2_size(r.data.len())
-                                        && r.data[0] < 16 && r.data[9] < 16)
+                                r.tag == *b"Sdec"
+                                    || ignored_legacy(r)
+                                    || (r.tag == *b"Ctb2"
+                                        && supported_ctb2_size(r.data.len())
+                                        && r.data[0] < 16
+                                        && r.data[9] < 16)
                             });
                         let earlier_claims = claims.pending.len();
                         let final_description_claimed = claims.scan(&records, &marked_sections);
@@ -450,12 +480,15 @@ impl Document {
                             if final_description_claimed {
                                 let range = group_offset + 8..group_offset + 8 + g.data.len();
                                 if earlier_claims > 0 {
-                                    firmware_indirect_sections.extend(claims.pending.iter().copied());
+                                    firmware_indirect_sections
+                                        .extend(claims.pending.iter().copied());
                                 }
                                 for section in &sections {
-                                    if firmware_markers.get(&section.label).is_some_and(|name| {
-                                        claims.pending.contains(name)
-                                    }) && !labels.contains(&section.label) {
+                                    if firmware_markers
+                                        .get(&section.label)
+                                        .is_some_and(|name| claims.pending.contains(name))
+                                        && !labels.contains(&section.label)
+                                    {
                                         labels.push(section.label.clone());
                                     }
                                 }
@@ -466,7 +499,8 @@ impl Document {
                         } else {
                             // The unsupported group makes the output cursor unknown.
                             // Keep those claims on the existing opaque-route fallback.
-                            firmware_indirect_sections.extend(claims.pending[..earlier_claims].iter().copied());
+                            firmware_indirect_sections
+                                .extend(claims.pending[..earlier_claims].iter().copied());
                             firmware_cseg.extend(claims.pending.drain(..).map(|name| (name, None)));
                         }
                     }
@@ -482,14 +516,23 @@ impl Document {
                                 // Cap the route view as the firmware does. The Style
                                 // chunk retains the complete on-disk payload.
                                 r.data.truncate(CTB2_STAGED_PAYLOAD);
-                                routes.push(Route::from_ctb2(routes.len(), &labels, r.data, chunk, offset + 8));
+                                routes.push(Route::from_ctb2(
+                                    routes.len(),
+                                    &labels,
+                                    r.data,
+                                    chunk,
+                                    offset + 8,
+                                ));
                             } else {
                                 warnings.push(format!(
                                     "Unsupported Ctb2 record ({} bytes) retained opaque.",
                                     r.data.len()
                                 ));
                             }
-                        } else if r.tag == *b"Ctab" && legacy_playback.is_none() && !(ordinary_sff2 && ignored_legacy(&r)) {
+                        } else if r.tag == *b"Ctab"
+                            && legacy_playback.is_none()
+                            && !(ordinary_sff2 && ignored_legacy(&r))
+                        {
                             warnings.push("SFF1 Ctab retained opaque; conversion and rule editing unavailable.".into());
                         }
                         offset += 8 + size;
@@ -502,7 +545,7 @@ impl Document {
         firmware_indirect_sections.extend(claims.pending);
         let firmware_markers = ((ordinary_sff2 || legacy_playback.is_some())
             && style.chunks.iter().any(|chunk| chunk.tag == *b"CASM"))
-            .then_some(firmware_markers);
+        .then_some(firmware_markers);
         Ok(Self {
             style,
             sections,
@@ -515,6 +558,50 @@ impl Document {
             firmware_markers,
         })
     }
+    /// Whether `source` has a CASM route in `section`, resolved like playback: the firmware
+    /// section group first, then the document's routes.
+    pub fn source_routed(&self, section: &str, source: u8) -> bool {
+        match self.firmware_cseg_route(section, source) {
+            Some(resolved) => resolved.is_some(),
+            None => self
+                .routes
+                .iter()
+                .any(|r| r.source == source && r.sections.iter().any(|s| s == section)),
+        }
+    }
+
+    /// Sections whose CASM leaves tracks with notes unrouted: (section, channel, notes).
+    /// The Genos does not play such a track in that section.
+    pub fn unrouted_tracks(&self) -> Vec<(String, u8, usize)> {
+        let mut found = Vec::new();
+        for section in &self.sections {
+            let routed: Vec<bool> = (1..=16u8)
+                .map(|ch| self.source_routed(&section.label, ch))
+                .collect();
+            let has_casm = routed.iter().any(|r| *r)
+                || self
+                    .routes
+                    .iter()
+                    .any(|r| r.sections.contains(&section.label));
+            if !has_casm {
+                continue;
+            }
+            for channel in 1..=16u8 {
+                let notes = self
+                    .notes
+                    .iter()
+                    .filter(|n| {
+                        n.channel == channel && n.start >= section.start && n.start < section.end
+                    })
+                    .count();
+                if notes > 0 && !routed[usize::from(channel - 1)] {
+                    found.push((section.label.clone(), channel, notes));
+                }
+            }
+        }
+        found
+    }
+
     pub fn view(
         &self,
         name: String,
@@ -564,7 +651,16 @@ impl Document {
                     bytes: c.data.len(),
                 })
                 .collect(),
-            warnings: self.warnings.clone(),
+            warnings: self
+                .warnings
+                .iter()
+                .cloned()
+                .chain(self.unrouted_tracks().into_iter().map(|(section, channel, notes)| {
+                    format!(
+                        "{section}: channel {channel} has {notes} notes but no CASM route in this section; the Genos will not play them."
+                    )
+                }))
+                .collect(),
         }
     }
 }
@@ -663,11 +759,16 @@ mod firmware_tests {
             sections: BTreeMap<String, BTreeMap<u8, Vec<u8>>>,
         }
         let evidence = std::env::var_os("GENOS_SDEC_FINALIZATION_REPLAY").unwrap();
-        let cases: BTreeMap<String, Case> = serde_json::from_slice(&fs::read(evidence).unwrap()).unwrap();
+        let cases: BTreeMap<String, Case> =
+            serde_json::from_slice(&fs::read(evidence).unwrap()).unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../docs/research/experiments/fixtures/08.3-4-ACOUSTIC-control.STY");
         let base = smf::Style::parse(&fs::read(fixture).unwrap()).unwrap();
-        let casm = base.chunks.iter().position(|chunk| chunk.tag == *b"CASM").unwrap();
+        let casm = base
+            .chunks
+            .iter()
+            .position(|chunk| chunk.tag == *b"CASM")
+            .unwrap();
         let chord = crate::midi::LiveChord {
             root: 0,
             quality: "Major".into(),
@@ -677,20 +778,34 @@ mod firmware_tests {
         assert_eq!(cases.len(), 34);
         for (name, case) in cases {
             let mut style = base.clone();
-            let format = style.tracks[0].iter_mut()
-                .find(|event| event.meta(6) == Some(b"SFF2")).unwrap();
+            let format = style.tracks[0]
+                .iter_mut()
+                .find(|event| event.meta(6) == Some(b"SFF2"))
+                .unwrap();
             *format.data.last_mut().unwrap() = b'0' + case.mode;
             style.chunks[style.track_chunks[0]].data = smf::encode_track(&style.tracks[0]).unwrap();
-            style.chunks.splice(casm..=casm, case.casm_chunks.into_iter().map(|data| {
-                smf::Chunk { tag: *b"CASM", data }
-            }));
+            style.chunks.splice(
+                casm..=casm,
+                case.casm_chunks.into_iter().map(|data| smf::Chunk {
+                    tag: *b"CASM",
+                    data,
+                }),
+            );
             let doc = Document::parse(&style.bytes().unwrap()).unwrap();
             for (section, expected) in case.sections {
-                let id = doc.sections.iter().find(|item| item.label == section).unwrap().id;
+                let id = doc
+                    .sections
+                    .iter()
+                    .find(|item| item.label == section)
+                    .unwrap()
+                    .id;
                 for source in 1..=16 {
                     let actual = doc.firmware_cseg_route(&section, source).unwrap();
-                    assert_eq!(actual.map(|route| &route.bytes), expected.get(&source),
-                               "{name} / {section} / source {source}");
+                    assert_eq!(
+                        actual.map(|route| &route.bytes),
+                        expected.get(&source),
+                        "{name} / {section} / source {source}"
+                    );
                     if let Some(payload) = expected.get(&source) {
                         assert_eq!(
                             crate::live_preview::follow_pitch(&doc, id, source, 60, &chord),
@@ -719,8 +834,16 @@ mod firmware_tests {
                 "whole" => assert!(case.error.is_none()),
                 "casm-only" => {
                     assert!(case.error.is_some());
-                    let casm = doc.style.chunks.iter().find(|chunk| chunk.tag == *b"CASM").unwrap();
-                    assert_eq!(format!("{:x}", Sha256::digest(&casm.data)), case.casm_sha256.unwrap());
+                    let casm = doc
+                        .style
+                        .chunks
+                        .iter()
+                        .find(|chunk| chunk.tag == *b"CASM")
+                        .unwrap();
+                    assert_eq!(
+                        format!("{:x}", Sha256::digest(&casm.data)),
+                        case.casm_sha256.unwrap()
+                    );
                 }
                 scope => panic!("unknown replay scope {scope}"),
             }
@@ -728,19 +851,27 @@ mod firmware_tests {
             let slots = compared.entry(case.scope).or_insert(0);
             for (section, expected) in case.sections {
                 for source in 1..=16 {
-                    let actual = doc.firmware_cseg_route(&section, source)
-                        .unwrap_or_else(|| panic!("{}: no resolved playback data for {section}", case.path));
+                    let actual = doc
+                        .firmware_cseg_route(&section, source)
+                        .unwrap_or_else(|| {
+                            panic!("{}: no resolved playback data for {section}", case.path)
+                        });
                     assert_eq!(
                         actual.map(|route| &route.bytes),
                         expected.get(&source),
-                        "{} / {section} / source {source}", case.path,
+                        "{} / {section} / source {source}",
+                        case.path,
                     );
                     *slots += 1;
                 }
             }
         }
         assert_eq!(compared.get("whole"), Some(&(8 * 17 * 16)));
-        assert_eq!(compared.get("casm-only"), None, "whole-file replay regressed");
+        assert_eq!(
+            compared.get("casm-only"),
+            None,
+            "whole-file replay regressed"
+        );
     }
 
     #[test]
@@ -751,28 +882,45 @@ mod firmware_tests {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../docs/research/experiments/fixtures/08.3-4-ACOUSTIC-control.STY");
         let base = smf::Style::parse(&fs::read(fixture).unwrap()).unwrap();
-        let casm = base.chunks.iter().position(|chunk| chunk.tag == *b"CASM").unwrap();
+        let casm = base
+            .chunks
+            .iter()
+            .position(|chunk| chunk.tag == *b"CASM")
+            .unwrap();
         let track = base.track_chunks[0];
         assert_eq!(cases.len(), 40);
         for case in cases {
             let mut style = base.clone();
-            let format = style.tracks[0].iter_mut()
-                .find(|event| event.meta(6) == Some(b"SFF2")).unwrap();
+            let format = style.tracks[0]
+                .iter_mut()
+                .find(|event| event.meta(6) == Some(b"SFF2"))
+                .unwrap();
             *format.data.last_mut().unwrap() = b'0' + case.mode;
-            let marker = style.tracks[0].iter_mut()
-                .find(|event| event.meta(6) == Some(b"Main A")).unwrap();
+            let marker = style.tracks[0]
+                .iter_mut()
+                .find(|event| event.meta(6) == Some(b"Main A"))
+                .unwrap();
             marker.data.truncate(2);
             marker.data.push(case.midi.len().try_into().unwrap());
             marker.data.extend_from_slice(case.midi.as_bytes());
             style.chunks[track].data = smf::encode_track(&style.tracks[0]).unwrap();
-            style.chunks[casm].data = smf::pack(&[
-                smf::Chunk { tag: *b"CSEG", data: case.records }
-            ]).unwrap();
+            style.chunks[casm].data = smf::pack(&[smf::Chunk {
+                tag: *b"CSEG",
+                data: case.records,
+            }])
+            .unwrap();
             let doc = Document::parse(&style.bytes().unwrap()).unwrap();
             for (id, label) in [(0, case.midi.trim_matches('\0').trim()), (1, "Main B")] {
-                let actual = doc.firmware_cseg_route(label, 3).flatten().map(|route| route.destination);
+                let actual = doc
+                    .firmware_cseg_route(label, 3)
+                    .flatten()
+                    .map(|route| route.destination);
                 let expected = case.bound.get(&id).copied();
-                assert_eq!(actual, expected, "SFF{}, {:?}, slot {id}", case.mode, case.midi);
+                assert_eq!(
+                    actual, expected,
+                    "SFF{}, {:?}, slot {id}",
+                    case.mode, case.midi
+                );
             }
         }
     }
@@ -785,7 +933,10 @@ mod firmware_tests {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../docs/research/experiments/fixtures/08.3-4-ACOUSTIC-control.STY");
         let bytes = fs::read(fixture).unwrap();
-        assert_eq!(format!("{:x}", Sha256::digest(&bytes)), replay.fixture_sha256);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&bytes)),
+            replay.fixture_sha256
+        );
         let doc = Document::parse(&bytes).unwrap();
         assert_eq!(replay.whole_file_style.len(), 12);
         for (section, expected) in replay.whole_file_style {
@@ -802,7 +953,11 @@ mod firmware_tests {
         }
 
         let mut style = doc.style;
-        let casm = style.chunks.iter().position(|chunk| chunk.tag == *b"CASM").unwrap();
+        let casm = style
+            .chunks
+            .iter()
+            .position(|chunk| chunk.tag == *b"CASM")
+            .unwrap();
         assert_eq!(replay.native_sizes.len(), 27);
         for (size, case) in replay.native_sizes {
             assert_eq!(size, case.input.len());
@@ -810,11 +965,25 @@ mod firmware_tests {
             earlier[0] = case.input[0];
             earlier[9] = 8;
             let records = smf::pack(&[
-                smf::Chunk { tag: *b"Sdec", data: b"Main A".to_vec() },
-                smf::Chunk { tag: *b"Ctb2", data: earlier },
-                smf::Chunk { tag: *b"Ctb2", data: case.input },
-            ]).unwrap();
-            style.chunks[casm].data = smf::pack(&[smf::Chunk { tag: *b"CSEG", data: records }]).unwrap();
+                smf::Chunk {
+                    tag: *b"Sdec",
+                    data: b"Main A".to_vec(),
+                },
+                smf::Chunk {
+                    tag: *b"Ctb2",
+                    data: earlier,
+                },
+                smf::Chunk {
+                    tag: *b"Ctb2",
+                    data: case.input,
+                },
+            ])
+            .unwrap();
+            style.chunks[casm].data = smf::pack(&[smf::Chunk {
+                tag: *b"CSEG",
+                data: records,
+            }])
+            .unwrap();
             let original = style.bytes().unwrap();
             let parsed = Document::parse(&original).unwrap();
             let route = parsed.firmware_cseg_route("Main A", 3).flatten().unwrap();
@@ -822,8 +991,10 @@ mod firmware_tests {
             assert_eq!(parsed.style.bytes().unwrap(), original);
         }
         let track = style.track_chunks[0];
-        let marker = style.tracks[0].iter_mut()
-            .find(|event| event.meta(6) == Some(b"SFF2")).unwrap();
+        let marker = style.tracks[0]
+            .iter_mut()
+            .find(|event| event.meta(6) == Some(b"SFF2"))
+            .unwrap();
         *marker.data.last_mut().unwrap() = b'1';
         style.chunks[track].data = smf::encode_track(&style.tracks[0]).unwrap();
         assert_eq!(replay.legacy_sff1.len(), 32);
@@ -831,12 +1002,21 @@ mod firmware_tests {
             let mut records = smf::pack(&[smf::Chunk {
                 tag: *b"Sdec",
                 data: b"Main A".to_vec(),
-            }]).unwrap();
+            }])
+            .unwrap();
             records.extend(case.records);
-            style.chunks[casm].data = smf::pack(&[smf::Chunk { tag: *b"CSEG", data: records }]).unwrap();
+            style.chunks[casm].data = smf::pack(&[smf::Chunk {
+                tag: *b"CSEG",
+                data: records,
+            }])
+            .unwrap();
             let parsed = Document::parse(&style.bytes().unwrap()).unwrap();
             let route = parsed.firmware_cseg_route("Main A", 3).unwrap();
-            assert_eq!(route.map(|route| &route.bytes), case.payload.as_ref(), "{name}");
+            assert_eq!(
+                route.map(|route| &route.bytes),
+                case.payload.as_ref(),
+                "{name}"
+            );
         }
 
         assert_eq!(replay.legacy_sff1_groups.len(), 4);

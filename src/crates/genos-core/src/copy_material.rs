@@ -56,12 +56,18 @@ fn channels_for_scope(doc: &Document, src: &Section, scope: &CopyScope) -> Resul
             }
             if let Some(route) = doc.firmware_cseg_route(&src.label, *channel) {
                 let destination = route.map_or(*channel, |route| route.destination);
-                let sources: Vec<_> = (1..=16).filter(|&source| {
-                    doc.firmware_cseg_route(&src.label, source)
-                        .flatten()
-                        .is_some_and(|route| route.destination == destination)
-                }).collect();
-                return Ok(if sources.is_empty() { vec![*channel] } else { sources });
+                let sources: Vec<_> = (1..=16)
+                    .filter(|&source| {
+                        doc.firmware_cseg_route(&src.label, source)
+                            .flatten()
+                            .is_some_and(|route| route.destination == destination)
+                    })
+                    .collect();
+                return Ok(if sources.is_empty() {
+                    vec![*channel]
+                } else {
+                    sources
+                });
             }
             let dest = doc
                 .routes
@@ -518,7 +524,13 @@ mod tests {
         use crate::smf::{self, Chunk};
 
         let base = session().document;
-        let start = |label| base.sections.iter().find(|section| section.label == label).unwrap().start;
+        let start = |label| {
+            base.sections
+                .iter()
+                .find(|section| section.label == label)
+                .unwrap()
+                .start
+        };
         let export = std::env::var_os("GENOS_COPY_PART_REPLAY").map(std::path::PathBuf::from);
         if let Some(dir) = &export {
             fs::create_dir_all(dir).unwrap();
@@ -527,9 +539,17 @@ mod tests {
             let mut style = base.style.clone();
             let track = style.track_chunks[0];
             let events = &mut style.tracks[0];
-            let format = events.iter_mut().find(|event| event.meta(6) == Some(b"SFF2")).unwrap();
+            let format = events
+                .iter_mut()
+                .find(|event| event.meta(6) == Some(b"SFF2"))
+                .unwrap();
             *format.data.last_mut().unwrap() = b'0' + mode;
-            let mut next = events.iter().map(|event| event.id.max(event.order)).max().unwrap() + 1;
+            let mut next = events
+                .iter()
+                .map(|event| event.id.max(event.order))
+                .max()
+                .unwrap()
+                + 1;
             for (section, base_pitch) in [("Main A", 60), ("Main C", 72)] {
                 for channel in 0..4 {
                     let pitch = base_pitch + channel;
@@ -539,7 +559,10 @@ mod tests {
                         (48, vec![0x80 | channel, pitch, 0]),
                     ] {
                         events.push(Event {
-                            id: next, order: next, tick: start(section) + offset, data,
+                            id: next,
+                            order: next,
+                            tick: start(section) + offset,
+                            data,
                         });
                         next += 1;
                     }
@@ -547,7 +570,10 @@ mod tests {
             }
             events.sort_by_key(|event| (event.tick, event.order, event.id));
             style.chunks[track].data = smf::encode_track(events).unwrap();
-            let sdec = |name: &[u8]| Chunk { tag: *b"Sdec", data: name.to_vec() };
+            let sdec = |name: &[u8]| Chunk {
+                tag: *b"Sdec",
+                data: name.to_vec(),
+            };
             let route = |source: u8, destination: u8| {
                 let mut data = vec![0; if mode == 1 { 26 } else { 47 }];
                 data[0] = source - 1;
@@ -555,32 +581,66 @@ mod tests {
                 if mode == 2 {
                     data[21] = 127;
                 }
-                Chunk { tag: if mode == 1 { *b"Ctab" } else { *b"Ctb2" }, data }
+                Chunk {
+                    tag: if mode == 1 { *b"Ctab" } else { *b"Ctb2" },
+                    data,
+                }
             };
-            let group = |records: &[Chunk]| Chunk { tag: *b"CSEG", data: smf::pack(records).unwrap() };
+            let group = |records: &[Chunk]| Chunk {
+                tag: *b"CSEG",
+                data: smf::pack(records).unwrap(),
+            };
             let mut groups = Vec::new();
             if indirect {
-                groups.push(group(&[sdec(b"Main A"), route(1, 12), sdec(b"Main A"), route(3, 12)]));
+                groups.push(group(&[
+                    sdec(b"Main A"),
+                    route(1, 12),
+                    sdec(b"Main A"),
+                    route(3, 12),
+                ]));
             }
             groups.extend([
                 group(&[
                     sdec(if indirect { b"Main B" } else { b"Main A" }),
-                    route(1, 12), route(3, 12), route(1, 11), route(2, 11),
+                    route(1, 12),
+                    route(3, 12),
+                    route(1, 11),
+                    route(2, 11),
                 ]),
                 group(&[sdec(b"Main A"), route(4, 11)]),
-                group(&[sdec(b"Main C"), route(1, 11), route(2, 11), route(3, 12), route(4, 12)]),
+                group(&[
+                    sdec(b"Main C"),
+                    route(1, 11),
+                    route(2, 11),
+                    route(3, 12),
+                    route(4, 12),
+                ]),
             ]);
-            let casm = style.chunks.iter().position(|chunk| chunk.tag == *b"CASM").unwrap();
+            let casm = style
+                .chunks
+                .iter()
+                .position(|chunk| chunk.tag == *b"CASM")
+                .unwrap();
             style.chunks[casm].data = smf::pack(&groups).unwrap();
             let before = style.bytes().unwrap();
             let mut s = Session::open(&before, "Copy part routes".into()).unwrap();
-            let id = |doc: &Document, label: &str| doc.sections.iter().find(|section| section.label == label).unwrap().id;
-            s.execute(0, Command::CopyMaterial {
-                source_section: id(&s.document, "Main A"),
-                destination_section: id(&s.document, "Main C"),
-                scope: CopyScope::Part { channel: 1 },
-                fit: CopyFit::Keep,
-            }).unwrap();
+            let id = |doc: &Document, label: &str| {
+                doc.sections
+                    .iter()
+                    .find(|section| section.label == label)
+                    .unwrap()
+                    .id
+            };
+            s.execute(
+                0,
+                Command::CopyMaterial {
+                    source_section: id(&s.document, "Main A"),
+                    destination_section: id(&s.document, "Main C"),
+                    scope: CopyScope::Part { channel: 1 },
+                    fit: CopyFit::Keep,
+                },
+            )
+            .unwrap();
             let copied = s.document.style.bytes().unwrap();
             let reopened = Document::parse(&copied).unwrap();
             assert_eq!(reopened.style.chunks[casm].data, style.chunks[casm].data);
@@ -589,9 +649,17 @@ mod tests {
                 for (channel, pitch) in (1..=4).zip(pitches) {
                     let notes = notes_in(&reopened, section, channel).unwrap();
                     assert_eq!(notes.len(), 1);
-                    assert_eq!((notes[0].pitch, notes[0].start - section.start, notes[0].duration), (pitch, 24, 24));
+                    assert_eq!(
+                        (
+                            notes[0].pitch,
+                            notes[0].start - section.start,
+                            notes[0].duration
+                        ),
+                        (pitch, 24, 24)
+                    );
                     let cc = reopened.style.tracks.iter().flatten().find(|event| {
-                        event.tick == section.start + 12 && event.data == [0xb0 | (channel - 1), 7, pitch]
+                        event.tick == section.start + 12
+                            && event.data == [0xb0 | (channel - 1), 7, pitch]
                     });
                     assert!(cc.is_some(), "SFF{mode}, {label}, source {channel}");
                 }

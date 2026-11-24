@@ -108,3 +108,36 @@ export function drawPianoKeyboard(
   ctx.fillRect(width - 1, ruler, 1, height - ruler);
   ctx.restore();
 }
+
+/**
+ * Velocity of a key press. In FL Studio the preview gets louder the further
+ * right on the key it is struck (silent at the left edge, full at the right).
+ */
+export function keyVelocity(x: number, width: number): number {
+  const t = Math.max(0, Math.min(1, x / Math.max(1, width - 1)));
+  return Math.max(1, Math.round(t * 127));
+}
+
+/** Pitch under a pointer that is dragging a held key. FL follows the pointer's
+ * row anywhere (also over the note grid), not only over the key column. */
+export function pitchAtRow(contentY: number, row: number): number | null {
+  if (contentY < 0 || contentY >= 128 * row) return null;
+  return 127 - Math.floor(contentY / row);
+}
+
+/** Pitches of notes sounding at `tick` (transport highlight). */
+export function soundingKeys(
+  notes: readonly {
+    pitch: number;
+    velocity: number;
+    start: number;
+    duration: number;
+  }[],
+  tick: number | null,
+): Set<number> {
+  const out = new Set<number>();
+  if (tick === null) return out;
+  for (const n of notes)
+    if (tick >= n.start && tick < n.start + n.duration) out.add(n.pitch);
+  return out;
+}

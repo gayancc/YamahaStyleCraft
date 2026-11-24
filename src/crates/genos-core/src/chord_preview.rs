@@ -195,7 +195,10 @@ pub fn recognize_single_finger(notes: &[u8]) -> Option<RecognizedChord> {
         (false, true) => "7",
         (true, true) => "m7",
     };
-    Some(RecognizedChord { root, quality: quality.into() })
+    Some(RecognizedChord {
+        root,
+        quality: quality.into(),
+    })
 }
 
 /// Genos Fingered chord types (Yamaha XF chord-type numbering) as intervals above the root.
@@ -258,13 +261,17 @@ pub fn fingered_type(notes: &[u8], previous: Option<&RecognizedChord>) -> Option
             let without_fifth = !exact
                 && FIFTH_OPTIONAL.contains(&id)
                 && !intervals.contains(&7)
-                && tones.iter().filter(|&&t| t != 7).copied().collect::<BTreeSet<_>>() == intervals;
+                && tones
+                    .iter()
+                    .filter(|&&t| t != 7)
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    == intervals;
             if !exact && !without_fifth {
                 continue;
             }
-            let same_as_previous = previous.is_some_and(|p| {
-                p.root == root && p.quality == type_quality(id, firmware_named())
-            });
+            let same_as_previous = previous
+                .is_some_and(|p| p.root == root && p.quality == type_quality(id, firmware_named()));
             let key = (without_fifth, root != bass, !same_as_previous, id);
             if best.is_none_or(|(k, _)| key < k) {
                 best = Some((key, (root, id)));
@@ -453,11 +460,19 @@ pub(crate) fn xf_live_chord(data: &[u8]) -> Option<crate::midi::LiveChord> {
         return None;
     }
     let root = xf_root(data[4])?;
-    let bass_root = if data[6] == 0x7f { None } else { Some(xf_root(data[6])?) };
+    let bass_root = if data[6] == 0x7f {
+        None
+    } else {
+        Some(xf_root(data[6])?)
+    };
     if crate::firmware_ntt::configured().is_ok_and(|tables| tables.is_some()) {
         use crate::firmware_ntt::CHORD_TYPE_COUNT;
 
-        let ordinary = if data[5] < CHORD_TYPE_COUNT { data[5] } else { 0 };
+        let ordinary = if data[5] < CHORD_TYPE_COUNT {
+            data[5]
+        } else {
+            0
+        };
         let alternate = match data[7] {
             127 if bass_root.is_some() => 30,
             value if value < CHORD_TYPE_COUNT => value,
@@ -556,7 +571,8 @@ pub struct PitchRule<'a> {
 impl PitchRule<'_> {
     pub(crate) fn exceeds_firmware_high_key(&self) -> bool {
         // The routed converter loads the original High Key byte as signed.
-        self.high_key.is_some_and(|key| i16::from(self.target_root) > i16::from(key as i8))
+        self.high_key
+            .is_some_and(|key| i16::from(self.target_root) > i16::from(key as i8))
     }
 }
 
@@ -1007,10 +1023,17 @@ mod tests {
         let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(cases.len(), 384);
         for case in cases {
-            let actual = xf_live_chord(&[0xf0, 0x43, 0x7e, 0, case.ordinary, 0, case.bass, 8, 0xf7])
-                .map(|chord| (chord.root, chord.bass));
-            let expected = case.decoded.map(|(root, bass)| (root, bass.filter(|bass| *bass != root)));
-            assert_eq!(actual, expected, "root {:#04x}, bass {:#04x}", case.ordinary, case.bass);
+            let actual =
+                xf_live_chord(&[0xf0, 0x43, 0x7e, 0, case.ordinary, 0, case.bass, 8, 0xf7])
+                    .map(|chord| (chord.root, chord.bass));
+            let expected = case
+                .decoded
+                .map(|(root, bass)| (root, bass.filter(|bass| *bass != root)));
+            assert_eq!(
+                actual, expected,
+                "root {:#04x}, bass {:#04x}",
+                case.ordinary, case.bass
+            );
         }
     }
 
@@ -1038,7 +1061,11 @@ mod tests {
                     chord.bass.unwrap_or(chord.root),
                     target_type(chord.bass_quality.as_deref().unwrap_or(&chord.quality)).unwrap(),
                 ];
-                assert_eq!(actual, case.normalized_pair, "subtype {subtype}, {:?}", case.input);
+                assert_eq!(
+                    actual, case.normalized_pair,
+                    "subtype {subtype}, {:?}",
+                    case.input
+                );
             }
         }
     }
@@ -1070,7 +1097,10 @@ mod tests {
         let expected = crate::firmware_ntt::configured()
             .is_ok_and(|tables| tables.is_some())
             .then_some("Genos:30");
-        assert_eq!(xf_live_chord(&message).unwrap().bass_quality.as_deref(), expected);
+        assert_eq!(
+            xf_live_chord(&message).unwrap().bass_quality.as_deref(),
+            expected
+        );
     }
     #[test]
     #[ignore = "requires the local Single Finger firmware replay"]
@@ -1088,7 +1118,11 @@ mod tests {
                 _ => panic!("Unexpected firmware type {quality}"),
             };
             let actual = recognize_single_finger(&notes).unwrap();
-            assert_eq!((actual.root, actual.quality.as_str()), (root, expected), "{notes:?}");
+            assert_eq!(
+                (actual.root, actual.quality.as_str()),
+                (root, expected),
+                "{notes:?}"
+            );
         }
     }
 

@@ -75,8 +75,15 @@ fn app_notes(
             let pitch = if RHYTHM_CHANNELS.contains(&channel) {
                 Some(source)
             } else {
-                live_preview::follow_routed_pitch(doc, section, source_channel, source, chord, false)
-                    .pitch
+                live_preview::follow_routed_pitch(
+                    doc,
+                    section,
+                    source_channel,
+                    source,
+                    chord,
+                    false,
+                )
+                .pitch
             };
             pitch.map(|pitch| NoteOn {
                 ms: p.at.as_secs_f64() * 1000.0,
@@ -282,7 +289,11 @@ fn compare_channel(app: &[NoteOn], genos: &[NoteOn], channel: u8) -> serde_json:
     };
     let (a, g) = (seq(app), seq(genos));
     let arrival = |notes: &[NoteOn]| -> Vec<u8> {
-        notes.iter().filter(|n| n.channel == channel).map(|n| n.pitch).collect()
+        notes
+            .iter()
+            .filter(|n| n.channel == channel)
+            .map(|n| n.pitch)
+            .collect()
     };
     // BLE delivery can reorder near-simultaneous notes; score the better of both orders.
     let common = lcs(&a, &g).max(lcs(&arrival(app), &arrival(genos)));
@@ -305,13 +316,17 @@ type Rendering = BTreeMap<u8, BTreeMap<u8, usize>>;
 /// Per-channel pitch counts of one loop, offset from the first note-on.
 fn rendering(notes: &[NoteOn], window: f64) -> Rendering {
     let t0 = notes.first().map_or(0.0, |n| n.ms);
-    notes
-        .iter()
-        .filter(|n| n.ms - t0 < window)
-        .fold(BTreeMap::new(), |mut channels: Rendering, n| {
-            *channels.entry(n.channel).or_default().entry(n.pitch).or_default() += 1;
+    notes.iter().filter(|n| n.ms - t0 < window).fold(
+        BTreeMap::new(),
+        |mut channels: Rendering, n| {
+            *channels
+                .entry(n.channel)
+                .or_default()
+                .entry(n.pitch)
+                .or_default() += 1;
             channels
-        })
+        },
+    )
 }
 
 /// Chord recognition check: the Genos detects the held keys and plays the section; the
@@ -324,12 +339,14 @@ fn detect(
     out_name: &str,
     keys: &[u8],
 ) -> Result<(), BoxError> {
-    let firmware = std::env::var_os("GENOS_NTT_ELF").is_some()
-        || std::env::var_os("GENOS_NTT_PRG").is_some();
-    let mut qualities: Vec<String> = ["Major", "Minor", "7", "Maj7", "m7", "dim", "aug", "sus4", "sus2", "m7b5"]
-        .iter()
-        .map(|q| q.to_string())
-        .collect();
+    let firmware =
+        std::env::var_os("GENOS_NTT_ELF").is_some() || std::env::var_os("GENOS_NTT_PRG").is_some();
+    let mut qualities: Vec<String> = [
+        "Major", "Minor", "7", "Maj7", "m7", "dim", "aug", "sus4", "sus2", "m7b5",
+    ]
+    .iter()
+    .map(|q| q.to_string())
+    .collect();
     if firmware {
         qualities.extend((0..59).map(|id| format!("Genos:{id}")));
     }
@@ -388,8 +405,165 @@ fn detect(
     Ok(())
 }
 
+/// Fill-in check: start a Main on the Genos, trigger the fill `phase_beats` into bar 2 (inside
+/// the first half beat, so every part hands over), and compare the rest of that bar with the
+/// app's conversion of the fill section from the same phase.
+fn fill_check(
+    doc: &Document,
+    fill_label: &str,
+    in_name: &str,
+    out_name: &str,
+    chord: &midi::LiveChord,
+) -> Result<(), BoxError> {
+    let letter = fill_label.chars().last().ok_or("fill label")?;
+    let main_label = format!("Main {letter}");
+    let index = u8::try_from("ABCD".find(letter).ok_or("fills follow Main A-D")?)?;
+    let find = |label: &str| doc.sections.iter().find(|s| s.label == label).map(|s| s.id);
+    let main = find(&main_label).ok_or("main section not found")?;
+    let fill = find(fill_label).ok_or("fill section not found")?;
+    let main_plan = midi::plan(doc, main, &(1..=16).collect::<Vec<u8>>())?;
+    let bar = main_plan
+        .bars
+        .first()
+        .copied()
+        .ok_or("main has no bar")?
+        .as_secs_f64()
+        * 1000.0;
+    let beat = main_plan
+        .beats
+        .first()
+        .copied()
+        .ok_or("main has no beat")?
+        .as_secs_f64()
+        * 1000.0;
+    let phase = 0.2 * beat;
+    let margin = 0.15 * beat;
+    let (fill_notes, fill_len) = app_notes(doc, fill, chord)?;
+    let fill_len = fill_len.as_secs_f64() * 1000.0;
+    // App: the fill from the trigger phase to the end of the bar.
+    let app: Vec<NoteOn> = fill_notes
+        .into_iter()
+        .filter(|n| n.ms >= phase + margin && n.ms < bar.min(fill_len) - margin)
+        .collect();
+    // Genos: start Main, trigger the fill at bar 2 + phase, capture through bar 3.
+    let mut input = MidiInput::new("GenosStyleStudio fill check")?;
+    input.ignore(Ignore::All);
+    let in_port = input
+        .ports()
+        .into_iter()
+        .find(|p| input.port_name(p).is_ok_and(|n| n == in_name))
+        .ok_or("input port not found")?;
+    let (sender, receiver) = mpsc::sync_channel(65536);
+    let connection = midi::connect_input(input, &in_port, "GenosStyleStudio fill in", || {
+        let sender = sender.clone();
+        move |_, data: &[u8], _: &mut ()| {
+            let _ = sender.try_send((Instant::now(), data.to_vec()));
+        }
+    })?;
+    let output = MidiOutput::new("GenosStyleStudio fill out")?;
+    let out_port = output
+        .ports()
+        .into_iter()
+        .find(|p| output.port_name(p).is_ok_and(|n| n == out_name))
+        .ok_or("output port not found")?;
+    let mut conn = output.connect(&out_port, "GenosStyleStudio fill send")?;
+    let chord_type = xf_type(&chord.quality).ok_or("quality has no Genos chord type")?;
+    conn.send(&[
+        0xf0,
+        0x43,
+        0x7e,
+        0x02,
+        xf_root_byte(chord.root),
+        chord_type,
+        0x7f,
+        0x7f,
+        0xf7,
+    ])?;
+    conn.send(&[0xf0, 0x43, 0x7e, 0x00, 0x08 + index, 0x7f, 0xf7])?;
+    std::thread::sleep(Duration::from_millis(400));
+    let started = Instant::now();
+    conn.send(&[0xf0, 0x43, 0x60, 0x7a, 0xf7])?;
+    std::thread::sleep(Duration::from_secs_f64((bar + phase) / 1000.0));
+    // Break ("Fill In BA") has its own switch; the others are Fill A-D.
+    let fill_switch = if fill_label == "Fill In BA" {
+        0x18
+    } else {
+        0x10 + index
+    };
+    conn.send(&[0xf0, 0x43, 0x7e, 0x00, fill_switch, 0x7f, 0xf7])?;
+    let deadline = started + Duration::from_secs_f64((3.0 * bar + 800.0) / 1000.0);
+    let mut raw = Vec::new();
+    while Instant::now() < deadline {
+        if let Ok(event) = receiver.recv_timeout(Duration::from_millis(20)) {
+            raw.push(event);
+        }
+    }
+    conn.send(&[0xf0, 0x43, 0x60, 0x7d, 0xf7])?;
+    std::thread::sleep(Duration::from_millis(300));
+    drop(conn);
+    drop(connection);
+    let ons: Vec<_> = raw
+        .into_iter()
+        .filter(|(_, d)| d.len() == 3 && d[0] & 0xf0 == 0x90 && d[2] > 0)
+        .collect();
+    let t0 = ons
+        .first()
+        .map(|(t, _)| *t)
+        .ok_or("the Genos sent no notes")?;
+    // Both the start and the fill reach the Genos over the same link, so in first-note time
+    // the fill begins at bar + phase.
+    let timeline: Vec<(u64, u8, u8)> = ons
+        .iter()
+        .take(400)
+        .map(|(t, d)| {
+            (
+                t.saturating_duration_since(t0).as_millis() as u64,
+                (d[0] & 0x0f) + 1,
+                d[1],
+            )
+        })
+        .collect();
+    let genos: Vec<NoteOn> = ons
+        .into_iter()
+        .map(|(t, d)| NoteOn {
+            ms: t.saturating_duration_since(t0).as_secs_f64() * 1000.0 - bar,
+            channel: (d[0] & 0x0f) + 1,
+            pitch: d[1],
+        })
+        .filter(|n| n.ms >= phase + margin && n.ms < bar - margin)
+        .collect();
+    let channels: Vec<_> = STYLE_CHANNELS
+        .iter()
+        .map(|&c| compare_channel(&app, &genos, c))
+        .collect();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "fill": fill_label,
+            "main": main_label,
+            "chord": { "root": chord.root, "quality": chord.quality },
+            "triggerPhaseMs": phase,
+            "barMs": bar,
+            "beatMs": beat,
+            "channels": channels,
+            "genosTimeline": timeline,
+        }))?
+    );
+    Ok(())
+}
+
 fn main() -> Result<(), BoxError> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.len() == 6 && args[1].starts_with("Fill In ") {
+        let doc = Document::parse(&fs::read(&args[0])?)?;
+        let chord = midi::LiveChord {
+            root: args[4].parse()?,
+            quality: args[5].clone(),
+            bass: None,
+            bass_quality: None,
+        };
+        return fill_check(&doc, &args[1], &args[2], &args[3], &chord);
+    }
     if !(6..=7).contains(&args.len()) {
         return Err("usage: arranger_compare <sty> <section-label> <input> <output> <root 0-11> <quality> [loops 1..4]".into());
     }
@@ -400,7 +574,8 @@ fn main() -> Result<(), BoxError> {
         .find(|s| s.label == args[1])
         .ok_or("section not found")?
         .id;
-    let switch = section_switch(&args[1]).ok_or("only Intro, Main and Ending sections can be selected")?;
+    let switch =
+        section_switch(&args[1]).ok_or("only Intro, Main and Ending sections can be selected")?;
     if let Some(keys) = args[5].strip_prefix("keys:") {
         let keys = keys
             .split(',')
@@ -437,7 +612,8 @@ fn main() -> Result<(), BoxError> {
     let capture = duration * loops + Duration::from_millis(1500);
     let genos = genos_notes(&args[2], &args[3], switch, Stimulus::Chord(&chord), capture)?;
     // Compare the first complete loop only; later loops and the stop tail are excluded.
-    let window = duration.as_secs_f64() * 1000.0 - 60.0;
+    // Both sides align on their first note; a section that starts with a rest ends sooner after it.
+    let window = duration.as_secs_f64() * 1000.0 - 60.0 - app_t0;
     // Apply the same cut to both sides; notes in the final 60 ms are reported separately
     // because BLE delivery jitter can move them across the loop boundary.
     let genos_loop: Vec<_> = genos.iter().copied().filter(|n| n.ms < window).collect();

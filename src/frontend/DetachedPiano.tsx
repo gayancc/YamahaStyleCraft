@@ -171,6 +171,7 @@ export function DetachedPiano() {
       </header>
       <PianoRoll
         playheadTick={playhead}
+        soundingTick={playhead}
         noteColors={noteColors}
         onNoteColorsChange={(next) => {
           setNoteColors(next);

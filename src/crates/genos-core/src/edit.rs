@@ -150,6 +150,13 @@ pub enum Command {
         field: String,
         value: u8,
     },
+    /// Give a source track a CASM route in a section by copying its route from another
+    /// section; without one the Genos does not play that track there.
+    AdoptRoute {
+        section: u64,
+        source: u8,
+        from_section: u64,
+    },
     SourceTracks {
         section: u64,
         actions: Vec<crate::casm::SourceAction>,
@@ -998,6 +1005,13 @@ impl Session {
                         touched.insert(track);
                     }
                 }
+            }
+            Command::AdoptRoute {
+                section,
+                source,
+                from_section,
+            } => {
+                crate::casm::adopt_route(&mut style, section, source, from_section)?;
             }
             Command::SourceTracks { section, actions } => {
                 let cloned_pairs = crate::casm::apply(&mut style, section, actions)?;
@@ -1881,9 +1895,10 @@ fn apply_pitch_bend_range(
             .take(packet.len())
             .collect();
         if suffix.len() == packet.len()
-            && suffix.iter().zip(packet.iter().rev()).all(|((_, e), &(cc, value))| {
-                e.data[1] == cc && (cc == 6 || e.data[2] == value)
-            })
+            && suffix
+                .iter()
+                .zip(packet.iter().rev())
+                .all(|((_, e), &(cc, value))| e.data[1] == cc && (cc == 6 || e.data[2] == value))
         {
             let index = suffix[2].0;
             es[index].data[2] = semitones;

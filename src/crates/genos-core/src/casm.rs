@@ -142,15 +142,22 @@ fn isolate(style: &mut Style, label: &str, source: u8, destination: u8) -> Resul
     }
     let document = Document::from_style(style.clone())?;
     if document.firmware_section_has_indirect_binding(label) {
-        return Err(reject("CASM descriptions leave an ambiguous section binding"));
+        return Err(reject(
+            "CASM descriptions leave an ambiguous section binding",
+        ));
     }
     let resolved = match document.firmware_cseg_route(label, source) {
         Some(Some(route)) if route.destination == destination => Some((route.chunk, route.offset)),
-        Some(_) => return Err(reject("selected route does not control playback for this section")),
+        Some(_) => {
+            return Err(reject(
+                "selected route does not control playback for this section",
+            ));
+        }
         None => None,
     };
     let label = if resolved.is_some() {
-        document.firmware_section_name(label)
+        document
+            .firmware_section_name(label)
             .ok_or_else(|| reject("verified section marker not found"))?
     } else {
         label
@@ -175,10 +182,12 @@ fn isolate(style: &mut Style, label: &str, source: u8, destination: u8) -> Resul
                 continue;
             }
             let records = smf::chunks(&group.data)?;
-            let repeated = resolved.is_some()
-                && records.iter().filter(|r| r.tag == *b"Sdec").count() > 1;
+            let repeated =
+                resolved.is_some() && records.iter().filter(|r| r.tag == *b"Sdec").count() > 1;
             let names = if resolved.is_some() {
-                crate::document::firmware_sdec_sections(&records).map(str::to_owned).collect()
+                crate::document::firmware_sdec_sections(&records)
+                    .map(str::to_owned)
+                    .collect()
             } else {
                 labels(&records)?
             };
@@ -193,7 +202,15 @@ fn isolate(style: &mut Style, label: &str, source: u8, destination: u8) -> Resul
                         if found.is_some() {
                             return Err(reject("ambiguous source route binding"));
                         }
-                        found = Some((ci, groups.clone(), gi, records.clone(), ri, names.clone(), repeated));
+                        found = Some((
+                            ci,
+                            groups.clone(),
+                            gi,
+                            records.clone(),
+                            ri,
+                            names.clone(),
+                            repeated,
+                        ));
                     }
                 }
             }
@@ -205,9 +222,13 @@ fn isolate(style: &mut Style, label: &str, source: u8, destination: u8) -> Resul
         let mut siblings = records.clone();
         if repeated {
             let end = siblings.iter().rposition(|r| r.tag != *b"Sdec").unwrap();
-            siblings = siblings.into_iter().enumerate().filter_map(|(index, record)| {
-                (index == 0 || index > end || record.tag != *b"Sdec").then_some(record)
-            }).collect();
+            siblings = siblings
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, record)| {
+                    (index == 0 || index > end || record.tag != *b"Sdec").then_some(record)
+                })
+                .collect();
             ri -= records[1..ri].iter().filter(|r| r.tag == *b"Sdec").count();
             let mut index = 0;
             records.retain(|record| {
@@ -257,7 +278,8 @@ fn apply_genos_part_defaults(bytes: &mut [u8]) -> Result<()> {
     let tables = crate::firmware_ntt::configured()?.ok_or_else(|| {
         reject("Configure GENOS_NTT_PRG or GENOS_NTT_ELF to use Genos part defaults")
     })?;
-    let preset = tables.casm_default(bytes[9])
+    let preset = tables
+        .casm_default(bytes[9])
         .ok_or_else(|| reject("Genos part defaults require destination 9–16"))?;
     bytes[11] = (bytes[11] & !15) | (preset[11] & 15);
     bytes[12] = preset[12];
@@ -269,7 +291,9 @@ fn apply_genos_part_defaults(bytes: &mut [u8]) -> Result<()> {
 /// Draft a Genos reset for a single Ctb2 payload.
 pub fn genos_part_defaults(mut bytes: Vec<u8>) -> Result<Vec<u8>> {
     if !supported_ctb2_size(bytes.len()) {
-        return Err(reject("Genos part defaults require at least 40 Ctb2 payload bytes"));
+        return Err(reject(
+            "Genos part defaults require at least 40 Ctb2 payload bytes",
+        ));
     }
     apply_genos_part_defaults(&mut bytes)?;
     Ok(bytes)
@@ -419,6 +443,74 @@ fn siblings(style: &Style, label: &str, destination: u8) -> Result<Vec<u8>> {
     Ok(result)
 }
 
+/// The route that controls playback of `source` in `label`, if any.
+fn playback_route<'a>(
+    doc: &'a Document,
+    label: &str,
+    source: u8,
+) -> Option<&'a crate::document::Route> {
+    match doc.firmware_cseg_route(label, source) {
+        Some(resolved) => resolved,
+        None => doc
+            .routes
+            .iter()
+            .find(|r| r.source == source && r.sections.iter().any(|s| s == label)),
+    }
+}
+
+/// Give `source` a route in `section` by copying the route that plays it in `from_section`
+/// (destination and conversion rules included). The Genos does not play a source track
+/// that has no route in the section, so notes written there would otherwise stay silent.
+/// The section is first split from any CASM group it shares, so other sections keep theirs.
+pub(crate) fn adopt_route(
+    style: &mut Style,
+    section: u64,
+    source: u8,
+    from_section: u64,
+) -> Result<()> {
+    if !(1..=16).contains(&source) {
+        return Err(reject("invalid source channel"));
+    }
+    let doc = Document::from_style(style.clone())?;
+    let label = |id: u64| {
+        doc.sections
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.label.clone())
+            .ok_or_else(|| reject("section not found"))
+    };
+    let (target, from) = (label(section)?, label(from_section)?);
+    if playback_route(&doc, &target, source).is_some() {
+        return Err(reject("the source already has a route in this section"));
+    }
+    let template = playback_route(&doc, &from, source)
+        .ok_or_else(|| reject("the source has no route in the template section"))?;
+    if !supported_ctb2_size(template.bytes.len()) {
+        return Err(reject("the template route is not a supported Ctb2 record"));
+    }
+    let record = Chunk {
+        tag: *b"Ctb2",
+        data: template.bytes.clone(),
+    };
+    let anchor = (1..=16u8)
+        .find_map(|s| playback_route(&doc, &target, s).map(|r| (r.source, r.destination)))
+        .ok_or_else(|| reject("the section has no CASM group to add a route to"))?;
+    let (ci, groups, gi, mut records, _) = isolate(style, &target, anchor.0, anchor.1)?;
+    let after_last_route = records
+        .iter()
+        .rposition(|r| r.tag == *b"Ctb2")
+        .map_or(records.len(), |i| i + 1);
+    records.insert(after_last_route, record);
+    save(style, ci, groups, gi, records)?;
+    let check = Document::from_style(style.clone())?;
+    let added = playback_route(&check, &target, source)
+        .ok_or_else(|| reject("the copied route does not control playback"))?;
+    if added.destination != template.destination {
+        return Err(reject("the copied route resolved to another destination"));
+    }
+    Ok(())
+}
+
 pub(crate) fn apply(
     style: &mut Style,
     section: u64,
@@ -438,8 +530,11 @@ pub(crate) fn apply(
     if initial
         .sections
         .iter()
-        .filter(|s| s.label == section.label
-            || firmware_name.is_some_and(|name| initial.firmware_section_name(&s.label) == Some(name)))
+        .filter(|s| {
+            s.label == section.label
+                || firmware_name
+                    .is_some_and(|name| initial.firmware_section_name(&s.label) == Some(name))
+        })
         .count()
         != 1
     {

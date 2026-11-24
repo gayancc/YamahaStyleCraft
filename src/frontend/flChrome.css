@@ -1100,3 +1100,32 @@ select option {
   color: var(--fl-t0);
   border-bottom-color: var(--accent);
 }
+
+/* Piano roll key feedback, measured from FL Studio 2025's piano roll:
+   a pressed key is repainted at once and restored at once (no easing, no
+   fade, no velocity shading). Whites turn peach, blacks turn orange, both
+   keeping the key's left-to-right gradient. Only the sounding key is lit. */
+.piano-key-fx {
+  position: absolute;
+  left: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.piano-key-fx-key {
+  position: absolute;
+  left: 0;
+  box-sizing: border-box;
+  display: none;
+  background: linear-gradient(to right, rgb(255, 167, 107), rgb(255, 209, 150));
+}
+.piano-key-fx-key.black {
+  z-index: 1;
+  background: linear-gradient(to right, rgb(217, 91, 0), rgb(253, 128, 37));
+}
+.piano-key-fx-key.on,
+.piano-key-fx-key.mask {
+  display: block;
+}
+.piano-key-fx-key.black.mask {
+  background: linear-gradient(to right, #292a2c, #505153);
+}

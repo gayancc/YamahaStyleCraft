@@ -296,6 +296,59 @@ struct EffectPreview {
     setup: genos_core::style_effects::PreviewSetup,
 }
 type Shared = Arc<Mutex<Studio>>;
+/// Key audition runs on its own thread: opening a (Bluetooth) MIDI port can
+/// block for seconds and must never stall the UI. Commands are queued in order
+/// so a note-off can never overtake its note-on.
+enum KeyJob {
+    On {
+        index: usize,
+        name: String,
+        channel: u8,
+        pitch: u8,
+        velocity: u8,
+    },
+    Off {
+        channel: u8,
+        pitch: u8,
+    },
+    ReleaseAll,
+}
+struct KeyAuditionState(Mutex<std::sync::mpsc::Sender<KeyJob>>);
+impl KeyAuditionState {
+    fn spawn(app: tauri::AppHandle) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<KeyJob>();
+        std::thread::spawn(move || {
+            let mut audition = genos_core::key_audition::KeyAudition::default();
+            for job in rx {
+                let result = match job {
+                    KeyJob::On {
+                        index,
+                        name,
+                        channel,
+                        pitch,
+                        velocity,
+                    } => audition.note_on(index, &name, channel, pitch, velocity),
+                    KeyJob::Off { channel, pitch } => audition.note_off(channel, pitch),
+                    KeyJob::ReleaseAll => {
+                        audition.release_all();
+                        Ok(())
+                    }
+                };
+                if let Err(e) = result {
+                    let _ = app.emit("key-audition-error", error(e));
+                }
+            }
+        });
+        Self(Mutex::new(tx))
+    }
+    fn send(&self, job: KeyJob) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .send(job)
+            .map_err(error)
+    }
+}
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -1591,6 +1644,43 @@ fn test_note(
     .map_err(error)
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn key_note_on(
+    index: usize,
+    name: String,
+    channel: u8,
+    pitch: u8,
+    velocity: Option<u8>,
+    doc_label: Option<String>,
+    state: State<'_, Shared>,
+    audition: State<'_, KeyAuditionState>,
+) -> Result<(), String> {
+    let label = resolve_doc_label(doc_label.as_deref());
+    {
+        let s = state.lock().map_err(error)?;
+        require_midi_owner(&s, &label)?;
+    }
+    audition.send(KeyJob::On {
+        index,
+        name,
+        channel,
+        pitch,
+        velocity: velocity.unwrap_or(90),
+    })
+}
+#[tauri::command]
+fn key_note_off(
+    channel: u8,
+    pitch: u8,
+    audition: State<'_, KeyAuditionState>,
+) -> Result<(), String> {
+    audition.send(KeyJob::Off { channel, pitch })
+}
+#[tauri::command]
+fn key_release_all(audition: State<'_, KeyAuditionState>) -> Result<(), String> {
+    audition.send(KeyJob::ReleaseAll)
+}
+#[tauri::command]
 fn transport_status(
     doc_label: Option<String>,
     state: State<'_, Shared>,
@@ -2482,6 +2572,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Shared::default())
         .setup(|app| {
+            app.manage(KeyAuditionState::spawn(app.handle().clone()));
             load_saved_firmware(app.handle());
             Ok(())
         })
@@ -2510,6 +2601,9 @@ fn main() {
             set_playback_channels,
             panic_release,
             test_note,
+            key_note_on,
+            key_note_off,
+            key_release_all,
             midi_ownership,
             claim_midi,
             transport_status,

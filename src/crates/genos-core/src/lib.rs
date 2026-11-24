@@ -20,6 +20,7 @@ pub use firmware_ntt::{
 };
 pub mod genos_system_effect;
 pub mod guitar_preview;
+pub mod key_audition;
 pub mod library;
 pub mod live_preview;
 pub mod midi;

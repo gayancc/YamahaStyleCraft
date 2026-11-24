@@ -292,11 +292,16 @@ fn volume_expression_and_modulation_remain_channel_events_in_playback_and_export
                 );
             }
             let plan = midi::plan(&s.document, sec, &[ch]).unwrap();
+            // The Genos plays only parts with a CASM route in the section; an unrouted
+            // part's controllers are kept in the file but not sent.
+            let routed = s.document.source_routed("Main A", ch);
             for value in [0, 64, 127] {
-                assert!(
+                assert_eq!(
                     plan.packets
                         .iter()
-                        .any(|p| p.data == vec![0xb0 | (ch - 1), cc, value])
+                        .any(|p| p.data == vec![0xb0 | (ch - 1), cc, value]),
+                    routed,
+                    "channel {ch} controller {cc}"
                 );
             }
         }

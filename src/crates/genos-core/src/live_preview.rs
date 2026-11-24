@@ -136,14 +136,15 @@ fn enabled(r: &Route, root: u8, quality: &str) -> bool {
         return false;
     }
     let root_enabled = r.bytes[12 - usize::from(root / 8)] & (1 << (root % 8)) != 0;
-    root_enabled && target_type(quality).is_some_and(|id| {
-        let mask = if let Some(tables) = firmware_ntt::configured().ok().flatten() {
-            tables.chord_mask(id)
-        } else {
-            Some((17 - usize::from(id / 8), 1 << (id % 8)))
-        };
-        mask.is_some_and(|(byte, bit)| r.bytes[byte] & bit != 0)
-    })
+    root_enabled
+        && target_type(quality).is_some_and(|id| {
+            let mask = if let Some(tables) = firmware_ntt::configured().ok().flatten() {
+                tables.chord_mask(id)
+            } else {
+                Some((17 - usize::from(id / 8), 1 << (id % 8)))
+            };
+            mask.is_some_and(|(byte, bit)| r.bytes[byte] & bit != 0)
+        })
 }
 fn rule<'a>(
     r: &'a Route,
@@ -203,8 +204,8 @@ fn rule<'a>(
         }
     };
     let flagged = (b[3] | b[4]) & 128 != 0;
-    let firmware = ntr == "guitar"
-        || (!drum && ntt != "bypass" && firmware_ntt::configured()?.is_some());
+    let firmware =
+        ntr == "guitar" || (!drum && ntt != "bypass" && firmware_ntt::configured()?.is_some());
     let inverted = (b[3] & 127) > (b[4] & 127);
     if ((b[2] > 11 || flagged || inverted) && (drum || (ntt != "bypass" && !firmware)))
         || b[5] > 5
@@ -283,12 +284,15 @@ fn converted(
         };
         let ordinary = (chord.root, chord.quality.as_str());
         let alternate = (rule.target_root, rule.target_quality);
-        let (pitch, (root, quality)) = if ntt & 128 != 0 && note % 12 <= 1 && ordinary != alternate {
+        let (pitch, (root, quality)) = if ntt & 128 != 0 && note % 12 <= 1 && ordinary != alternate
+        {
             (note - note % 12, alternate)
         } else {
             (note, ordinary)
         };
-        return Ok(target_type(quality).and_then(|id| tables.guitar_pitch(pitch, ntt & 127, root, id)));
+        return Ok(
+            target_type(quality).and_then(|id| tables.guitar_pitch(pitch, ntt & 127, root, id))
+        );
     }
     if to_root {
         let note = i16::from(note);
@@ -317,14 +321,22 @@ fn converted(
                 pitch -= 12;
             }
         }
-        return Ok(apply_bypass_limits(pitch, rule.note_limit_low, rule.note_limit_high));
+        return Ok(apply_bypass_limits(
+            pitch,
+            rule.note_limit_low,
+            rule.note_limit_high,
+        ));
     }
     if let Some((ntt, source_type, _)) = table_ids
         && let Some(tables) = firmware_ntt::configured()?
         && let Some(target_type) = target_type(rule.target_quality)
     {
         let pitch = tables.pitch(note, rule, ntt & 127, source_type, target_type);
-        return Ok(apply_bypass_limits(pitch, rule.note_limit_low, rule.note_limit_high));
+        return Ok(apply_bypass_limits(
+            pitch,
+            rule.note_limit_low,
+            rule.note_limit_high,
+        ));
     }
 
     // The retained study helper has an identity shortcut; enforce CASM limits even there.
@@ -345,12 +357,18 @@ fn coverage(area: &str, status: &str, detail: impl Into<String>, count: usize) -
     }
 }
 
-fn keep_packet(packet: &Packet, active: &mut BTreeMap<(u8, u8), usize>, coalesced: &mut usize) -> bool {
+fn keep_packet(
+    packet: &Packet,
+    active: &mut BTreeMap<(u8, u8), usize>,
+    coalesced: &mut usize,
+) -> bool {
     let status = packet.data[0] & 0xf0;
     if !matches!(status, 0x80 | 0x90) {
         return true;
     }
-    let entry = active.entry((packet.data[0] & 15, packet.data[1])).or_default();
+    let entry = active
+        .entry((packet.data[0] & 15, packet.data[1]))
+        .or_default();
     if status == 0x90 {
         let emit = *entry == 0;
         *entry += 1;
@@ -385,10 +403,13 @@ pub fn follow_pitch_at(
     since_root_change: Option<Duration>,
 ) -> Option<u8> {
     let active = since_root_change.is_some_and(|elapsed| {
-        doc.sections.iter().find(|s| s.id == section).is_some_and(|section| {
-            let (bpm, _, _) = doc.timing_at(section.start);
-            Duration::try_from_secs_f64(30.0 / bpm).is_ok_and(|window| elapsed < window)
-        })
+        doc.sections
+            .iter()
+            .find(|s| s.id == section)
+            .is_some_and(|section| {
+                let (bpm, _, _) = doc.timing_at(section.start);
+                Duration::try_from_secs_f64(30.0 / bpm).is_ok_and(|window| elapsed < window)
+            })
     });
     follow_pitch_in_window(doc, section, source, note, chord, active)
 }
@@ -431,15 +452,15 @@ pub fn follow_routed_pitch(
         Some(route) => match rule(route, note, &chord, false) {
             Ok((rule, rtr, ntt)) if !enabled(route, rule.target_root, rule.target_quality) => {
                 let bass_region = ntt & 128 != 0;
-                let held_mask_portamento = matches!(route.destination, 9 | 10)
-                    && matches!(rtr, 1 | 2)
-                    && {
+                let held_mask_portamento =
+                    matches!(route.destination, 9 | 10) && matches!(rtr, 1 | 2) && {
                         let (other_root, other_quality) = if bass_region {
                             (chord.root, chord.quality.as_str())
                         } else {
                             chord.alternate()
                         };
-                        let uses_other_chord = [23, 29, 35].into_iter()
+                        let uses_other_chord = [23, 29, 35]
+                            .into_iter()
                             .any(|offset| (route.bytes[offset] & 128 != 0) != bass_region);
                         !uses_other_chord || !enabled(route, other_root, other_quality)
                     };
@@ -813,7 +834,10 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
         .iter()
         .any(|c| c.alternate() != (c.root, c.quality.as_str()))
     {
-        warnings.insert("Only Ctb2 regions with NTT Bass enabled use the alternate chord root or quality".into());
+        warnings.insert(
+            "Only Ctb2 regions with NTT Bass enabled use the alternate chord root or quality"
+                .into(),
+        );
     }
     let firmware = firmware_ntt::configured()?.is_some();
     // The firmware reader carries the fractional remainder between events.
@@ -911,8 +935,9 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
                             if (low | high) & 128 != 0 {
                                 root_rule.note_limit_low = 0;
                                 root_rule.note_limit_high = 127;
-                                pitch = converted(n.pitch, &root_rule, None, false)?
-                                    .and_then(|pitch| apply_bypass_limits(i16::from(pitch), low, high));
+                                pitch = converted(n.pitch, &root_rule, None, false)?.and_then(
+                                    |pitch| apply_bypass_limits(i16::from(pitch), low, high),
+                                );
                             } else {
                                 pitch = converted(n.pitch, &root_rule, None, false)?;
                             }
@@ -922,8 +947,12 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
                         suppressed += 1;
                         continue;
                     };
-                    if firmware && carried && !info.drum && matches!(rtr, 1..=4)
-                        && let Some((root, quality, last_end, off)) = previous_notes.get_mut(&origin)
+                    if firmware
+                        && carried
+                        && !info.drum
+                        && matches!(rtr, 1..=4)
+                        && let Some((root, quality, last_end, off)) =
+                            previous_notes.get_mut(&origin)
                         && *last_end == cursor
                     {
                         if packets[*off].data[1] == pitch {
@@ -1000,10 +1029,13 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
         }
     }
     let slide_offs: HashSet<_> = slides.values().copied().collect();
-    let slide_sources: HashMap<_, _> = slides.into_iter()
+    let slide_sources: HashMap<_, _> = slides
+        .into_iter()
         .map(|(on, off)| (on, packets[off].clone()))
         .collect();
-    let mut ordered: Vec<_> = packets.into_iter().enumerate()
+    let mut ordered: Vec<_> = packets
+        .into_iter()
+        .enumerate()
         .filter(|(index, _)| !slide_offs.contains(index))
         .collect();
     ordered.sort_by_key(|(_, p)| {
@@ -1029,7 +1061,10 @@ pub fn compile(doc: &Document, config: &Config) -> Result<Compiled> {
                 && active.get(&(channel, new)).copied().unwrap_or(0) == 0
             {
                 portamento += 1;
-                packets.push(Packet { at: packet.at, data: vec![0xb0 | channel, 84, old] });
+                packets.push(Packet {
+                    at: packet.at,
+                    data: vec![0xb0 | channel, 84, old],
+                });
                 keep_packet(&packet, &mut active, &mut coalesced);
                 packets.push(packet);
                 keep_packet(source, &mut active, &mut coalesced);

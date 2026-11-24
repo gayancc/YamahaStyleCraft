@@ -231,7 +231,13 @@ mod tests {
             .chain(&packet)
             .enumerate()
             .map(|(i, &(controller, value))| {
-                let tick = if i < 2 { 10 } else if i < 5 { 20 } else { 30 };
+                let tick = if i < 2 {
+                    10
+                } else if i < 5 {
+                    20
+                } else {
+                    30
+                };
                 cc(tick, 11, controller, value, i as u64)
             })
             .collect();

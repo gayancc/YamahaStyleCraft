@@ -34,7 +34,11 @@ fn synthetic(kind: &str, channel: u8) -> Result<Vec<u8>, Box<dyn std::error::Err
     use genos_core::smf::{self, Chunk, Event};
     let ch = channel - 1;
     // SFF2 layout: format marker and SInt setup bar, then Main A from bar 2.
-    let bars: u64 = if kind == "hits" { 8 * 4 * 480 } else { 4 * 4 * 480 };
+    let bars: u64 = if kind == "hits" {
+        8 * 4 * 480
+    } else {
+        4 * 4 * 480
+    };
     let mut data: Vec<(u64, Vec<u8>)> = vec![
         (0, vec![0xff, 0x51, 3, 0x07, 0xa1, 0x20]),
         (0, vec![0xff, 6, 4, b'S', b'F', b'F', b'2']),
@@ -135,13 +139,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 address: hit.address(),
             },
         )?;
-        voice = Some(json!({ "name": hit.name, "msb": hit.msb, "lsb": hit.lsb, "program": hit.program }));
+        voice = Some(
+            json!({ "name": hit.name, "msb": hit.msb, "lsb": hit.lsb, "program": hit.program }),
+        );
     }
     let mut controllers = Vec::new();
     for change in &args[6..] {
         let (target, value) = change.split_once('=').ok_or("edits look like 7=40")?;
         if let Some(lane) = target.strip_prefix("alt:") {
-            let (a, b) = value.split_once('/').ok_or("alternating edits look like alt:7=100/40")?;
+            let (a, b) = value
+                .split_once('/')
+                .ok_or("alternating edits look like alt:7=100/40")?;
             let (a, b): (u8, u8) = (a.parse()?, b.parse()?);
             // Each value is set a little before its hit and holds through the hit's tail.
             let points: Vec<genos_core::edit::ControllerPoint> = (0..16u64)
@@ -154,7 +162,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "eqhigh" | "eqlow" => Command::MixerEqPoints {
                     section,
                     channel,
-                    band: if lane == "eqhigh" { EqBand::EqHigh } else { EqBand::EqLow },
+                    band: if lane == "eqhigh" {
+                        EqBand::EqHigh
+                    } else {
+                        EqBand::EqLow
+                    },
                     points,
                     clear_ticks: Vec::new(),
                 },
@@ -183,14 +195,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 all_sections: false,
             }
         } else if let Some(key) = target.strip_prefix("drum:") {
-            let (note, field) = key.split_once(':').ok_or("drum edits look like drum:42:volume=1")?;
+            let (note, field) = key
+                .split_once(':')
+                .ok_or("drum edits look like drum:42:volume=1")?;
             let field = match field {
                 "volume" => Field::Volume,
                 "pan" => Field::Pan,
                 "pitch" => Field::Pitch,
                 _ => return Err("drum field must be volume, pan or pitch".into()),
             };
-            let start = session.document.sections.iter().find(|s| s.id == section).map_or(0, |s| s.start);
+            let start = session
+                .document
+                .sections
+                .iter()
+                .find(|s| s.id == section)
+                .map_or(0, |s| s.start);
             Command::SetDrumScalars {
                 channel,
                 address: voice_catalog::address_at(&session.document, start, channel)
@@ -215,13 +234,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // Output "-" prints the part's controller and program messages instead of playing.
     if args[2] == "-" {
-        let plan = midi::plan(&session.document, section, &[channel])?;
-        for packet in plan
-            .packets
-            .iter()
-            .filter(|p| matches!(p.data[0] & 0xf0, 0xb0 | 0xc0))
-        {
-            println!("{:>8.1} ms  {:02X?}", packet.at.as_secs_f64() * 1000.0, packet.data);
+        // Everything the transport would send that is not a note: setup, SysEx, and
+        // channel messages of the chosen channel.
+        let all: Vec<u8> = (1..=16).collect();
+        let plan = midi::plan(&session.document, section, &all)?;
+        for data in &plan.setup {
+            println!("   setup    {data:02X?}");
+        }
+        for packet in plan.packets.iter().filter(|p| {
+            let status = p.data[0];
+            status == 0xf0
+                || (status < 0xf0
+                    && status & 0x0f == channel - 1
+                    && !matches!(status & 0xf0, 0x80 | 0x90))
+        }) {
+            println!(
+                "{:>8.1} ms  {:02X?}",
+                packet.at.as_secs_f64() * 1000.0,
+                packet.data
+            );
         }
         return Ok(());
     }
@@ -231,7 +262,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .find(|p| p.name == args[2])
         .ok_or("output not found")?;
     let mut transport = midi::Transport::default();
-    transport.play(&session.document, section, vec![channel], port.index, port.name.clone(), true)?;
+    transport.play(
+        &session.document,
+        section,
+        vec![channel],
+        port.index,
+        port.name.clone(),
+        true,
+    )?;
     std::thread::sleep(Duration::from_millis(ms));
     let status = transport.status();
     transport.stop();

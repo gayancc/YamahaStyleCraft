@@ -125,7 +125,9 @@ import { useChordFollow } from "./useChordFollow";
 import type { SectionSlot, SlotGroupName } from "./sectionSlots";
 import { AddSection } from "./AddSection";
 import type { ControlHint } from "./hints";
+import { listen } from "@tauri-apps/api/event";
 import { ExpansionRecovery } from "./ExpansionRecovery";
+import { createKeyAuditioner } from "./keyAudition";
 import { metronomeAtTick, playCountIn, resetMetronome } from "./metronome";
 
 const roles = [
@@ -295,6 +297,11 @@ export function App() {
     [recController, setRecController] = useState(11),
     [recControllerValue, setRecControllerValue] = useState(64),
     [armedChannel, setArmedChannel] = useState<number | null>(null),
+    keyAuditioner = useMemo(
+      () =>
+        createKeyAuditioner((error) => useStudio.setState({ error })),
+      [],
+    ),
     [parkedTick, setParkedTick] = useState<number | null>(null);
   const [muted, setMuted] = useState<number[]>([]),
     [solo, setSolo] = useState<number[]>([]);
@@ -584,6 +591,22 @@ export function App() {
       useStudio.setState({ error: String(e) });
     }
   };
+  useEffect(() => () => keyAuditioner.releaseAll(), [keyAuditioner]);
+  useEffect(() => {
+    // Port-open failures happen on the audition worker, off the UI thread.
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    void listen<string>("key-audition-error", (e) =>
+      useStudio.setState({ error: String(e.payload) }),
+    ).then((u) => {
+      if (live) unlisten = u;
+      else u();
+    });
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, []);
   const audition = async () => {
     if (!output) {
       setDeviceOpen(true);
@@ -2575,13 +2598,18 @@ export function App() {
                             ? (parkedTick ?? section.start)
                             : null
                       }
+                      soundingTick={
+                        transport.playing && section
+                          ? tickFromElapsed(view, section, transport.elapsedMs)
+                          : null
+                      }
                       onParkCursor={(tick) => {
                         setParkedTick(tick);
                         useStudio.setState({
                           message: "Play cursor parked",
                         });
                       }}
-                      onAudition={(pitch, velocity) => {
+                      onKeyOn={(pitch, velocity) => {
                         if (editingDisabled || capturing) return;
                         if (!output) {
                           useStudio.setState({
@@ -2590,18 +2618,15 @@ export function App() {
                           });
                           return;
                         }
-                        void invoke("test_note", {
-                          index: output.index,
-                          name: output.name,
+                        keyAuditioner.on(
+                          output,
                           channel,
                           pitch,
                           velocity,
-                          holdMs: 200,
                           docLabel,
-                        }).catch((e) =>
-                          useStudio.setState({ error: String(e) }),
                         );
                       }}
+                      onKeyOff={(pitch) => keyAuditioner.off(pitch)}
                     />
                   </div>
                   <div className="editor-footnote">

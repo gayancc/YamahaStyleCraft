@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "genos-core"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "flate2",
  "midir",
@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "genos-style-studio"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "genos-core",
  "serde",

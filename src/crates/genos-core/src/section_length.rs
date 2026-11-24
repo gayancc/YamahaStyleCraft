@@ -37,7 +37,9 @@ pub(crate) fn ticks_per_bar(doc: &Document, at: u64) -> Result<u64> {
     }
     let scaled = u64::from(doc.style.ppq) * 4 * u64::from(num);
     if !scaled.is_multiple_of(u64::from(den)) {
-        return Err(reject("meter does not produce a whole number of ticks per bar"));
+        return Err(reject(
+            "meter does not produce a whole number of ticks per bar",
+        ));
     }
     let bar = scaled / u64::from(den);
     if bar == 0 {
@@ -107,11 +109,7 @@ pub(crate) fn shift_ticks(style: &mut Style, from: u64, delta: i64, touched: &mu
 }
 
 /// Apply Fill/Break length or Shorten Section. Returns removed note-on IDs for Session bookkeeping.
-pub(crate) fn apply(
-    style: &mut Style,
-    section_id: u64,
-    op: SectionLengthOp,
-) -> Result<Vec<u64>> {
+pub(crate) fn apply(style: &mut Style, section_id: u64, op: SectionLengthOp) -> Result<Vec<u64>> {
     let doc = Document::from_style(style.clone())?;
     let sec = section(&doc, section_id)?;
     let bar = ticks_per_bar(&doc, sec.start)?;

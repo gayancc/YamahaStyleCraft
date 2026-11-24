@@ -71,7 +71,8 @@ pub struct InputConnection {
 
 impl Drop for InputConnection {
     fn drop(&mut self) {
-        self.listening.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.listening
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         if let Some(connection) = self.connection.take() {
             // If the thread cannot start, the connection closes here as before.
             let _ = thread::Builder::new()
@@ -193,7 +194,10 @@ impl ChannelRoutes {
 
 impl Plan {
     fn rhythm_sources(&self) -> u16 {
-        self.tempo.as_ref().and_then(|clock| clock.rhythm_sources).unwrap_or(DEFAULT_RHYTHM_SOURCES)
+        self.tempo
+            .as_ref()
+            .and_then(|clock| clock.rhythm_sources)
+            .unwrap_or(DEFAULT_RHYTHM_SOURCES)
     }
 
     fn finish_at(&mut self, end: Duration) {
@@ -359,10 +363,18 @@ pub fn plan_from(
     let start = at(play_from);
     let tempo_at_start = times[times.partition_point(|(tick, _, _)| *tick <= play_from) - 1].2;
     let mut segments = vec![(Duration::ZERO, 0.0, tempo_at_start)];
-    segments.extend(times.iter().filter(|(tick, _, _)| *tick > play_from && *tick < s.end)
-        .map(|&(tick, _, tempo)| {
-            (at(tick) - start, (tick - play_from) as f64 / f64::from(doc.style.ppq), tempo)
-        }));
+    segments.extend(
+        times
+            .iter()
+            .filter(|(tick, _, _)| *tick > play_from && *tick < s.end)
+            .map(|&(tick, _, tempo)| {
+                (
+                    at(tick) - start,
+                    (tick - play_from) as f64 / f64::from(doc.style.ppq),
+                    tempo,
+                )
+            }),
+    );
     let mut baseline = BTreeMap::new();
     for e in &events {
         if e.tick >= play_from {
@@ -457,12 +469,19 @@ pub fn plan_from(
     beats.push(duration);
     let mut held_seek_sources = 0;
     let mut rhythm_sources = 0;
-    let mut has_section_routes = doc.routes.iter().any(|route| route.sections.contains(&s.label));
+    let mut has_section_routes = doc
+        .routes
+        .iter()
+        .any(|route| route.sections.contains(&s.label));
+    let mut routed_sources = 0u16;
     let mut channel_routes = ChannelRoutes::default();
     for source in 1..=16 {
         let resolved = doc.firmware_cseg_route(&s.label, source);
-        let candidates = || doc.routes.iter()
-            .filter(|route| route.source == source && route.sections.contains(&s.label));
+        let candidates = || {
+            doc.routes
+                .iter()
+                .filter(|route| route.source == source && route.sections.contains(&s.label))
+        };
         match resolved {
             Some(Some(route)) => channel_routes.set(source, route.destination),
             Some(None) => {}
@@ -475,11 +494,13 @@ pub fn plan_from(
                 }
             }
         }
-        let mut routes = doc.routes.iter()
-            .filter(|route| resolved.is_none() && route.source == source && route.sections.contains(&s.label));
+        let mut routes = doc.routes.iter().filter(|route| {
+            resolved.is_none() && route.source == source && route.sections.contains(&s.label)
+        });
         if let Some(first) = resolved.unwrap_or_else(|| routes.next()) {
             has_section_routes = true;
             let bit = channel_bit(source);
+            routed_sources |= bit;
             let mut rhythm = matches!(first.destination, 9 | 10);
             let mut restores_held = (14..=16).contains(&first.destination);
             for route in routes {
@@ -493,6 +514,13 @@ pub fn plan_from(
                 held_seek_sources |= bit;
             }
         }
+    }
+    // The Genos plays only the source tracks that have a CASM route in the section; a track
+    // without one stays silent there (confirmed on hardware with a fill lacking routes).
+    if has_section_routes {
+        packets.retain(|packet| {
+            packet_channel(&packet.data).is_none_or(|ch| routed_sources & channel_bit(ch) != 0)
+        });
     }
     Ok(Plan {
         setup: Vec::new(),
@@ -510,9 +538,22 @@ pub fn plan_from(
                 start_quarters: (play_from - s.start) as f64 / f64::from(doc.style.ppq),
             }),
             fill: matches!(
-                s.label.split_whitespace().map(str::to_ascii_lowercase).collect::<Vec<_>>().join(" ").as_str(),
-                "fill in aa" | "fill in bb" | "fill in cc" | "fill in dd" | "fill in ba"
-                    | "fill a" | "fill b" | "fill c" | "fill d" | "break"
+                s.label
+                    .split_whitespace()
+                    .map(str::to_ascii_lowercase)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .as_str(),
+                "fill in aa"
+                    | "fill in bb"
+                    | "fill in cc"
+                    | "fill in dd"
+                    | "fill in ba"
+                    | "fill a"
+                    | "fill b"
+                    | "fill c"
+                    | "fill d"
+                    | "break"
             ),
             held_seek_sources,
             rhythm_sources: has_section_routes.then_some(rhythm_sources),
@@ -588,10 +629,8 @@ pub struct LiveChord {
 /// Re-pitches one source note for a chord: (section, source channel 1..16, pitch, chord).
 /// `None` silences the note (a CASM note mute).
 pub type PitchMapper = Arc<dyn Fn(u64, u8, u8, &LiveChord) -> Option<u8> + Send + Sync>;
-pub type TimedPitchMapper =
-    Arc<dyn Fn(u64, u8, u8, &LiveChord, bool) -> Option<u8> + Send + Sync>;
-pub type RoutedPitchMapper =
-    Arc<dyn Fn(u64, u8, u8, &LiveChord, bool) -> LivePitch + Send + Sync>;
+pub type TimedPitchMapper = Arc<dyn Fn(u64, u8, u8, &LiveChord, bool) -> Option<u8> + Send + Sync>;
+pub type RoutedPitchMapper = Arc<dyn Fn(u64, u8, u8, &LiveChord, bool) -> LivePitch + Send + Sync>;
 
 pub struct LivePitch {
     pub pitch: Option<u8>,
@@ -739,28 +778,42 @@ impl Transport {
             let now = Instant::now();
             let elapsed = now.saturating_duration_since(start);
             let is_fill = steps[0].plan.tempo.as_ref().is_some_and(|clock| clock.fill);
-            let mut fill = if is_fill { fill_handoff(&st, elapsed) } else { None };
+            let mut fill = if is_fill {
+                fill_handoff(&st, elapsed)
+            } else {
+                None
+            };
             if let Some(handoff) = &mut fill
                 && steps[0].plan.section == st.section
-                && steps.get(1).is_some_and(|next| next.looping && next.plan.tempo.is_some())
+                && steps
+                    .get(1)
+                    .is_some_and(|next| next.looping && next.plan.tempo.is_some())
             {
                 // Repressing the sounding Fill within its window selects its Main.
                 steps.remove(0);
                 handoff.rhythm_only = false;
             }
-            let deadline_floor = if is_fill { elapsed } else { elapsed + Duration::from_millis(15) };
+            let deadline_floor = if is_fill {
+                elapsed
+            } else {
+                elapsed + Duration::from_millis(15)
+            };
             let at = if fill.is_some() {
                 now
             } else {
                 st.bars
-                .iter()
-                .find(|b| **b > deadline_floor)
-                .map_or(now, |b| start + *b)
+                    .iter()
+                    .find(|b| **b > deadline_floor)
+                    .map_or(now, |b| start + *b)
             };
             (at, fill, start)
         };
-        *self.switch.lock().unwrap_or_else(|p| p.into_inner()) =
-            Some(Switch { at, steps, fill, source_start });
+        *self.switch.lock().unwrap_or_else(|p| p.into_inner()) = Some(Switch {
+            at,
+            steps,
+            fill,
+            source_start,
+        });
         // Wake the player so it re-reads the switch deadline.
         let (lock, cv) = &*self.cancel;
         drop(lock.lock().unwrap_or_else(|p| p.into_inner()));
@@ -775,9 +828,11 @@ impl Transport {
     }
     /// Install a mapper that also receives the scheduled half-quarter root-change flag.
     pub fn set_timed_pitch_mapper(&self, mapper: TimedPitchMapper) {
-        self.set_routed_pitch_mapper(Arc::new(move |section, channel, pitch, chord, in_window| {
-            mapper(section, channel, pitch, chord, in_window).into()
-        }));
+        self.set_routed_pitch_mapper(Arc::new(
+            move |section, channel, pitch, chord, in_window| {
+                mapper(section, channel, pitch, chord, in_window).into()
+            },
+        ));
     }
     pub fn set_routed_pitch_mapper(&self, mapper: RoutedPitchMapper) {
         self.chord.lock().unwrap_or_else(|p| p.into_inner()).mapper = Some(mapper);
@@ -822,7 +877,10 @@ impl Transport {
         if let Some(w) = self.worker.take() {
             let _ = w.join();
         }
-        self.chord.lock().unwrap_or_else(|p| p.into_inner()).root_changed_quarter = None;
+        self.chord
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .root_changed_quarter = None;
     }
     pub fn play(
         &mut self,
@@ -985,14 +1043,21 @@ fn seek_packets(plan: &Plan, cut: Duration, rhythm_only: bool) -> Vec<&[u8]> {
     let mut state = Vec::new();
     let mut latest = BTreeMap::new();
     let mut held: Vec<&[u8]> = Vec::new();
-    let held_sources = plan.tempo.as_ref().map_or(0, |clock| clock.held_seek_sources);
+    let held_sources = plan
+        .tempo
+        .as_ref()
+        .map_or(0, |clock| clock.held_seek_sources);
     for packet in plan.packets.iter().take_while(|packet| packet.at <= cut) {
         let data = packet.data.as_slice();
-        let Some(channel) = packet_channel(data) else { continue };
+        let Some(channel) = packet_channel(data) else {
+            continue;
+        };
         if rhythm_only && plan.rhythm_sources() & channel_bit(channel) == 0 {
             continue;
         }
-        if packet.at < cut && let Some((order, coalesce)) = seek_state_order(data) {
+        if packet.at < cut
+            && let Some((order, coalesce)) = seek_state_order(data)
+        {
             if coalesce {
                 latest.insert((channel, order), data);
             } else {
@@ -1006,9 +1071,10 @@ fn seek_packets(plan: &Plan, cut: Duration, rhythm_only: bool) -> Vec<&[u8]> {
             match (status & 0xf0, velocity) {
                 (0x90, 1..) if packet.at < cut => held.push(data),
                 (0x80, _) | (0x90, 0) => {
-                    if let Some(index) = held.iter().position(|on| {
-                        on[0] & 0x0f == status & 0x0f && on[1] == *pitch
-                    }) {
+                    if let Some(index) = held
+                        .iter()
+                        .position(|on| on[0] & 0x0f == status & 0x0f && on[1] == *pitch)
+                    {
                         held.remove(index);
                     }
                 }
@@ -1018,7 +1084,11 @@ fn seek_packets(plan: &Plan, cut: Duration, rhythm_only: bool) -> Vec<&[u8]> {
     }
     state.extend(latest);
     state.sort_by_key(|(key, _)| *key);
-    state.into_iter().map(|(_, data)| data).chain(held).collect()
+    state
+        .into_iter()
+        .map(|(_, data)| data)
+        .chain(held)
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -1058,7 +1128,9 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
             })
     }
     fn is_rhythm(&self, channel: u8) -> bool {
-        let sources = self.clock.as_ref()
+        let sources = self
+            .clock
+            .as_ref()
             .and_then(|(_, _, clock)| clock.rhythm_sources)
             .unwrap_or(DEFAULT_RHYTHM_SOURCES);
         sources & channel_bit(channel) != 0
@@ -1066,7 +1138,11 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
 
     fn routes_rhythm(&self, state: &ChordState) -> bool {
         state.initial.is_some()
-            && self.clock.as_ref().and_then(|(_, _, clock)| clock.rhythm_sources).is_some()
+            && self
+                .clock
+                .as_ref()
+                .and_then(|(_, _, clock)| clock.rhythm_sources)
+                .is_some()
     }
 
     fn release(&mut self, channels: impl Iterator<Item = u8>) -> std::result::Result<(), String> {
@@ -1091,7 +1167,11 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
         if rhythm && !self.routes_rhythm(&state) {
             return None;
         }
-        let section = if rhythm { self.fill_section.or(self.section) } else { self.section };
+        let section = if rhythm {
+            self.fill_section.or(self.section)
+        } else {
+            self.section
+        };
         let (Some(chord), Some(map), Some(section)) = (
             state.current.as_ref().or(state.initial.as_ref()),
             state.mapper.as_ref(),
@@ -1099,7 +1179,8 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
         ) else {
             return None;
         };
-        let to_root = state.root_changed_quarter
+        let to_root = state
+            .root_changed_quarter
             .zip(self.clock.as_ref())
             .is_some_and(|(changed, (start, base, tempo))| {
                 tempo.in_root_window(at.saturating_duration_since(*start), *base, changed)
@@ -1146,7 +1227,11 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
     fn apply_chord(&mut self) -> std::result::Result<(), String> {
         let (at, ordinary_changed, bass_changed, routes_rhythm) = {
             let mut state = self.chord.lock().unwrap_or_else(|p| p.into_inner());
-            if state.pending.as_ref().is_some_and(|(_, at)| *at > Instant::now()) {
+            if state
+                .pending
+                .as_ref()
+                .is_some_and(|(_, at)| *at > Instant::now())
+            {
                 return Ok(());
             }
             let Some((chord, at)) = state.pending.take() else {
@@ -1162,7 +1247,10 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
                 let roots_changed = previous.root != next.root || previous_bass != next_bass;
                 ordinary_changed = previous.root != next.root || previous.quality != next.quality;
                 bass_changed = previous_bass != next_bass
-                    || previous.bass_quality.as_deref().unwrap_or(&previous.quality)
+                    || previous
+                        .bass_quality
+                        .as_deref()
+                        .unwrap_or(&previous.quality)
                         != next.bass_quality.as_deref().unwrap_or(&next.quality);
                 if roots_changed {
                     state.root_changed_quarter = self.quarter_at(at);
@@ -1174,7 +1262,12 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
                 state.initial = None;
             }
             state.current = chord;
-            (at, ordinary_changed, bass_changed, self.routes_rhythm(&state))
+            (
+                at,
+                ordinary_changed,
+                bass_changed,
+                self.routes_rhythm(&state),
+            )
         };
         for channel in 0..16u8 {
             let rhythm = self.is_rhythm(channel + 1);
@@ -1182,7 +1275,9 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
                 continue;
             }
             let channel_index = usize::from(channel);
-            let mut held: Vec<_> = self.notes[channel_index].iter().enumerate()
+            let mut held: Vec<_> = self.notes[channel_index]
+                .iter()
+                .enumerate()
                 .filter_map(|(index, note)| note.output.map(|pitch| (index, *note, pitch)))
                 .collect();
             // The rhythm mute callback consumes the first eligible note in note-on order.
@@ -1191,12 +1286,23 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
             }
             let mut rhythm_portamento_sent = false;
             for (index, note, sent) in held {
-                let SourceNote { source, velocity, .. } = note;
+                let SourceNote {
+                    source, velocity, ..
+                } = note;
                 let mapped = self.mapped(channel, source, at);
                 let routed = note.routed || mapped.is_some();
-                let LivePitch { mut pitch, portamento, stop_on_change, bass_region, held_mask_portamento } =
-                    mapped.unwrap_or_else(|| Some(source).into());
-                let changed = if bass_region { bass_changed } else { ordinary_changed };
+                let LivePitch {
+                    mut pitch,
+                    portamento,
+                    stop_on_change,
+                    bass_region,
+                    held_mask_portamento,
+                } = mapped.unwrap_or_else(|| Some(source).into());
+                let changed = if bass_region {
+                    bass_changed
+                } else {
+                    ordinary_changed
+                };
                 if rhythm {
                     if !changed {
                         continue;
@@ -1214,9 +1320,13 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
                     continue;
                 }
                 let notes = &mut self.notes[channel_index];
-                let shared = |output, routed| notes.iter().enumerate().any(|(other_index, other)| {
-                    other_index != index && other.output == Some(output) && (routed || other.routed)
-                });
+                let shared = |output, routed| {
+                    notes.iter().enumerate().any(|(other_index, other)| {
+                        other_index != index
+                            && other.output == Some(output)
+                            && (routed || other.routed)
+                    })
+                };
                 let old_shared = shared(sent, note.routed);
                 let new_attack = pitch.filter(|&output| !shared(output, routed));
                 if portamento
@@ -1234,7 +1344,11 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
                         (self.send)(&[0x90 | channel, target, velocity])?;
                     }
                 }
-                notes[index] = SourceNote { output: pitch, routed, ..note };
+                notes[index] = SourceNote {
+                    output: pitch,
+                    routed,
+                    ..note
+                };
             }
         }
         Ok(())
@@ -1256,18 +1370,30 @@ impl<F: FnMut(&[u8]) -> std::result::Result<(), String>> Live<'_, F> {
 fn splice_fill(plan: &mut Plan, fill: Plan, handoff: FillHandoff, at: Duration) {
     let fill_rhythm = fill.rhythm_sources();
     let replaced = plan.rhythm_sources() | fill_rhythm;
-    let clock = plan.tempo.as_ref().expect("Fill handoff needs the source clock");
+    let clock = plan
+        .tempo
+        .as_ref()
+        .expect("Fill handoff needs the source clock");
     let fill_clock = fill.tempo.as_ref().expect("Fill plan needs a clock");
     let source_quarter = clock.quarters_at(at);
     let remaining = (fill_clock.quarters_at(fill.duration) - handoff.phase).max(0.0);
-    let end = handoff.end.min(clock.elapsed_at(source_quarter + remaining).max(at));
+    let end = handoff
+        .end
+        .min(clock.elapsed_at(source_quarter + remaining).max(at));
     plan.packets.retain(|packet| {
-        handoff.rhythm_only && packet.at >= at && packet.at <= handoff.end
+        handoff.rhythm_only
+            && packet.at >= at
+            && packet.at <= handoff.end
             && packet_channel(&packet.data).is_some_and(|ch| replaced & channel_bit(ch) == 0)
     });
     let cut = fill_clock.elapsed_at(handoff.phase);
     let mut restore: Vec<_> = seek_packets(&fill, cut, handoff.rhythm_only)
-        .into_iter().map(|data| Packet { at, data: data.to_vec() }).collect();
+        .into_iter()
+        .map(|data| Packet {
+            at,
+            data: data.to_vec(),
+        })
+        .collect();
     for mut packet in fill.packets {
         if handoff.rhythm_only
             && !packet_channel(&packet.data).is_some_and(|ch| fill_rhythm & channel_bit(ch) != 0)
@@ -1278,7 +1404,9 @@ fn splice_fill(plan: &mut Plan, fill: Plan, handoff: FillHandoff, at: Duration) 
         if packet.at < cut {
             continue;
         }
-        packet.at = clock.elapsed_at(source_quarter + (quarter - handoff.phase).max(0.0)).max(at);
+        packet.at = clock
+            .elapsed_at(source_quarter + (quarter - handoff.phase).max(0.0))
+            .max(at);
         if packet.at <= handoff.end {
             plan.packets.push(packet);
         }
@@ -1291,7 +1419,9 @@ fn splice_fill(plan: &mut Plan, fill: Plan, handoff: FillHandoff, at: Duration) 
         clock.rhythm_sources = fill_clock.rhythm_sources;
     }
     // The fill's sources play on the fill's destination parts.
-    for source in (1..=16u8).filter(|&source| !handoff.rhythm_only || fill_rhythm & channel_bit(source) != 0) {
+    for source in
+        (1..=16u8).filter(|&source| !handoff.rhythm_only || fill_rhythm & channel_bit(source) != 0)
+    {
         plan.routes.set(source, fill.routes.destination(source));
     }
     if !handoff.rhythm_only {
@@ -1371,7 +1501,11 @@ fn run_plan(
             routes.set(step.plan.routes);
             live.routes = step.plan.routes;
             status.lock().unwrap_or_else(|p| p.into_inner()).routes = step.plan.routes;
-            live.clock = step.plan.tempo.clone().map(|tempo| (start, quarters, tempo));
+            live.clock = step
+                .plan
+                .tempo
+                .clone()
+                .map(|tempo| (start, quarters, tempo));
             let mut switched = false;
             for packet in &step.plan.packets[packet_index..] {
                 match live.wait(start + packet.at) {
@@ -1417,7 +1551,10 @@ fn run_plan(
             if switched {
                 let next = {
                     let mut pending = switch.lock().unwrap_or_else(|p| p.into_inner());
-                    if pending.as_ref().is_some_and(|next| next.at <= Instant::now()) {
+                    if pending
+                        .as_ref()
+                        .is_some_and(|next| next.at <= Instant::now())
+                    {
                         pending.take()
                     } else {
                         None
@@ -1431,23 +1568,39 @@ fn run_plan(
                 queue = next.steps.into();
                 let incoming = queue.pop_front().expect("switch has at least one step");
                 let replaced = step.plan.rhythm_sources() | incoming.plan.rhythm_sources();
-                if let Err(e) = live.release(channels.iter().copied()
-                    .filter(|&ch| !rhythm_only || replaced & channel_bit(ch) != 0))
-                {
+                if let Err(e) = live.release(
+                    channels
+                        .iter()
+                        .copied()
+                        .filter(|&ch| !rhythm_only || replaced & channel_bit(ch) != 0),
+                ) {
                     failure = Some(e);
                     break 'play;
                 }
-                let main_seek = fill.as_ref().filter(|handoff| !handoff.rhythm_only).and_then(|handoff| {
-                    incoming.plan.tempo.as_ref().filter(|clock| !clock.fill)
-                        .map(|clock| {
-                            let phase = handoff.phase.min(clock.quarters_at(incoming.plan.duration));
-                            (clock.elapsed_at(phase), phase)
-                        })
-                });
+                let main_seek = fill
+                    .as_ref()
+                    .filter(|handoff| !handoff.rhythm_only)
+                    .and_then(|handoff| {
+                        incoming
+                            .plan
+                            .tempo
+                            .as_ref()
+                            .filter(|clock| !clock.fill)
+                            .map(|clock| {
+                                let phase =
+                                    handoff.phase.min(clock.quarters_at(incoming.plan.duration));
+                                (clock.elapsed_at(phase), phase)
+                            })
+                    });
                 if let Some(fill) = fill.filter(|_| main_seek.is_none()) {
                     fill_section = incoming.plan.section;
                     step.plan.packets.drain(..packet_index);
-                    splice_fill(&mut step.plan, incoming.plan, fill, next.at.saturating_duration_since(start));
+                    splice_fill(
+                        &mut step.plan,
+                        incoming.plan,
+                        fill,
+                        next.at.saturating_duration_since(start),
+                    );
                     step.looping = false;
                     packet_index = 0;
                     continue;
@@ -1462,18 +1615,27 @@ fn run_plan(
                 {
                     start = origin;
                     quarters -= phase;
-                    packet_index = step.plan.packets.partition_point(|packet| packet.at < elapsed);
+                    packet_index = step
+                        .plan
+                        .packets
+                        .partition_point(|packet| packet.at < elapsed);
                     live.section = step.plan.section;
                     live.fill_section = None;
                     routes.set(step.plan.routes);
                     live.routes = step.plan.routes;
                     status.lock().unwrap_or_else(|p| p.into_inner()).routes = step.plan.routes;
-                    live.clock = step.plan.tempo.clone().map(|clock| (start, quarters, clock));
+                    live.clock = step
+                        .plan
+                        .tempo
+                        .clone()
+                        .map(|clock| (start, quarters, clock));
                     for data in seek_packets(&step.plan, elapsed, false) {
                         if packet_channel(data).is_some_and(|ch| {
-                                audible.lock().unwrap_or_else(|p| p.into_inner()).contains(&ch)
-                            })
-                            && let Err(e) = live.emit(data, next.at)
+                            audible
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .contains(&ch)
+                        }) && let Err(e) = live.emit(data, next.at)
                         {
                             failure = Some(e);
                             break 'play;
@@ -1982,13 +2144,23 @@ mod monitor_tests {
         update_held_notes(&held, &[0x91, 64, 80]);
         update_held_notes(&held, &[0x92, 67, 90]);
         assert_eq!(
-            held.lock().unwrap().keys.iter().copied().collect::<Vec<_>>(),
+            held.lock()
+                .unwrap()
+                .keys
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
             vec![(1, 60), (2, 64), (3, 67)]
         );
         update_held_notes(&held, &[0x81, 64, 0]); // ch2 note-off
         update_held_notes(&held, &[0x92, 67, 0]); // ch3 note-on vel 0 = off
         assert_eq!(
-            held.lock().unwrap().keys.iter().copied().collect::<Vec<_>>(),
+            held.lock()
+                .unwrap()
+                .keys
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
             vec![(1, 60)]
         );
     }
@@ -2074,7 +2246,12 @@ mod plan_from_tests {
         let mut rhythm = doc.routes[0].clone();
         doc.style.chunks.retain(|chunk| chunk.tag != *b"CASM");
         let mut doc = Document::from_style(doc.style).unwrap();
-        let id = doc.sections.iter().find(|s| s.label == "Main A").unwrap().id;
+        let id = doc
+            .sections
+            .iter()
+            .find(|s| s.label == "Main A")
+            .unwrap()
+            .id;
         rhythm.sections = vec!["Main A".into()];
         rhythm.source = 3;
         rhythm.destination = 9;
@@ -2090,10 +2267,142 @@ mod plan_from_tests {
         mixed.source = 5;
         let mut mixed_rhythm = rhythm.clone();
         mixed_rhythm.source = 5;
-        doc.routes = vec![rhythm, second_rhythm, accompaniment, second_accompaniment, mixed, mixed_rhythm];
+        doc.routes = vec![
+            rhythm,
+            second_rhythm,
+            accompaniment,
+            second_accompaniment,
+            mixed,
+            mixed_rhythm,
+        ];
         let playback = plan(&doc, id, &[3, 5, 9]).unwrap();
         assert_eq!(playback.rhythm_sources(), channel_bit(3));
         assert_eq!(playback.tempo.unwrap().held_seek_sources, channel_bit(9));
+    }
+
+    #[test]
+    fn adopting_a_route_makes_the_genos_play_that_source_in_the_section() {
+        use crate::edit::{Command, Session};
+        let original = fixture_doc().style.bytes().unwrap();
+        let mut session = Session::open(&original, "adopt".into()).unwrap();
+        let id = |label: &str| {
+            session
+                .document
+                .sections
+                .iter()
+                .find(|s| s.label == label)
+                .unwrap()
+                .id
+        };
+        let (fill, main) = (id("Fill In AA"), id("Main A"));
+        let before: Vec<(String, u8, bool)> = session
+            .document
+            .sections
+            .iter()
+            .flat_map(|s| (1..=16u8).map(move |ch| (s.label.clone(), ch)))
+            .map(|(label, ch)| {
+                let routed = session.document.source_routed(&label, ch);
+                (label, ch, routed)
+            })
+            .collect();
+        assert!(
+            !session.document.source_routed("Fill In AA", 9),
+            "fixture must lack the route"
+        );
+        session
+            .execute(
+                session.revision,
+                Command::AdoptRoute {
+                    section: fill,
+                    source: 9,
+                    from_section: main,
+                },
+            )
+            .unwrap();
+        let doc = &session.document;
+        assert!(doc.source_routed("Fill In AA", 9));
+        let routes = plan(doc, fill, &[9]).unwrap().routes;
+        assert_eq!(routes.destination(9), 9);
+        for (label, ch, routed) in &before {
+            if !(label == "Fill In AA" && *ch == 9) {
+                assert_eq!(
+                    doc.source_routed(label, *ch),
+                    *routed,
+                    "{label} channel {ch} changed"
+                );
+            }
+        }
+        assert!(
+            session
+                .execute(
+                    session.revision,
+                    Command::AdoptRoute {
+                        section: fill,
+                        source: 9,
+                        from_section: main
+                    }
+                )
+                .is_err()
+        );
+        session.undo().unwrap();
+        assert_eq!(session.document.style.bytes().unwrap(), original);
+    }
+
+    #[test]
+    fn sources_without_a_route_in_the_section_stay_silent() {
+        let mut doc = fixture_doc();
+        let template = doc.routes[0].clone();
+        doc.style.chunks.retain(|chunk| chunk.tag != *b"CASM");
+        let mut doc = Document::from_style(doc.style).unwrap();
+        let section = doc
+            .sections
+            .iter()
+            .find(|s| s.label == "Main A")
+            .unwrap()
+            .clone();
+        let mut sources: Vec<u8> = doc
+            .notes
+            .iter()
+            .filter(|n| n.start >= section.start && n.start < section.end)
+            .map(|n| n.channel)
+            .collect();
+        sources.sort_unstable();
+        sources.dedup();
+        assert!(sources.len() >= 2, "fixture needs two sounding sources");
+        let (routed, unrouted) = (sources[0], sources[1]);
+        let mut route = template;
+        route.sections = vec!["Main A".into()];
+        route.source = routed;
+        route.destination = routed;
+        doc.routes = vec![route];
+        let plan = plan(&doc, section.id, &sources).unwrap();
+        let has = |ch: u8| {
+            plan.packets
+                .iter()
+                .any(|p| packet_channel(&p.data) == Some(ch))
+        };
+        assert!(has(routed));
+        assert!(
+            !has(unrouted),
+            "a source without a route in the section must not sound"
+        );
+        // The editor is told which notes the instrument will not play.
+        assert_eq!(
+            doc.unrouted_tracks()
+                .iter()
+                .filter(|(s, ch, _)| s == "Main A" && *ch == unrouted)
+                .count(),
+            1
+        );
+        assert!(doc.unrouted_tracks().iter().all(|(_, ch, _)| *ch != routed));
+        // A Style without any CASM for the section still plays every source.
+        doc.routes.clear();
+        let plan = super::plan(&doc, section.id, &sources).unwrap();
+        assert!(
+            plan.packets
+                .iter()
+                .any(|p| packet_channel(&p.data) == Some(unrouted))
+        );
     }
 
     #[test]
@@ -2102,7 +2411,12 @@ mod plan_from_tests {
         let mut pad = doc.routes[0].clone();
         doc.style.chunks.retain(|chunk| chunk.tag != *b"CASM");
         let mut doc = Document::from_style(doc.style).unwrap();
-        let id = doc.sections.iter().find(|s| s.label == "Main A").unwrap().id;
+        let id = doc
+            .sections
+            .iter()
+            .find(|s| s.label == "Main A")
+            .unwrap()
+            .id;
         pad.sections = vec!["Main A".into()];
         pad.source = 6;
         pad.destination = 14;
@@ -2116,8 +2430,16 @@ mod plan_from_tests {
         doc.routes = vec![pad, other_section, conflicting, conflicting_other];
         let routes = plan(&doc, id, &[5, 6, 7, 9]).unwrap().routes;
         assert_eq!(routes.destination(6), 14);
-        assert_eq!(routes.destination(7), 7, "routes of other sections do not apply");
-        assert_eq!(routes.destination(5), 5, "ambiguous routes keep the source channel");
+        assert_eq!(
+            routes.destination(7),
+            7,
+            "routes of other sections do not apply"
+        );
+        assert_eq!(
+            routes.destination(5),
+            5,
+            "ambiguous routes keep the source channel"
+        );
         assert_eq!(routes.destination(9), 9);
     }
 
@@ -2126,7 +2448,9 @@ mod plan_from_tests {
         use crate::smf::{Chunk, Event, pack};
         let doc = fixture_doc();
         let mut style = doc.style;
-        style.chunks.retain(|chunk| !matches!(&chunk.tag, b"CASM" | b"Ghst" | b"Rsec" | b"Rtrk"));
+        style
+            .chunks
+            .retain(|chunk| !matches!(&chunk.tag, b"CASM" | b"Ghst" | b"Rsec" | b"Rtrk"));
         style.tracks[0].push(Event {
             id: u64::MAX,
             order: u64::MAX,
@@ -2134,29 +2458,56 @@ mod plan_from_tests {
             data: vec![0xff, 6, 4, b'S', b'F', b'F', b'2'],
         });
         let cseg = |labels: &[u8], pairs: &[(u8, u8)]| {
-            let mut records = vec![Chunk { tag: *b"Sdec", data: labels.to_vec() }];
+            let mut records = vec![Chunk {
+                tag: *b"Sdec",
+                data: labels.to_vec(),
+            }];
             for &(source, destination) in pairs {
                 let mut data = vec![0; 47];
                 data[0] = source - 1;
                 data[9] = destination - 1;
-                records.push(Chunk { tag: *b"Ctb2", data });
+                records.push(Chunk {
+                    tag: *b"Ctb2",
+                    data,
+                });
             }
-            Chunk { tag: *b"CSEG", data: pack(&records).unwrap() }
+            Chunk {
+                tag: *b"CSEG",
+                data: pack(&records).unwrap(),
+            }
         };
         style.chunks.push(Chunk {
             tag: *b"CASM",
             data: pack(&[
                 cseg(b"Main A,Main B", &[(3, 9), (3, 14)]),
                 cseg(b"Main A,Main C", &[(3, 10), (4, 9)]),
-            ]).unwrap(),
+            ])
+            .unwrap(),
         });
         let doc = Document::from_style(style).unwrap();
-        let id = doc.sections.iter().find(|s| s.label == "Main A").unwrap().id;
+        let id = doc
+            .sections
+            .iter()
+            .find(|s| s.label == "Main A")
+            .unwrap()
+            .id;
         let playback = plan(&doc, id, &[3, 4]).unwrap();
         assert_eq!(doc.routes.len(), 4);
-        assert_eq!(doc.firmware_cseg_route("Main A", 3).flatten().unwrap().destination, 14);
+        assert_eq!(
+            doc.firmware_cseg_route("Main A", 3)
+                .flatten()
+                .unwrap()
+                .destination,
+            14
+        );
         assert!(matches!(doc.firmware_cseg_route("Main A", 4), Some(None)));
-        assert_eq!(doc.firmware_cseg_route("Main C", 3).flatten().unwrap().destination, 10);
+        assert_eq!(
+            doc.firmware_cseg_route("Main C", 3)
+                .flatten()
+                .unwrap()
+                .destination,
+            10
+        );
         assert_eq!(playback.rhythm_sources(), 0);
         assert_eq!(playback.tempo.unwrap().held_seek_sources, channel_bit(3));
 
@@ -2168,7 +2519,10 @@ mod plan_from_tests {
         assert_eq!(doc.routes.len(), 4);
         assert!(matches!(doc.firmware_cseg_route("Main A", 3), Some(None)));
         assert_eq!(
-            doc.firmware_cseg_route("Main C", 3).flatten().unwrap().destination,
+            doc.firmware_cseg_route("Main C", 3)
+                .flatten()
+                .unwrap()
+                .destination,
             10
         );
     }
@@ -2266,12 +2620,23 @@ mod playback_tests {
         fill.duration = Duration::from_secs(8);
         let mut main = test_plan();
         main.section = Some(1);
-        main.tempo = Some(TempoClock { fill: false, ..clock });
+        main.tempo = Some(TempoClock {
+            fill: false,
+            ..clock
+        });
         main.duration = Duration::from_secs(8);
-        transport.queue_switch(vec![
-            Step { plan: fill, looping: false },
-            Step { plan: main, looping: true },
-        ]).unwrap();
+        transport
+            .queue_switch(vec![
+                Step {
+                    plan: fill,
+                    looping: false,
+                },
+                Step {
+                    plan: main,
+                    looping: true,
+                },
+            ])
+            .unwrap();
         let pending = transport.switch.lock().unwrap();
         let pending = pending.as_ref().unwrap();
         assert_eq!(pending.steps.len(), 1);
@@ -2306,11 +2671,17 @@ mod playback_tests {
         ];
         let mut fill = test_plan();
         fill.section = Some(2);
-        fill.tempo = Some(TempoClock { rhythm_sources: Some(channel_bit(3)), ..clock(250_000) });
+        fill.tempo = Some(TempoClock {
+            rhythm_sources: Some(channel_bit(3)),
+            ..clock(250_000)
+        });
         fill.duration = Duration::from_millis(600);
         fill.packets = vec![
             packet(0, 0xb2, 0),
-            Packet { at: Duration::from_millis(10), data: vec![0xc2, 23] },
+            Packet {
+                at: Duration::from_millis(10),
+                data: vec![0xc2, 23],
+            },
             packet(20, 0xb2, 64),
             packet(30, 0xb2, 84),
             packet(40, 0xb0, 7),
@@ -2322,10 +2693,18 @@ mod playback_tests {
         splice_fill(
             &mut source,
             fill,
-            FillHandoff { phase: 1.0, end: Duration::from_secs(1), rhythm_only: true },
+            FillHandoff {
+                phase: 1.0,
+                end: Duration::from_secs(1),
+                rhythm_only: true,
+            },
             Duration::from_millis(500),
         );
-        let events: Vec<_> = source.packets.iter().map(|p| (p.at.as_millis(), p.data[1])).collect();
+        let events: Vec<_> = source
+            .packets
+            .iter()
+            .map(|p| (p.at.as_millis(), p.data[1]))
+            .collect();
         assert_eq!(events, [(500, 0), (500, 23), (600, 40), (800, 60)]);
         assert_eq!(source.section, Some(1));
         assert_eq!(source.rhythm_sources(), channel_bit(3));
@@ -2342,7 +2721,10 @@ mod playback_tests {
             held_seek_sources: 1,
             rhythm_sources: None,
         });
-        let packet = |ms, data| Packet { at: Duration::from_millis(ms), data };
+        let packet = |ms, data| Packet {
+            at: Duration::from_millis(ms),
+            data,
+        };
         plan.packets = vec![
             packet(0, vec![0x90, 60, 100]),
             packet(0, vec![0x90, 62, 80]),
@@ -2358,10 +2740,17 @@ mod playback_tests {
             packet(3, vec![0x90, 65, 100]),
         ];
         let cut = Duration::from_millis(3);
-        assert_eq!(seek_packets(&plan, cut, false), [
-            &[0xb0, 11, 101][..], &[0xb0, 7, 99], &[0xb0, 0, 8], &[0xc0, 23],
-            &[0xe0, 12, 65], &[0x90, 62, 80],
-        ]);
+        assert_eq!(
+            seek_packets(&plan, cut, false),
+            [
+                &[0xb0, 11, 101][..],
+                &[0xb0, 7, 99],
+                &[0xb0, 0, 8],
+                &[0xc0, 23],
+                &[0xe0, 12, 65],
+                &[0x90, 62, 80],
+            ]
+        );
         assert!(seek_packets(&plan, cut, true).is_empty());
     }
 
@@ -2393,13 +2782,21 @@ mod playback_tests {
         }
         let path = std::env::var_os(env).unwrap();
         let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let cases: Vec<_> = cases.into_iter().filter(|case| case.running != Some(false)).collect();
+        let cases: Vec<_> = cases
+            .into_iter()
+            .filter(|case| case.running != Some(false))
+            .collect();
         assert_eq!(cases.len(), expected_cases);
         let mut doc = super::plan_from_tests::fixture_doc();
         let mut route = doc.routes.remove(0);
         doc.style.chunks.retain(|chunk| chunk.tag != *b"CASM");
         let mut doc = Document::from_style(doc.style).unwrap();
-        let section = doc.sections.iter().find(|section| section.label == "Main A").unwrap().id;
+        let section = doc
+            .sections
+            .iter()
+            .find(|section| section.label == "Main A")
+            .unwrap()
+            .id;
         route.sections = vec!["Main A".into()];
         doc.routes.push(route);
         let name = |quality| match quality {
@@ -2427,7 +2824,9 @@ mod playback_tests {
                 initial: Some(chord([0, 34, 0, 34])),
                 current: Some(chord(case.old)),
                 mapper: Some(Arc::new(move |section, source, pitch, chord, in_window| {
-                    crate::live_preview::follow_routed_pitch(&rules, section, source, pitch, chord, in_window)
+                    crate::live_preview::follow_routed_pitch(
+                        &rules, section, source, pitch, chord, in_window,
+                    )
                 })),
                 ..ChordState::default()
             });
@@ -2455,11 +2854,18 @@ mod playback_tests {
             if case.release.is_some() {
                 live.emit(&[0x80 | (source - 1), 60, 0], at).unwrap();
             }
-            let actual: Vec<_> = sent.iter().map(|&[status, first, second]| {
-                // Compare the equivalent MIDI note-off encodings on the destination channel.
-                let kind = if status & 0xf0 == 0x80 { 0x90 } else { status & 0xf0 };
-                [kind | (destination - 1), first, second]
-            }).collect();
+            let actual: Vec<_> = sent
+                .iter()
+                .map(|&[status, first, second]| {
+                    // Compare the equivalent MIDI note-off encodings on the destination channel.
+                    let kind = if status & 0xf0 == 0x80 {
+                        0x90
+                    } else {
+                        status & 0xf0
+                    };
+                    [kind | (destination - 1), first, second]
+                })
+                .collect();
             let mut expected = case.startup;
             expected.extend(case.messages);
             match (case.variant.as_str(), case.rtr[1], case.release) {
@@ -2475,8 +2881,11 @@ mod playback_tests {
                 (_, _, Some(release)) => expected.extend(release),
                 _ => {}
             }
-            assert_eq!(actual, expected, "destination {destination}, RTR {:?}, {}, notes {:?}, chord {:?} -> {:?}",
-                case.rtr, case.variant, case.pitches, case.old, case.target);
+            assert_eq!(
+                actual, expected,
+                "destination {destination}, RTR {:?}, {}, notes {:?}, chord {:?} -> {:?}",
+                case.rtr, case.variant, case.pitches, case.old, case.target
+            );
         }
     }
 
@@ -2540,11 +2949,19 @@ mod playback_tests {
         let mut route = doc.routes.remove(0);
         doc.style.chunks.retain(|chunk| chunk.tag != *b"CASM");
         let mut doc = Document::from_style(doc.style).unwrap();
-        let section = doc.sections.iter().find(|section| section.label == "Main A").unwrap().id;
+        let section = doc
+            .sections
+            .iter()
+            .find(|section| section.label == "Main A")
+            .unwrap()
+            .id;
         route.sections = vec!["Main A".into()];
         doc.routes.push(route);
         let chord = |root, quality: &str| LiveChord {
-            root, quality: quality.into(), bass: None, bass_quality: None,
+            root,
+            quality: quality.into(),
+            bass: None,
+            bass_quality: None,
         };
         for case in cases {
             let route = &mut doc.routes[0];
@@ -2557,7 +2974,9 @@ mod playback_tests {
                 initial: Some(chord(0, "Genos:34")),
                 current: Some(chord(case.old, "Major")),
                 mapper: Some(Arc::new(move |section, source, pitch, chord, in_window| {
-                    crate::live_preview::follow_routed_pitch(&rules, section, source, pitch, chord, in_window)
+                    crate::live_preview::follow_routed_pitch(
+                        &rules, section, source, pitch, chord, in_window,
+                    )
                 })),
                 ..ChordState::default()
             });
@@ -2574,7 +2993,11 @@ mod playback_tests {
                 notes: std::array::from_fn(|_| Vec::new()),
                 section: Some(section),
                 fill_section: None,
-                clock: Some((at, 0.0, plan(&doc, section, &[source]).unwrap().tempo.unwrap())),
+                clock: Some((
+                    at,
+                    0.0,
+                    plan(&doc, section, &[source]).unwrap().tempo.unwrap(),
+                )),
                 routes: ChannelRoutes::default(),
             };
             let mut firmware = [0usize; 128];
@@ -2583,8 +3006,12 @@ mod playback_tests {
             for ((kind, first, velocity), expected) in case.steps.into_iter().zip(case.events) {
                 let context = format!("{}, RTR {}, {kind} {first}", case.variant, case.rtr);
                 match kind.as_str() {
-                    "on" => live.emit(&[0x90 | (source - 1), first, velocity], at).unwrap(),
-                    "off" => live.emit(&[0x80 | (source - 1), first, velocity], at).unwrap(),
+                    "on" => live
+                        .emit(&[0x90 | (source - 1), first, velocity], at)
+                        .unwrap(),
+                    "off" => live
+                        .emit(&[0x80 | (source - 1), first, velocity], at)
+                        .unwrap(),
                     "change" => {
                         state.lock().unwrap().pending = Some((Some(chord(first, "Major")), at));
                         live.apply_chord().unwrap();
@@ -2676,8 +3103,13 @@ mod playback_tests {
         });
         let mut sent = Vec::new();
         let failure = run_plan(
-            source, &[1, 9], &Mutex::new(vec![1, 9]), false, &switch,
-            &chord, &(Mutex::new(false), Condvar::new()),
+            source,
+            &[1, 9],
+            &Mutex::new(vec![1, 9]),
+            false,
+            &switch,
+            &chord,
+            &(Mutex::new(false), Condvar::new()),
             &status,
             |data| {
                 sent.push(data.to_vec());
@@ -2685,10 +3117,20 @@ mod playback_tests {
                     let start = status.lock().unwrap().started.unwrap();
                     *switch.lock().unwrap() = Some(Switch {
                         at: start + Duration::from_millis(20),
-                        steps: vec![Step { plan: fill.clone(), looping: false },
-                                    Step { plan: back.clone(), looping: false }],
+                        steps: vec![
+                            Step {
+                                plan: fill.clone(),
+                                looping: false,
+                            },
+                            Step {
+                                plan: back.clone(),
+                                looping: false,
+                            },
+                        ],
                         fill: Some(FillHandoff {
-                            phase: 1.0, end: Duration::from_millis(80), rhythm_only: true,
+                            phase: 1.0,
+                            end: Duration::from_millis(80),
+                            rhythm_only: true,
                         }),
                         source_start: start,
                     });
@@ -2697,11 +3139,20 @@ mod playback_tests {
             },
         );
         assert_eq!(failure, None);
-        assert_eq!(&sent[..9], &[
-            vec![0x90, 60, 100], vec![0xb8, 64, 0], vec![0xb8, 123, 0], vec![0x98, 42, 100],
-            vec![0x88, 42, 100],
-            vec![0x80, 60, 100], vec![0xb0, 64, 0], vec![0xb0, 123, 0], vec![0xb8, 64, 0],
-        ]);
+        assert_eq!(
+            &sent[..9],
+            &[
+                vec![0x90, 60, 100],
+                vec![0xb8, 64, 0],
+                vec![0xb8, 123, 0],
+                vec![0x98, 42, 100],
+                vec![0x88, 42, 100],
+                vec![0x80, 60, 100],
+                vec![0xb0, 64, 0],
+                vec![0xb0, 123, 0],
+                vec![0xb8, 64, 0],
+            ]
+        );
         assert_eq!(sent[10], [0x90, 62, 100]);
     }
 
@@ -2721,17 +3172,31 @@ mod playback_tests {
         fill.duration = Duration::from_millis(20);
         fill.bars = vec![Duration::from_millis(10), fill.duration];
         fill.packets = vec![
-            Packet { at: Duration::ZERO, data: vec![0xb0, 64, 127] },
-            Packet { at: Duration::from_millis(15), data: vec![0x90, 64, 100] },
+            Packet {
+                at: Duration::ZERO,
+                data: vec![0xb0, 64, 127],
+            },
+            Packet {
+                at: Duration::from_millis(15),
+                data: vec![0x90, 64, 100],
+            },
         ];
         let mut back = test_plan();
-        back.packets = vec![Packet { at: Duration::ZERO, data: vec![0x90, 62, 100] }];
+        back.packets = vec![Packet {
+            at: Duration::ZERO,
+            data: vec![0x90, 62, 100],
+        }];
         let switch = Mutex::new(None);
         let status = Mutex::new(Status::default());
         let mut sent = Vec::new();
         let failure = run_plan(
-            source, &[1], &Mutex::new(vec![1]), false, &switch,
-            &Mutex::new(ChordState::default()), &(Mutex::new(false), Condvar::new()),
+            source,
+            &[1],
+            &Mutex::new(vec![1]),
+            false,
+            &switch,
+            &Mutex::new(ChordState::default()),
+            &(Mutex::new(false), Condvar::new()),
             &status,
             |data| {
                 sent.push(data.to_vec());
@@ -2739,8 +3204,16 @@ mod playback_tests {
                     let start = status.lock().unwrap().started.unwrap();
                     *switch.lock().unwrap() = Some(Switch {
                         at: start + Duration::from_millis(20),
-                        steps: vec![Step { plan: fill.clone(), looping: false },
-                                    Step { plan: back.clone(), looping: false }],
+                        steps: vec![
+                            Step {
+                                plan: fill.clone(),
+                                looping: false,
+                            },
+                            Step {
+                                plan: back.clone(),
+                                looping: false,
+                            },
+                        ],
                         fill: None,
                         source_start: start,
                     });
@@ -2749,10 +3222,14 @@ mod playback_tests {
             },
         );
         assert_eq!(failure, None);
-        let sustain_on = sent.iter().position(|data| data == &[0xb0, 64, 127]).unwrap();
-        assert_eq!(&sent[sustain_on + 1..sustain_on + 4], &[
-            vec![0xb0, 64, 0], vec![0xb0, 123, 0], vec![0x90, 62, 100],
-        ]);
+        let sustain_on = sent
+            .iter()
+            .position(|data| data == &[0xb0, 64, 127])
+            .unwrap();
+        assert_eq!(
+            &sent[sustain_on + 1..sustain_on + 4],
+            &[vec![0xb0, 64, 0], vec![0xb0, 123, 0], vec![0x90, 62, 100],]
+        );
         assert!(!sent.contains(&vec![0x90, 64, 100]));
     }
 
@@ -2852,7 +3329,11 @@ mod playback_tests {
             let elapsed = Duration::from_millis(case.elapsed_steps.iter().sum());
             let scheduled = Duration::from_millis(case.scheduled_steps.iter().sum());
             let in_window = clock.in_root_window(elapsed, 0.0, 0.0);
-            let pitch = if in_window && matches!(case.rtr, 2 | 4) { 74 } else { 66 };
+            let pitch = if in_window && matches!(case.rtr, 2 | 4) {
+                74
+            } else {
+                66
+            };
             assert_eq!(pitch, case.pitch, "RTR {}, {elapsed:?}", case.rtr);
             if in_window && !clock.in_root_window(scheduled, 0.0, 0.0) {
                 schedules_crossing_boundary += 1;
@@ -2878,8 +3359,15 @@ mod playback_tests {
                     let changed = base + clock.quarters_at(start);
                     let deadline = start + Duration::from_nanos(tempo * 500);
                     assert!(clock.in_root_window(start, base, changed));
-                    assert!(clock.in_root_window(deadline - Duration::from_nanos(1), base, changed));
-                    assert!(!clock.in_root_window(deadline, base, changed), "{tempo} {offset}");
+                    assert!(clock.in_root_window(
+                        deadline - Duration::from_nanos(1),
+                        base,
+                        changed
+                    ));
+                    assert!(
+                        !clock.in_root_window(deadline, base, changed),
+                        "{tempo} {offset}"
+                    );
                 }
             }
         }
@@ -2897,14 +3385,12 @@ mod playback_tests {
         let state = Mutex::new(ChordState {
             current: Some(chord(0)),
             pending: Some((Some(chord(2)), at)),
-            mapper: Some(Arc::new(|_, _, pitch, chord, to_root| {
-                LivePitch {
-                    pitch: Some(pitch + if to_root { 10 } else { chord.root }),
-                    portamento: true,
-                    stop_on_change: false,
-                    bass_region: false,
-                    held_mask_portamento: false,
-                }
+            mapper: Some(Arc::new(|_, _, pitch, chord, to_root| LivePitch {
+                pitch: Some(pitch + if to_root { 10 } else { chord.root }),
+                portamento: true,
+                stop_on_change: false,
+                bass_region: false,
+                held_mask_portamento: false,
             })),
             ..ChordState::default()
         });
@@ -2920,16 +3406,20 @@ mod playback_tests {
             notes: std::array::from_fn(|_| Vec::new()),
             section: Some(1),
             fill_section: None,
-            clock: Some((at, 0.0, TempoClock {
-                segments: vec![
-                    (Duration::ZERO, 0.0, 500_000),
-                    (Duration::from_millis(125), 0.25, 250_000),
-                ],
-                meter: None,
-                fill: false,
-                held_seek_sources: 0,
-                rhythm_sources: None,
-            })),
+            clock: Some((
+                at,
+                0.0,
+                TempoClock {
+                    segments: vec![
+                        (Duration::ZERO, 0.0, 500_000),
+                        (Duration::from_millis(125), 0.25, 250_000),
+                    ],
+                    meter: None,
+                    fill: false,
+                    held_seek_sources: 0,
+                    rhythm_sources: None,
+                },
+            )),
             routes: ChannelRoutes::default(),
         };
         live.emit(&[0x90, 64, 90], at).unwrap();
@@ -3031,7 +3521,9 @@ mod playback_tests {
                 bass: None,
                 bass_quality: None,
             }),
-            mapper: Some(Arc::new(|_, _, pitch, chord, _| Some(pitch + chord.root).into())),
+            mapper: Some(Arc::new(|_, _, pitch, chord, _| {
+                Some(pitch + chord.root).into()
+            })),
             ..ChordState::default()
         });
         let mut sent = Vec::new();
@@ -3095,7 +3587,15 @@ mod playback_tests {
                 Instant::now() + Duration::from_millis(20),
             )),
             mapper: Some(Arc::new(|_, _, pitch, chord, _| {
-                Some(pitch + if chord.quality == "Genos:34" { 1 } else { chord.root }).into()
+                Some(
+                    pitch
+                        + if chord.quality == "Genos:34" {
+                            1
+                        } else {
+                            chord.root
+                        },
+                )
+                .into()
             })),
             ..ChordState::default()
         });
@@ -3196,12 +3696,15 @@ mod playback_tests {
         update_xf_chord(&xf, &[0xf0, 0x43, 0x7e, 0x02, 0x31, 0, 0x32, 8, 0xf7]);
         let st = xf.lock().unwrap();
         assert_eq!(st.seq, 2);
-        assert_eq!(st.chord, Some(LiveChord {
-            root: 0,
-            quality: "Major".into(),
-            bass: Some(2),
-            bass_quality: Some("Minor".into()),
-        }));
+        assert_eq!(
+            st.chord,
+            Some(LiveChord {
+                root: 0,
+                quality: "Major".into(),
+                bass: Some(2),
+                bass_quality: Some("Minor".into()),
+            })
+        );
     }
     #[test]
     fn cancelled_or_failed_startup_never_sends_notes_and_still_attempts_release() {
@@ -3328,10 +3831,22 @@ mod channel_route_tests {
         let plan = Plan {
             setup: vec![],
             packets: vec![
-                Packet { at: ms(0), data: vec![0x94, 36, 90] },
-                Packet { at: ms(2), data: vec![0x95, 36, 90] },
-                Packet { at: ms(4), data: vec![0x84, 36, 0] },
-                Packet { at: ms(6), data: vec![0x85, 36, 0] },
+                Packet {
+                    at: ms(0),
+                    data: vec![0x94, 36, 90],
+                },
+                Packet {
+                    at: ms(2),
+                    data: vec![0x95, 36, 90],
+                },
+                Packet {
+                    at: ms(4),
+                    data: vec![0x84, 36, 0],
+                },
+                Packet {
+                    at: ms(6),
+                    data: vec![0x85, 36, 0],
+                },
             ],
             duration: ms(10),
             bars: vec![ms(10)],
@@ -3365,8 +3880,14 @@ mod channel_route_tests {
         let plan = Plan {
             setup: vec![vec![0xc5, 4]],
             packets: vec![
-                Packet { at: Duration::ZERO, data: vec![0x95, 36, 90] },
-                Packet { at: Duration::from_millis(5), data: vec![0x85, 36, 0] },
+                Packet {
+                    at: Duration::ZERO,
+                    data: vec![0x95, 36, 90],
+                },
+                Packet {
+                    at: Duration::from_millis(5),
+                    data: vec![0x85, 36, 0],
+                },
             ],
             duration: Duration::from_millis(10),
             bars: vec![Duration::from_millis(10)],
@@ -3391,7 +3912,10 @@ mod channel_route_tests {
             },
         );
         assert_eq!(failure, None);
-        assert_eq!(&sent[..3], &[vec![0xcd, 4], vec![0x9d, 36, 90], vec![0x8d, 36, 0]]);
+        assert_eq!(
+            &sent[..3],
+            &[vec![0xcd, 4], vec![0x9d, 36, 90], vec![0x8d, 36, 0]]
+        );
         // The final release covers the destination part; channel 6 belongs to another part
         // of the instrument and is left alone.
         assert!(sent.contains(&vec![0xbd, 123, 0]));

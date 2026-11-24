@@ -112,12 +112,17 @@ fn rhythm_note_on_matches_firmware_replay() {
                 0 => "Major",
                 34 => "Genos:34",
                 _ => panic!("unexpected chord type {quality}"),
-            }.into(),
+            }
+            .into(),
             bass: None,
             bass_quality: None,
         };
         let actual = live_preview::follow_pitch(&doc, section, 1, pitch, &chord);
-        assert_eq!(actual, expected, "rhythm route {:?}, chord {chord:?}, pitch {pitch}", doc.routes[0].bytes);
+        assert_eq!(
+            actual, expected,
+            "rhythm route {:?}, chord {chord:?}, pitch {pitch}",
+            doc.routes[0].bytes
+        );
     }
 }
 
@@ -136,7 +141,10 @@ fn guitar_region_masks_match_firmware_replay() {
     };
     assert_eq!(csv.lines().count(), 12_288);
     for line in csv.lines() {
-        let values: Vec<u16> = line.split(',').map(|value| value.parse().unwrap()).collect();
+        let values: Vec<u16> = line
+            .split(',')
+            .map(|value| value.parse().unwrap())
+            .collect();
         let [ntt, flag, roots, types, pitch, expected, _] = values[..] else {
             panic!("invalid Guitar mask row: {line}");
         };
@@ -310,11 +318,23 @@ fn mixed_bass_regions_apply_root_masks_to_their_own_chord_root() {
         bass: Some(2),
         bass_quality: None,
     };
-    assert_eq!(live_preview::follow_pitch(&doc, section, source, 60, &chord), None);
-    assert_eq!(live_preview::follow_pitch(&doc, section, source, 64, &chord), Some(66));
+    assert_eq!(
+        live_preview::follow_pitch(&doc, section, source, 60, &chord),
+        None
+    );
+    assert_eq!(
+        live_preview::follow_pitch(&doc, section, source, 64, &chord),
+        Some(66)
+    );
 
     let mut cfg = config(&doc);
-    cfg.chords = vec![Chord { root: 0, quality: "Major".into(), bars: 1, bass: Some(2), bass_quality: None }];
+    cfg.chords = vec![Chord {
+        root: 0,
+        quality: "Major".into(),
+        bars: 1,
+        bass: Some(2),
+        bass_quality: None,
+    }];
     let result = live_preview::compile(&doc, &cfg).unwrap();
     assert_eq!(result.report.note_ons, 1);
     assert_eq!(result.report.suppressed_notes, 1);
@@ -346,7 +366,10 @@ fn source_zone_boundaries_match_firmware_replay() {
     bytes[34..40].copy_from_slice(&[0, 0, 0, 0, 127, 1]);
     assert_eq!(csv.lines().count(), 1_280);
     for line in csv.lines() {
-        let values: Vec<u8> = line.split(',').map(|value| value.parse().unwrap()).collect();
+        let values: Vec<u8> = line
+            .split(',')
+            .map(|value| value.parse().unwrap())
+            .collect();
         let [low, high, note, expected] = values[..] else {
             panic!("invalid region replay row: {line}");
         };
@@ -371,7 +394,10 @@ fn inverted_output_limits_match_firmware_replay() {
     };
     assert_eq!(csv.lines().count(), 5_120);
     for line in csv.lines() {
-        let values: Vec<u8> = line.split(',').map(|value| value.parse().unwrap()).collect();
+        let values: Vec<u8> = line
+            .split(',')
+            .map(|value| value.parse().unwrap())
+            .collect();
         let [ntr, low, high, pitch, primary] = values[..] else {
             panic!("invalid inverted limits row: {line}");
         };
@@ -397,14 +423,18 @@ fn high_key_bytes_match_firmware_replay() {
     };
     assert_eq!(csv.lines().count(), 135_168);
     for line in csv.lines() {
-        let values: Vec<u8> = line.split(',').map(|value| value.parse().unwrap()).collect();
+        let values: Vec<u8> = line
+            .split(',')
+            .map(|value| value.parse().unwrap())
+            .collect();
         let [ntr, ntt, flag, key, ordinary, target, pitch, rtr, expected] = values[..] else {
             panic!("invalid High Key replay row: {line}");
         };
         chord.root = ordinary;
         chord.bass = (flag != 0).then_some(target);
         doc.routes[0].bytes[28..34].copy_from_slice(&[ntr, ntt | flag << 7, key, 0, 127, rtr]);
-        let actual = live_preview::follow_pitch_in_window(&doc, section, 1, pitch, &chord, rtr != 1);
+        let actual =
+            live_preview::follow_pitch_in_window(&doc, section, 1, pitch, &chord, rtr != 1);
         assert_eq!(actual, (expected < 128).then_some(expected), "{line}");
     }
 }
@@ -435,24 +465,36 @@ fn progression_retrigger_phase_matches_firmware_replay() {
         doc.style.tracks[0].retain(|event| !event.is_on());
         let template = doc.notes[0].clone();
         doc.notes = [0, case.change, case.change + case.distance]
-            .into_iter().enumerate().map(|(index, start)| {
+            .into_iter()
+            .enumerate()
+            .map(|(index, start)| {
                 let mut note = template.clone();
                 note.id = index as u64 + 1;
                 note.start = start;
                 note.duration = 1;
                 note.pitch = 64;
                 note
-            }).collect();
+            })
+            .collect();
         doc.routes[0].bytes[28..34].copy_from_slice(&[0, 0, 11, 0, 127, 2]);
         let mut config = config(&doc);
         config.chords[1].root = 2;
         config.chords[1].quality = "Major".into();
         let compiled = live_preview::compile(&doc, &config).unwrap();
-        let pitches: Vec<_> = compiled.plan.packets.iter()
+        let pitches: Vec<_> = compiled
+            .plan
+            .packets
+            .iter()
             .filter(|packet| packet.data[0] & 0xf0 == 0x90 && packet.data[2] != 0)
             .map(|packet| packet.data[1])
             .collect();
-        assert_eq!(pitches, [64, 74, case.pitch], "{} / {}", case.division, case.distance);
+        assert_eq!(
+            pitches,
+            [64, 74, case.pitch],
+            "{} / {}",
+            case.division,
+            case.distance
+        );
     }
 }
 
@@ -471,7 +513,10 @@ fn source_chord_type_bytes_match_firmware_replay() {
     };
     assert_eq!(csv.lines().count(), 31_152);
     for line in csv.lines() {
-        let values: Vec<u8> = line.split(',').map(|value| value.parse().unwrap()).collect();
+        let values: Vec<u8> = line
+            .split(',')
+            .map(|value| value.parse().unwrap())
+            .collect();
         let [source_type, ntr, ntt, flag, note, expected] = values[..] else {
             panic!("invalid source chord replay row: {line}");
         };
@@ -491,15 +536,26 @@ fn target_chord_masks_match_firmware_replay() {
     let section = doc.sections[0].id;
     assert_eq!(csv.lines().count(), 9_440);
     for line in csv.lines() {
-        let values: Vec<u8> = line.split(',').map(|value| value.parse().unwrap()).collect();
+        let values: Vec<u8> = line
+            .split(',')
+            .map(|value| value.parse().unwrap())
+            .collect();
         let [target, flag, ntt, slot, expected] = values[..] else {
             panic!("invalid target mask row: {line}");
         };
         let chord = genos_core::midi::LiveChord {
             root: 0,
-            quality: if flag == 0 { format!("Genos:{target}") } else { "Major".into() },
+            quality: if flag == 0 {
+                format!("Genos:{target}")
+            } else {
+                "Major".into()
+            },
             bass: Some(2),
-            bass_quality: Some(if flag == 1 { format!("Genos:{target}") } else { "Minor".into() }),
+            bass_quality: Some(if flag == 1 {
+                format!("Genos:{target}")
+            } else {
+                "Minor".into()
+            }),
         };
         let bytes = &mut doc.routes[0].bytes;
         bytes[11..13].copy_from_slice(&[0, 5]);
@@ -514,7 +570,13 @@ fn target_chord_masks_match_firmware_replay() {
     config.chords[0].quality = "Genos:58".into();
     config.chords[0].bass = Some(2);
     config.chords[0].bass_quality = Some("Genos:42".into());
-    assert!(live_preview::compile(&doc, &config).unwrap().report.note_ons > 0);
+    assert!(
+        live_preview::compile(&doc, &config)
+            .unwrap()
+            .report
+            .note_ons
+            > 0
+    );
 }
 
 #[test]
@@ -561,27 +623,46 @@ fn compiled_sff2_preview_uses_the_firmware_cseg_winner() {
     let track = doc.style.track_chunks[0];
     doc.style.chunks[track].data = genos_core::smf::encode_track(&doc.style.tracks[0]).unwrap();
     let cseg = |routes: &[(u8, usize)], legacy: bool| {
-        let mut records = vec![Chunk { tag: *b"Sdec", data: b"Main A".to_vec() }];
+        let mut records = vec![Chunk {
+            tag: *b"Sdec",
+            data: b"Main A".to_vec(),
+        }];
         if legacy {
             let mut ctab = vec![0; 26];
             ctab[9] = 15;
-            records.push(Chunk { tag: *b"Ctab", data: ctab });
-            records.push(Chunk { tag: *b"Cntt", data: vec![0, 0x8a] });
+            records.push(Chunk {
+                tag: *b"Ctab",
+                data: ctab,
+            });
+            records.push(Chunk {
+                tag: *b"Cntt",
+                data: vec![0, 0x8a],
+            });
         }
         for &(destination, size) in routes {
             let mut data = doc.routes[0].bytes.clone();
             data[9] = destination - 1;
             data.resize(size, 0x55);
-            records.push(Chunk { tag: *b"Ctb2", data });
+            records.push(Chunk {
+                tag: *b"Ctb2",
+                data,
+            });
         }
-        Chunk { tag: *b"CSEG", data: pack(&records).unwrap() }
+        Chunk {
+            tag: *b"CSEG",
+            data: pack(&records).unwrap(),
+        }
     };
     let casm = pack(&[
         cseg(&[], true),
         cseg(&[(16, 40), (14, 57)], true),
         cseg(&[(15, 47)], false),
-    ]).unwrap();
-    doc.style.chunks.push(Chunk { tag: *b"CASM", data: casm });
+    ])
+    .unwrap();
+    doc.style.chunks.push(Chunk {
+        tag: *b"CASM",
+        data: casm,
+    });
     let doc = Document::from_style(doc.style).unwrap();
     assert_eq!(doc.routes.len(), 3);
     let reparsed = Document::parse(&doc.style.bytes().unwrap()).unwrap();
@@ -590,7 +671,10 @@ fn compiled_sff2_preview_uses_the_firmware_cseg_winner() {
         doc.style.chunks.last().unwrap().data
     );
     let compiled = live_preview::compile(&reparsed, &config(&reparsed)).unwrap();
-    let note_statuses: Vec<_> = compiled.plan.packets.iter()
+    let note_statuses: Vec<_> = compiled
+        .plan
+        .packets
+        .iter()
         .filter(|packet| packet.data[0] & 0xf0 == 0x90)
         .map(|packet| packet.data[0])
         .collect();
@@ -609,19 +693,39 @@ fn sff1_preview_converts_legacy_routes_and_preserves_the_file() {
     ctab[9] = 13;
     ctab.extend([1, 4, 11, 0, 127, 3]);
     let group = pack(&[
-        Chunk { tag: *b"Sdec", data: b"Main A".to_vec() },
-        Chunk { tag: *b"Ctab", data: ctab },
-        Chunk { tag: *b"Cntt", data: vec![0, 0] },
-        Chunk { tag: *b"Ctb2", data: doc.routes[0].bytes.clone() },
-    ]).unwrap();
+        Chunk {
+            tag: *b"Sdec",
+            data: b"Main A".to_vec(),
+        },
+        Chunk {
+            tag: *b"Ctab",
+            data: ctab,
+        },
+        Chunk {
+            tag: *b"Cntt",
+            data: vec![0, 0],
+        },
+        Chunk {
+            tag: *b"Ctb2",
+            data: doc.routes[0].bytes.clone(),
+        },
+    ])
+    .unwrap();
     doc.style.chunks.push(Chunk {
         tag: *b"CASM",
-        data: pack(&[Chunk { tag: *b"CSEG", data: group }]).unwrap(),
+        data: pack(&[Chunk {
+            tag: *b"CSEG",
+            data: group,
+        }])
+        .unwrap(),
     });
     let bytes = doc.style.bytes().unwrap();
     let doc = Document::parse(&bytes).unwrap();
     let compiled = live_preview::compile(&doc, &config(&doc)).unwrap();
-    let notes: Vec<_> = compiled.plan.packets.iter()
+    let notes: Vec<_> = compiled
+        .plan
+        .packets
+        .iter()
         .filter(|packet| packet.data[0] & 0xf0 == 0x90)
         .map(|packet| (packet.data[0], packet.data[1]))
         .collect();
@@ -823,7 +927,12 @@ fn transposed_bypass_accepts_valid_chord_bytes_and_retains_caps_limits_and_valid
 #[test]
 fn routed_bypass_applies_same_root_high_key_and_ordered_limits() {
     let mut doc = fixture();
-    let section = doc.sections.iter().find(|s| s.label == "Main A").unwrap().id;
+    let section = doc
+        .sections
+        .iter()
+        .find(|s| s.label == "Main A")
+        .unwrap()
+        .id;
     let source = doc.routes[0].source;
     let chord = genos_core::midi::LiveChord {
         root: 1,
@@ -843,11 +952,20 @@ fn routed_bypass_applies_same_root_high_key_and_ordered_limits() {
         Some(60)
     );
     doc.routes[0].bytes[31..33].copy_from_slice(&[0, 0]);
-    assert_eq!(live_preview::follow_pitch(&doc, section, source, 10, &chord), None);
+    assert_eq!(
+        live_preview::follow_pitch(&doc, section, source, 10, &chord),
+        None
+    );
     doc.routes[0].bytes[31..33].copy_from_slice(&[128 | 61, 65]);
-    assert_eq!(live_preview::follow_pitch(&doc, section, source, 60, &chord), None);
+    assert_eq!(
+        live_preview::follow_pitch(&doc, section, source, 60, &chord),
+        None
+    );
     doc.routes[0].bytes[31..33].copy_from_slice(&[61, 128 | 65]);
-    assert_eq!(live_preview::follow_pitch(&doc, section, source, 60, &chord), None);
+    assert_eq!(
+        live_preview::follow_pitch(&doc, section, source, 60, &chord),
+        None
+    );
     assert_eq!(
         live_preview::follow_pitch(&doc, section, source, 64, &chord),
         Some(64)

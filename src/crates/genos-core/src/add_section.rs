@@ -98,11 +98,15 @@ fn meta_event(kind: u8, text: &[u8], tick: u64, id: u64) -> Result<Event> {
 /// Add `label` to the CASM segment that covers `source_label`, so the new section shares its routes.
 fn share_casm(style: &mut Style, doc: &Document, source_label: &str, label: &str) -> Result<()> {
     if doc.firmware_section_has_indirect_binding(source_label) {
-        return Err(reject("CASM descriptions leave an ambiguous section binding"));
+        return Err(reject(
+            "CASM descriptions leave an ambiguous section binding",
+        ));
     }
     let resolved = doc.firmware_cseg_group(source_label);
     if resolved.is_none() && matches!(doc.firmware_cseg_route(source_label, 1), Some(None)) {
-        return Err(reject("the chosen section has no CASM routes to share; pick another section"));
+        return Err(reject(
+            "the chosen section has no CASM routes to share; pick another section",
+        ));
     }
     for ci in 0..style.chunks.len() {
         if style.chunks[ci].tag != *b"CASM" || resolved.is_some_and(|(chunk, _)| *chunk != ci) {
@@ -113,14 +117,20 @@ fn share_casm(style: &mut Style, doc: &Document, source_label: &str, label: &str
         for group in &mut groups {
             let records_start = start + 8;
             start = records_start + group.data.len();
-            if group.tag != *b"CSEG" || resolved.is_some_and(|(_, range)| range.start != records_start) {
+            if group.tag != *b"CSEG"
+                || resolved.is_some_and(|(_, range)| range.start != records_start)
+            {
                 continue;
             }
             let mut records = smf::chunks(&group.data)?;
             if resolved.is_some() {
-                let last_data = records.iter().rposition(|record| record.tag != *b"Sdec")
+                let last_data = records
+                    .iter()
+                    .rposition(|record| record.tag != *b"Sdec")
                     .ok_or_else(|| reject("the chosen CASM group has no route data"))?;
-                let sdec = records[..last_data].iter_mut().rfind(|record| record.tag == *b"Sdec")
+                let sdec = records[..last_data]
+                    .iter_mut()
+                    .rfind(|record| record.tag == *b"Sdec")
                     .ok_or_else(|| reject("the chosen CASM group has no section description"))?;
                 sdec.data.push(b',');
                 sdec.data.extend_from_slice(label.as_bytes());
@@ -168,9 +178,10 @@ pub(crate) fn apply(style: &mut Style, spec: AddSection) -> Result<PairChanges> 
     if doc.sections.len() == 1 && doc.sections[0].label == "Pattern" {
         return Err(reject("this file has no Yamaha section markers"));
     }
-    if doc.sections.iter().any(|s| norm(&s.label) == norm(&label)
-        || doc.firmware_section_name(&s.label) == Some(label.as_str()))
-    {
+    if doc.sections.iter().any(|s| {
+        norm(&s.label) == norm(&label)
+            || doc.firmware_section_name(&s.label) == Some(label.as_str())
+    }) {
         return Err(reject("the Style already has this section"));
     }
     let source = doc
@@ -240,16 +251,22 @@ pub(crate) fn apply(style: &mut Style, spec: AddSection) -> Result<PairChanges> 
     if doc.firmware_cseg_group(&source.label).is_some() {
         let target = after_insert.firmware_cseg_group(&label);
         if target.is_none() || target != after_insert.firmware_cseg_group(&source.label) {
-            return Err(reject("the new section does not share the chosen CASM routes"));
+            return Err(reject(
+                "the new section does not share the chosen CASM routes",
+            ));
         }
         for old in &doc.sections {
             for channel in 1..=16 {
-                let before = doc.firmware_cseg_route(&old.label, channel)
+                let before = doc
+                    .firmware_cseg_route(&old.label, channel)
                     .map(|route| route.map(|route| &route.bytes));
-                let after = after_insert.firmware_cseg_route(&old.label, channel)
+                let after = after_insert
+                    .firmware_cseg_route(&old.label, channel)
                     .map(|route| route.map(|route| &route.bytes));
                 if before != after {
-                    return Err(reject("adding the section would change an existing CASM binding"));
+                    return Err(reject(
+                        "adding the section would change an existing CASM binding",
+                    ));
                 }
             }
         }
@@ -383,8 +400,10 @@ mod tests {
         for mode in [1, 2] {
             let mut style = Style::parse(&fixture()).unwrap();
             let track = style.track_chunks[0];
-            let format = style.tracks[0].iter_mut()
-                .find(|event| event.meta(6) == Some(b"SFF2")).unwrap();
+            let format = style.tracks[0]
+                .iter_mut()
+                .find(|event| event.meta(6) == Some(b"SFF2"))
+                .unwrap();
             *format.data.last_mut().unwrap() = b'0' + mode;
             style.chunks[track].data = smf::encode_track(&style.tracks[0]).unwrap();
             let make_route = |root| {
@@ -395,11 +414,18 @@ mod tests {
                 if mode == 2 {
                     data[21] = 127;
                 }
-                Chunk { tag: if mode == 1 { *b"Ctab" } else { *b"Ctb2" }, data }
+                Chunk {
+                    tag: if mode == 1 { *b"Ctab" } else { *b"Ctb2" },
+                    data,
+                }
             };
-            let sdec = |data: &[u8]| Chunk { tag: *b"Sdec", data: data.to_vec() };
+            let sdec = |data: &[u8]| Chunk {
+                tag: *b"Sdec",
+                data: data.to_vec(),
+            };
             let group = |records: &[Chunk]| Chunk {
-                tag: *b"CSEG", data: smf::pack(records).unwrap(),
+                tag: *b"CSEG",
+                data: smf::pack(records).unwrap(),
             };
             let donor = group(&[
                 sdec(b"prefix Main A"),
@@ -410,17 +436,30 @@ mod tests {
             ]);
             let shadow = group(&[sdec(b"Main A"), make_route(8)]);
             let groups = [donor, shadow.clone()];
-            let casm = style.chunks.iter().position(|chunk| chunk.tag == *b"CASM").unwrap();
+            let casm = style
+                .chunks
+                .iter()
+                .position(|chunk| chunk.tag == *b"CASM")
+                .unwrap();
             style.chunks[casm].data = smf::pack(&groups).unwrap();
             let before = style.bytes().unwrap();
             let mut s = Session::open(&before, format!("SFF{mode} section sharing")).unwrap();
-            let donor_id = s.document.sections.iter().find(|section| section.label == "Main A").unwrap().id;
+            let donor_id = s
+                .document
+                .sections
+                .iter()
+                .find(|section| section.label == "Main A")
+                .unwrap()
+                .id;
             s.execute(0, add("Ending B", 1, donor_id)).unwrap();
             let edited = s.document.style.bytes().unwrap();
             let parsed = Document::parse(&edited).unwrap();
             let route = parsed.firmware_cseg_route("Ending B", 11).unwrap().unwrap();
             assert_eq!(route.bytes[18], 3);
-            assert_eq!(parsed.firmware_cseg_group("Ending B"), parsed.firmware_cseg_group("Main A"));
+            assert_eq!(
+                parsed.firmware_cseg_group("Ending B"),
+                parsed.firmware_cseg_group("Main A")
+            );
             let saved = smf::chunks(&parsed.style.chunks[casm].data).unwrap();
             let records = smf::chunks(&saved[0].data).unwrap();
             assert_eq!(records[0].data, b"prefix Main A");
@@ -435,7 +474,8 @@ mod tests {
             assert_eq!(s.document.style.bytes().unwrap(), before);
 
             let orphan = group(&[sdec(b"Ending B"), make_route(5)]);
-            style.chunks[casm].data = smf::pack(&[orphan, groups[0].clone(), groups[1].clone()]).unwrap();
+            style.chunks[casm].data =
+                smf::pack(&[orphan, groups[0].clone(), groups[1].clone()]).unwrap();
             let bytes = style.bytes().unwrap();
             let mut s = Session::open(&bytes, "Pre-existing CASM section name".into()).unwrap();
             assert!(s.execute(0, add("Ending B", 1, donor_id)).is_err());

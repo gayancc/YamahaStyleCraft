@@ -16,7 +16,15 @@ import { planClipboardPaste } from "./noteClipboard";
 import { NoteProperties } from "./NoteProperties";
 import { pitchName } from "./notePropertiesDraft";
 export { pitchName } from "./notePropertiesDraft";
-import { drawPianoKeyboard, isBlackKey, pianoKeyAt } from "./pianoKeyboard";
+import {
+  drawPianoKeyboard,
+  isBlackKey,
+  keyVelocity,
+  pianoKeyAt,
+  pitchAtRow,
+  soundingKeys,
+} from "./pianoKeyboard";
+import { PianoKeyFx } from "./PianoKeyFx";
 import {
   clamp,
   meterAt,
@@ -87,15 +95,22 @@ function selectionBounds(
 }
 export function PianoRoll({
   disabled = false,
-  onAudition,
+  onKeyOn,
+  onKeyOff,
   playheadTick = null,
+  soundingTick = null,
   onParkCursor,
   noteColors,
   onNoteColorsChange,
 }: {
   disabled?: boolean;
-  onAudition?: (pitch: number, velocity: number) => void;
+  /** Key pressed (mouse down or glissando entry); the host starts the note. */
+  onKeyOn?: (pitch: number, velocity: number) => void;
+  /** Key released (mouse up, glissando exit, blur, unmount). */
+  onKeyOff?: (pitch: number) => void;
   playheadTick?: number | null;
+  /** Transport position while actually playing; lights sounding keys. */
+  soundingTick?: number | null;
   /** SFM-PR-TOOL-CURSOR: park yellow play cursor at click tick. */
   onParkCursor?: (tick: number) => void;
   /** Per-channel 1–16 display colors (SFM Note colors). */
@@ -170,6 +185,33 @@ export function PianoRoll({
     if (noteProps && !notes.some((n) => n.id === noteProps.id))
       setNoteProps(null);
   }, [view, noteProps]);
+  const [heldKeys, setHeldKeys] = useState<ReadonlySet<number>>(
+    () => new Set(),
+  );
+  const heldKey = useRef<number | null>(null);
+  const keyHandlers = useRef({ onKeyOn, onKeyOff });
+  keyHandlers.current = { onKeyOn, onKeyOff };
+  const pressKey = useCallback((pitch: number, velocity: number) => {
+    heldKey.current = pitch;
+    setHeldKeys(new Set([pitch]));
+    keyHandlers.current.onKeyOn?.(pitch, velocity);
+  }, []);
+  const releaseKey = useCallback(() => {
+    const pitch = heldKey.current;
+    heldKey.current = null;
+    setHeldKeys((m) => (m.size ? new Set() : m));
+    if (pitch !== null) keyHandlers.current.onKeyOff?.(pitch);
+  }, []);
+  useEffect(() => {
+    // Never leave a note sounding if the window loses focus or we unmount.
+    window.addEventListener("blur", releaseKey);
+    window.addEventListener("pointerup", releaseKey);
+    return () => {
+      window.removeEventListener("blur", releaseKey);
+      window.removeEventListener("pointerup", releaseKey);
+      releaseKey();
+    };
+  }, [releaseKey]);
   const cursor = useRef(0);
   const anchor = useRef<Gesture | null>(null);
   const holdRightTimer = useRef<number | null>(null);
@@ -191,6 +233,11 @@ export function PianoRoll({
           n.start < section.end,
       ) ?? [],
     [view, channel, section],
+  );
+  const playingKeys = useMemo(
+    () =>
+      soundingKeys(notes, soundingTick),
+    [notes, soundingTick],
   );
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const gestureSet = useMemo(
@@ -606,7 +653,10 @@ export function PianoRoll({
     const n = hit(x, y);
     if (x < KEY && y >= RULER && e.button === 0) {
       const pitch = pianoKeyAt(x, y - RULER + offset.y, ROW, KEY);
-      if (pitch !== null) onAudition?.(pitch, 90);
+      if (pitch !== null) {
+        pressKey(pitch, keyVelocity(x, KEY));
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
       return;
     }
     if (!section || x < KEY || y < RULER) return;
@@ -748,6 +798,22 @@ export function PianoRoll({
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const move = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (heldKey.current !== null) {
+      // Glissando as in FL: one key sounds at a time and follows the pointer
+      // vertically, also once the pointer has left the keys over the grid.
+      const { x, y } = point(e);
+      const contentY = y - RULER + offset.y;
+      const pitch =
+        x >= 0 && x < KEY
+          ? pianoKeyAt(x, contentY, ROW, KEY)
+          : pitchAtRow(contentY, ROW);
+      if (pitch !== null && pitch !== heldKey.current) {
+        const previous = heldKey.current;
+        keyHandlers.current.onKeyOff?.(previous);
+        pressKey(pitch, keyVelocity(Math.max(0, Math.min(KEY - 1, x)), KEY));
+      }
+      return;
+    }
     const a = anchor.current;
     if (!a) {
       const { x, y } = point(e),
@@ -909,6 +975,7 @@ export function PianoRoll({
     }
   };
   const up = () => {
+    releaseKey();
     const g = anchor.current;
     anchor.current = null;
     setGesture(null);
@@ -1239,6 +1306,26 @@ export function PianoRoll({
             height: 128 * ROW + RULER,
           }}
         >
+          <div
+            style={{
+              position: "sticky",
+              top: 0,
+              left: 0,
+              height: 0,
+              width: 0,
+              zIndex: 2,
+            }}
+          >
+            <PianoKeyFx
+              row={ROW}
+              width={KEY}
+              top={RULER}
+              height={Math.max(0, size.h - RULER)}
+              scrollY={offset.y}
+              held={heldKeys}
+              playing={playingKeys}
+            />
+          </div>
           <canvas
             aria-label="Piano roll. Double-click a note for properties or empty space to add notes. Drag notes to move, drag either edge to resize. Alt bypasses snap; middle drag pans."
             data-hint="Piano roll · double-click a note for properties, empty space to add · drag edges to resize · Alt bypasses snap"
@@ -1256,10 +1343,12 @@ export function PianoRoll({
             onPointerMove={move}
             onPointerUp={up}
             onPointerCancel={() => {
+              releaseKey();
               anchor.current = null;
               setGesture(null);
             }}
             onLostPointerCapture={() => {
+              releaseKey();
               anchor.current = null;
               setGesture(null);
             }}

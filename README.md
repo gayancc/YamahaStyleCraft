@@ -86,13 +86,13 @@ part defaults** to draft a CASM reset for destination parts 9–16.
 
 ### GitHub alpha releases
 
-The app is currently versioned as `0.1.0-alpha.1`. For the next alpha, run `npm run bump -- 0.1.0-alpha.2` from `src` and commit the manifests and lockfiles it updates.
+For a new alpha, run `npm run bump -- 0.1.0-alpha.3` from `src` and commit the manifests and lockfiles it updates.
 
-Tag the commit you want to release with the matching version and push the tag. For the first alpha, use the following commands.
+Tag the commit you want to release with the matching version and push the tag.
 
 ```powershell
-git tag -a v0.1.0-alpha.1 -m "Genos Style Studio 0.1.0-alpha.1"
-git push origin v0.1.0-alpha.1
+git tag -a v0.1.0-alpha.3 -m "Genos Style Studio 0.1.0-alpha.3"
+git push origin v0.1.0-alpha.3
 ```
 
 The [Release workflow](.github/workflows/release.yml) builds the Windows x64 NSIS installer, generates GitHub release notes, and attaches the installer to a draft. Alpha tags are marked as **prereleases**. Review the draft and its installer before publishing it from GitHub Releases.

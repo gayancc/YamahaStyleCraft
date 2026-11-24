@@ -183,12 +183,17 @@ fn sysex_request(
             .into_iter()
             .find(|p| input.port_name(p).is_ok_and(|n| n == in_name))
             .ok_or("input port not found")?;
-        Some(midi::connect_input(input, &in_port, "GenosStyleStudio sysex in", || {
-            let sender = sender.clone();
-            move |timestamp, data: &[u8], _: &mut ()| {
-                let _ = sender.try_send((timestamp, data.to_vec()));
-            }
-        })?)
+        Some(midi::connect_input(
+            input,
+            &in_port,
+            "GenosStyleStudio sysex in",
+            || {
+                let sender = sender.clone();
+                move |timestamp, data: &[u8], _: &mut ()| {
+                    let _ = sender.try_send((timestamp, data.to_vec()));
+                }
+            },
+        )?)
     };
     let output = midir::MidiOutput::new("GenosStyleStudio sysex out")?;
     let out_port = output

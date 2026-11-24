@@ -380,7 +380,16 @@ impl MidiCapture {
         tempo_bpm: f64,
         track: usize,
     ) -> Result<Vec<NoteInput>> {
-        self.to_note_inputs_quantized(section_start, section_end, ppq, tempo_bpm, track, 0, 0, None)
+        self.to_note_inputs_quantized(
+            section_start,
+            section_end,
+            ppq,
+            tempo_bpm,
+            track,
+            0,
+            0,
+            None,
+        )
     }
 
     /// Like `to_note_inputs`, optionally snapping note starts to `quantize_step` ticks (0 = off).
@@ -905,7 +914,7 @@ mod tests {
             (10, &[0x92, 64, 90]),
             (20, &[0xb2, 11, 80]),
             (30, &[0x82, 64, 0]),
-            (40, &[0x90, 60, 90]), // CH1 note never released.
+            (40, &[0x90, 60, 90]),    // CH1 note never released.
             (5000, &[0xb0, 11, 100]), // CH1 controller outside the section.
         ]);
         let notes = cap
@@ -920,8 +929,9 @@ mod tests {
         assert_eq!(events[0].data, [0xb2, 11, 80]);
 
         assert!(cap.to_note_inputs(0, 480, 480, 120.0, 0).is_err());
-        assert!(cap
-            .to_channel_events_quantized(0, 480, 480, 120.0, 0, 0, 0, None)
-            .is_err());
+        assert!(
+            cap.to_channel_events_quantized(0, 480, 480, 120.0, 0, 0, 0, None)
+                .is_err()
+        );
     }
 }

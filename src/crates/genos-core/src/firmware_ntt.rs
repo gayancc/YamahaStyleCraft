@@ -85,8 +85,8 @@ pub(crate) fn configured() -> Result<Option<&'static Tables>> {
             let Some(path) = std::env::var_os("GENOS_NTT_ELF") else {
                 return Ok(None);
             };
-            let elf = std::fs::read(&path)
-                .map_err(|e| format!("Cannot read GENOS_NTT_ELF: {e}"))?;
+            let elf =
+                std::fs::read(&path).map_err(|e| format!("Cannot read GENOS_NTT_ELF: {e}"))?;
             Tables::load(&elf).map(Some)
         })
         .as_ref()
@@ -177,8 +177,7 @@ impl Tables {
         let index = usize::from(destination.checked_sub(8)?);
         let offset = index * 55;
         let record = self.casm_defaults.get(offset..offset + 55)?;
-        (record.starts_with(b"Ctb2\0\0\0/") && record[17] == destination)
-            .then_some(&record[8..])
+        (record.starts_with(b"Ctb2\0\0\0/") && record[17] == destination).then_some(&record[8..])
     }
 
     pub(crate) fn pitch(
