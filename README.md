@@ -84,29 +84,20 @@ the app uses its built-in preview rules. Supply the firmware file locally.
 With firmware configured, the Source Tracks dialog also offers **Use Genos
 part defaults** to draft a CASM reset for destination parts 9–16.
 
-### GitHub Release (NSIS)
+### GitHub alpha releases
 
-CI builds the same NSIS installer on `windows-latest` and attaches it to a GitHub Release.
+The app is currently versioned as `0.1.0-alpha.1`. For the next alpha, run `npm run bump -- 0.1.0-alpha.2` from `src` and commit the manifests and lockfiles it updates.
 
-1. Bump the shared app version (keeps `package.json`, `tauri.conf.json`, both `Cargo.toml` files and `package-lock.json` aligned):
-
-```powershell
-cd src
-npm run bump -- 0.1.1
-```
-
-2. Commit the version bump, then tag and push:
+Tag the commit you want to release with the matching version and push the tag. For the first alpha, use the following commands.
 
 ```powershell
-git tag v0.1.1
-git push origin v0.1.1
+git tag -a v0.1.0-alpha.1 -m "Genos Style Studio 0.1.0-alpha.1"
+git push origin v0.1.0-alpha.1
 ```
 
-Pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which produces `GenosStyleStudio_<version>_x64-setup.exe` and opens a **draft prerelease**. Publish the draft from the GitHub Releases page when you are ready.
+The [Release workflow](.github/workflows/release.yml) builds the Windows x64 NSIS installer, generates GitHub release notes, and attaches the installer to a draft. Alpha tags are marked as **prereleases**. Review the draft and its installer before publishing it from GitHub Releases.
 
-You can also run **Actions → Release → Run workflow** for a manual draft without pushing a tag first.
-
-Repository settings: under **Settings → Actions → General → Workflow permissions**, allow read and write so the release job can create releases with `GITHUB_TOKEN`.
+To test packaging from a branch, use **Actions → Release → Run workflow** and download the installer from the run's artifacts. Running it on a tag can also finish an existing draft if an earlier run was interrupted.
 
 Windows code signing is not configured yet; SmartScreen may warn on first run until a signing certificate is added.
 

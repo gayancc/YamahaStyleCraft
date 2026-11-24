@@ -8,6 +8,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const version = process.argv[2];
@@ -49,6 +50,8 @@ if (fs.existsSync(lockPath)) {
   if (lock.packages?.[""]) lock.packages[""].version = version;
   fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
 }
+
+execFileSync("cargo", ["update", "--workspace"], { cwd: srcRoot, stdio: "inherit" });
 
 console.log(`Version set to ${version}`);
 console.log("Next: commit, then tag and push:");
